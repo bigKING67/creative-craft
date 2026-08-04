@@ -116,6 +116,14 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
         "kind": "brand-binding", "schema": "brand-binding.schema.json",
         "template": "brand-binding.json", "legacy": False,
     },
+    "creative-craft.reference-pack.v1": {
+        "kind": "reference-pack", "schema": "reference-pack.schema.json",
+        "template": "reference-pack.json", "legacy": False,
+    },
+    "creative-craft.reference-binding.v1": {
+        "kind": "reference-binding", "schema": "reference-binding.schema.json",
+        "template": "reference-binding.json", "legacy": False,
+    },
 }
 
 # Brand artifacts are opt-in. Keeping an explicit project inventory prevents a
@@ -1199,6 +1207,110 @@ def validate_brand_binding(data: dict[str, Any]) -> Result:
     return r
 
 
+def validate_reference_pack_artifact(data: dict[str, Any]) -> Result:
+    r = Result()
+    for field_name in ("reviewed_at", "review_after"):
+        value = data.get(field_name)
+        if value is None:
+            continue
+        try:
+            dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            r.errors.append(f"{field_name} must be ISO-8601 or null")
+    source_ids: set[str] = set()
+    for index, source in enumerate(data.get("source_references", [])):
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("source_id")
+        if isinstance(source_id, str):
+            r.require(source_id not in source_ids,
+                      f"source_references[{index}] duplicates source_id {source_id!r}")
+            source_ids.add(source_id)
+        captured_at = source.get("captured_at")
+        if captured_at is not None:
+            try:
+                dt.datetime.fromisoformat(str(captured_at).replace("Z", "+00:00"))
+            except ValueError:
+                r.errors.append(f"source_references[{index}].captured_at must be ISO-8601")
+
+    reference_ids: set[str] = set()
+    observation_ids: set[str] = set()
+    principle_ids: set[str] = set()
+    for index, entity in enumerate(data.get("entities", [])):
+        if not isinstance(entity, dict):
+            continue
+        reference_id = entity.get("reference_id")
+        if isinstance(reference_id, str):
+            r.require(reference_id not in reference_ids,
+                      f"entities[{index}] duplicates reference_id {reference_id!r}")
+            reference_ids.add(reference_id)
+        for source_ref in entity.get("source_refs", []):
+            r.require(source_ref in source_ids,
+                      f"entities[{index}] references unknown source {source_ref!r}")
+        entity_observation_ids: set[str] = set()
+        for observation in entity.get("observations", []):
+            if not isinstance(observation, dict):
+                continue
+            observation_id = observation.get("observation_id")
+            if isinstance(observation_id, str):
+                r.require(observation_id not in observation_ids,
+                          f"duplicate observation_id {observation_id!r}")
+                observation_ids.add(observation_id)
+                entity_observation_ids.add(observation_id)
+            if observation.get("evidence_state") == "UNVERIFIED":
+                r.require(not observation.get("evidence_refs"),
+                          f"observation {observation_id!r} is UNVERIFIED and must not cite evidence")
+            else:
+                r.require(bool(observation.get("evidence_refs")),
+                          f"observation {observation_id!r} requires evidence_refs")
+        for principle in entity.get("transferable_principles", []):
+            if not isinstance(principle, dict):
+                continue
+            principle_id = principle.get("principle_id")
+            if isinstance(principle_id, str):
+                r.require(principle_id not in principle_ids,
+                          f"duplicate principle_id {principle_id!r}")
+                principle_ids.add(principle_id)
+            for observation_id in principle.get("derived_from", []):
+                r.require(observation_id in entity_observation_ids,
+                          f"principle {principle_id!r} derives from unknown observation {observation_id!r}")
+        r.require(entity.get("may_override_primary_brand") is False,
+                  f"entities[{index}] must not override the primary brand")
+
+    if data.get("status") == "reviewed":
+        r.require(nonempty(data.get("reviewed_at")), "reviewed reference pack requires reviewed_at")
+        r.require(bool(data.get("source_references")),
+                  "reviewed reference pack requires source_references")
+        r.require(bool(data.get("entities")), "reviewed reference pack requires entities")
+        for index, source in enumerate(data.get("source_references", [])):
+            if isinstance(source, dict):
+                r.require(nonempty(source.get("captured_at")),
+                          f"reviewed reference pack requires source_references[{index}].captured_at")
+        for entity in data.get("entities", []):
+            if not isinstance(entity, dict):
+                continue
+            for observation in entity.get("observations", []):
+                if isinstance(observation, dict):
+                    r.require(observation.get("evidence_state") != "UNVERIFIED",
+                              "reviewed reference pack cannot contain UNVERIFIED observations")
+        r.warn(nonempty(data.get("review_after")),
+               "reviewed reference pack has no review_after date")
+    return r
+
+
+def validate_reference_binding(data: dict[str, Any]) -> Result:
+    r = Result()
+    try:
+        dt.datetime.fromisoformat(str(data.get("imported_at")).replace("Z", "+00:00"))
+    except ValueError:
+        r.errors.append("imported_at must be an ISO-8601 timestamp")
+    source = data.get("source", {})
+    if isinstance(source, dict) and source.get("commit") is not None:
+        r.require(nonempty(source.get("repository_or_uri")),
+                  "source.commit requires source.repository_or_uri")
+    return r
+
+
 def _no_semantic_validation(data: dict[str, Any]) -> Result:
     del data
     return Result()
@@ -1222,6 +1334,8 @@ def _call_semantic_validator(
         "creative-craft.delivery.v2": validate_delivery_v2,
         "creative-craft.brand-pack.v1": validate_brand_pack_artifact,
         "creative-craft.brand-binding.v1": validate_brand_binding,
+        "creative-craft.reference-pack.v1": validate_reference_pack_artifact,
+        "creative-craft.reference-binding.v1": validate_reference_binding,
     }
     if schema_version in {"creative-craft.image-job.v1", "creative-craft.image-job.v2"}:
         return validate_image_job(data, context)
@@ -1283,6 +1397,8 @@ ARTIFACT_ID_FIELDS = {
     "asset-ledger": None,
     "brand-pack": "pack_id",
     "brand-binding": "binding_id",
+    "reference-pack": "reference_pack_id",
+    "reference-binding": "binding_id",
 }
 
 
@@ -1510,6 +1626,155 @@ def validate_brand_pack(
     return graph
 
 
+@dataclass
+class ReferencePackGraph:
+    root: Path
+    manifest_path: Path
+    manifest: dict[str, Any]
+    ledger_path: Path | None = None
+    ledger: dict[str, Any] = field(default_factory=dict)
+    result: Result = field(default_factory=Result)
+
+
+def validate_reference_pack(
+    root: Path, context: ValidationContext | None = None
+) -> ReferencePackGraph:
+    source_root = Path(root).expanduser()
+    root_is_symlink = source_root.is_symlink()
+    resolved_root = source_root.resolve()
+    manifest_path = resolved_root / "reference-pack.json"
+    graph = ReferencePackGraph(resolved_root, manifest_path, {})
+    graph.result.require(not root_is_symlink, "reference pack root must not be a symlink")
+    graph.result.require(
+        resolved_root.is_dir(), f"reference pack root is not a directory: {resolved_root}"
+    )
+    if not resolved_root.is_dir():
+        return graph
+    if manifest_path.is_symlink():
+        graph.result.errors.append("reference-pack.json must not be a symlink")
+        return graph
+    try:
+        manifest = load_json(manifest_path)
+    except ValueError as exc:
+        graph.result.errors.append(str(exc))
+        return graph
+    graph.manifest = manifest
+    _, manifest_result = validate_data(manifest, "reference-pack", context)
+    graph.result.extend(manifest_result)
+    if not manifest_result.ok:
+        return graph
+
+    ledger_ref = manifest.get("asset_ledger", {})
+    if not isinstance(ledger_ref, dict):
+        return graph
+    ledger_path, error = _safe_relative_path(
+        resolved_root, ledger_ref.get("path"), label="asset_ledger.path"
+    )
+    if error:
+        graph.result.errors.append(error)
+        return graph
+    if ledger_path is None or not ledger_path.is_file():
+        graph.result.errors.append(
+            f"asset ledger file does not exist: {ledger_ref.get('path')!r}"
+        )
+        return graph
+    graph.ledger_path = ledger_path
+    graph.result.require(
+        sha256_file(ledger_path) == ledger_ref.get("sha256"),
+        f"asset ledger sha256 mismatch: {ledger_ref.get('path')}",
+    )
+    try:
+        graph.ledger = load_json(ledger_path)
+    except ValueError as exc:
+        graph.result.errors.append(str(exc))
+        return graph
+    _, ledger_result = validate_data(graph.ledger, "asset-ledger", context)
+    graph.result.errors.extend(f"asset ledger: {message}" for message in ledger_result.errors)
+    graph.result.warnings.extend(
+        f"asset ledger: {message}" for message in ledger_result.warnings
+    )
+    expected_project_id = f"reference:{manifest.get('reference_pack_id')}"
+    graph.result.require(
+        graph.ledger.get("project_id") == expected_project_id,
+        f"asset ledger project_id must be {expected_project_id!r}",
+    )
+
+    assets: dict[str, dict[str, Any]] = {}
+    for index, asset in enumerate(graph.ledger.get("assets", [])):
+        if not isinstance(asset, dict):
+            continue
+        asset_id = str(asset.get("asset_id"))
+        graph.result.require(
+            asset_id not in assets,
+            f"asset ledger assets[{index}] duplicates asset_id {asset_id!r}",
+        )
+        assets[asset_id] = asset
+        path_or_uri = str(asset.get("path_or_uri", ""))
+        digest = asset.get("sha256")
+        graph.result.require(
+            isinstance(digest, str) and bool(re.fullmatch(r"[0-9a-f]{64}", digest)),
+            f"asset ledger assets[{index}] requires a lowercase SHA-256 digest",
+        )
+        if not _is_external_asset_uri(path_or_uri):
+            asset_path, asset_error = _safe_relative_path(
+                resolved_root,
+                path_or_uri,
+                label=f"asset ledger assets[{index}].path_or_uri",
+            )
+            if asset_error:
+                graph.result.errors.append(asset_error)
+            elif asset_path is None or not asset_path.is_file():
+                graph.result.errors.append(
+                    f"asset ledger assets[{index}] local file does not exist: {path_or_uri!r}"
+                )
+            elif isinstance(digest, str):
+                graph.result.require(
+                    sha256_file(asset_path) == digest,
+                    f"asset ledger assets[{index}] sha256 mismatch: {path_or_uri}",
+                )
+
+    source_ids = {
+        str(source.get("source_id"))
+        for source in manifest.get("source_references", [])
+        if isinstance(source, dict)
+    }
+    for entity_index, entity in enumerate(manifest.get("entities", [])):
+        if not isinstance(entity, dict):
+            continue
+        entity_assets: list[dict[str, Any]] = []
+        for asset_id in entity.get("asset_refs", []):
+            graph.result.require(
+                asset_id in assets,
+                f"entities[{entity_index}] references unknown asset {asset_id!r}",
+            )
+            if asset_id in assets:
+                entity_assets.append(assets[str(asset_id)])
+        for observation in entity.get("observations", []):
+            if not isinstance(observation, dict):
+                continue
+            for evidence_ref in observation.get("evidence_refs", []):
+                graph.result.require(
+                    evidence_ref in source_ids or evidence_ref in assets,
+                    f"observation {observation.get('observation_id')!r} references unknown evidence {evidence_ref!r}",
+                )
+        if entity.get("rights_policy") == "approved_reference_input":
+            graph.result.require(
+                bool(entity_assets),
+                f"entities[{entity_index}] approved_reference_input requires asset_refs",
+            )
+            for asset in entity_assets:
+                graph.result.require(
+                    asset.get("rights_status") in {"CLEARED", "LIMITED"},
+                    f"approved reference input {asset.get('asset_id')!r} has unresolved rights",
+                )
+                graph.result.require(
+                    asset.get("consent_status")
+                    in {"CLEARED", "LIMITED", "NOT_APPLICABLE"},
+                    f"approved reference input {asset.get('asset_id')!r} has unresolved consent",
+                )
+    return graph
+
+
 def _json_pointer(value: Any, pointer: str) -> tuple[bool, Any]:
     if pointer in {"", "/"}:
         return True, value
@@ -1639,8 +1904,161 @@ def _project_brand_cross_checks(graph: ProjectGraph) -> None:
                              "project BRAND.md differs from snapshot brand authority")
 
 
+def _project_reference_cross_checks(graph: ProjectGraph) -> None:
+    pack_records = [
+        record for (kind, _), record in graph.records.items() if kind == "reference-pack"
+    ]
+    binding_records = [
+        record for (kind, _), record in graph.records.items() if kind == "reference-binding"
+    ]
+    if not pack_records and not binding_records:
+        return
+
+    packs: dict[str, dict[str, Any]] = {}
+    for record in pack_records:
+        pack_id = str(record["data"].get("reference_pack_id"))
+        graph.result.require(pack_id not in packs,
+                             f"duplicate reference-pack artifact for {pack_id!r}")
+        packs[pack_id] = record
+    bindings: dict[str, dict[str, Any]] = {}
+    for record in binding_records:
+        pack_id = str(record["data"].get("reference_pack_id"))
+        graph.result.require(pack_id not in bindings,
+                             f"duplicate reference binding for {pack_id!r}")
+        bindings[pack_id] = record
+    graph.result.require(
+        set(packs) == set(bindings),
+        "every reference pack must have exactly one matching reference binding",
+    )
+
+    project_ledgers = [
+        record for (kind, _), record in graph.records.items() if kind == "asset-ledger"
+    ]
+    project_assets = {
+        str(asset.get("asset_id")): asset
+        for record in project_ledgers
+        for asset in record["data"].get("assets", [])
+        if isinstance(asset, dict)
+    }
+    for pack_id in sorted(set(packs).intersection(bindings)):
+        pack_record = packs[pack_id]
+        binding_record = bindings[pack_id]
+        pack = pack_record["data"]
+        binding = binding_record["data"]
+        expected_binding_path = (
+            graph.root / ".creative-craft" / "reference-bindings" / f"{pack_id}.json"
+        )
+        graph.result.require(
+            binding_record["path"] == expected_binding_path,
+            f"reference binding {pack_id!r} uses a non-canonical path",
+        )
+        graph.result.require(
+            binding.get("project_id") == graph.manifest.get("project_id"),
+            f"reference binding {pack_id!r} project_id differs from project manifest",
+        )
+        graph.result.require(
+            binding.get("pack_version") == pack.get("version"),
+            f"reference binding {pack_id!r} pack_version differs from reference pack",
+        )
+        graph.result.require(
+            pack.get("status") != "revoked",
+            f"project must not bind revoked reference pack {pack_id!r}",
+        )
+        if pack.get("status") == "draft":
+            graph.result.warnings.append(
+                f"reference pack {pack_id!r} is draft; treat its contents as exploratory evidence"
+            )
+
+        snapshot = binding.get("snapshot", {})
+        snapshot_value = snapshot.get("path") if isinstance(snapshot, dict) else None
+        expected_snapshot_value = f".creative-craft/reference-snapshots/{pack_id}"
+        graph.result.require(
+            snapshot_value == expected_snapshot_value,
+            f"reference binding {pack_id!r} snapshot.path must be {expected_snapshot_value}",
+        )
+        snapshot_path, snapshot_error = _safe_project_path(graph.root, snapshot_value)
+        graph.result.require(
+            snapshot_error is None,
+            f"reference binding {pack_id!r} snapshot: {snapshot_error}",
+        )
+        if snapshot_path is None or not snapshot_path.is_dir():
+            graph.result.errors.append(
+                f"reference binding {pack_id!r} snapshot directory does not exist"
+            )
+            continue
+        graph.result.require(
+            pack_record["path"] == snapshot_path / "reference-pack.json",
+            f"registered reference pack {pack_id!r} is not the bound snapshot manifest",
+        )
+        snapshot_graph = validate_reference_pack(snapshot_path)
+        graph.result.errors.extend(
+            f"reference snapshot {pack_id!r}: {message}"
+            for message in snapshot_graph.result.errors
+        )
+        graph.result.warnings.extend(
+            f"reference snapshot {pack_id!r}: {message}"
+            for message in snapshot_graph.result.warnings
+        )
+        try:
+            actual_tree_sha = tree_sha256(snapshot_path)
+        except ValueError as exc:
+            graph.result.errors.append(str(exc))
+        else:
+            graph.result.require(
+                actual_tree_sha == snapshot.get("tree_sha256"),
+                f"reference binding {pack_id!r} snapshot tree_sha256 mismatch",
+            )
+        source = binding.get("source", {})
+        graph.result.require(
+            isinstance(source, dict) and source.get("pack_sha256") == pack_record["sha256"],
+            f"reference binding {pack_id!r} source.pack_sha256 differs from snapshot",
+        )
+
+        entities = {
+            str(entity.get("reference_id")): entity
+            for entity in pack.get("entities", [])
+            if isinstance(entity, dict)
+        }
+        selected_ids = binding.get("selected_reference_ids", [])
+        for reference_id in selected_ids:
+            graph.result.require(
+                reference_id in entities,
+                f"reference binding {pack_id!r} selects unknown reference {reference_id!r}",
+            )
+            entity = entities.get(str(reference_id), {})
+            for asset_id in entity.get("asset_refs", []):
+                graph.result.require(
+                    asset_id in project_assets,
+                    f"reference binding {pack_id!r} selected asset {asset_id!r} is absent from project ledger",
+                )
+                source_asset = next(
+                    (
+                        asset for asset in snapshot_graph.ledger.get("assets", [])
+                        if isinstance(asset, dict) and asset.get("asset_id") == asset_id
+                    ),
+                    None,
+                )
+                project_asset = project_assets.get(str(asset_id))
+                if source_asset and project_asset:
+                    source_value = str(source_asset.get("path_or_uri"))
+                    expected_value = (
+                        source_value
+                        if _is_external_asset_uri(source_value)
+                        else f"{expected_snapshot_value}/{Path(source_value).as_posix()}"
+                    )
+                    graph.result.require(
+                        project_asset.get("path_or_uri") == expected_value,
+                        f"reference binding {pack_id!r} asset {asset_id!r} path differs from snapshot",
+                    )
+                    graph.result.require(
+                        project_asset.get("sha256") == source_asset.get("sha256"),
+                        f"reference binding {pack_id!r} asset {asset_id!r} digest differs from snapshot",
+                    )
+
+
 def _project_cross_checks(graph: ProjectGraph) -> None:
     _project_brand_cross_checks(graph)
+    _project_reference_cross_checks(graph)
     bound_brand_packs = [
         record["data"] for (kind, _), record in graph.records.items() if kind == "brand-pack"
     ]
@@ -3059,6 +3477,141 @@ def cmd_validate_brand_pack(args: argparse.Namespace) -> int:
     return 0 if graph.result.ok else 1
 
 
+def _reference_skill_text(reference_pack_id: str, name: str) -> str:
+    description = (
+        f"Private {name} creative reference router. Use only when the user or active project "
+        f"explicitly needs reference_pack_id '{reference_pack_id}'. Load relevant observations "
+        "and transferable principles, then apply the generic creative-craft workflow."
+    )
+    return f"""---
+name: {reference_pack_id}
+description: {json.dumps(description, ensure_ascii=False)}
+---
+
+# {name} Reference Router
+
+Use this skill only when the request or bound project explicitly needs `{reference_pack_id}`.
+
+1. Read `reference-pack.json` and reject a `revoked` pack.
+2. Load only the selected reference entities needed for the task.
+3. Keep `OBSERVED`, `INFERRED`, `HYPOTHESIZED`, and `UNVERIFIED` distinct.
+4. Treat references as research, not as brand authority or permission to imitate.
+5. Never override the project's Primary Brand Pack, Brief, exact copy, rights, claims, or product invariants.
+6. Resolve assets through `asset-ledger.json`; public visibility does not grant generation-input rights.
+7. Use the generic `creative-craft` skill for briefs, routes, direction, jobs, inspection, revision, evaluation, and delivery.
+8. For project work, use the immutable project snapshot instead of this live checkout.
+
+This skill contains non-authoritative creative reference intelligence only. It does not replace or duplicate Creative Craft schemas, provider profiles, production methods, or a Primary Brand Pack.
+"""
+
+
+def cmd_init_reference_pack(args: argparse.Namespace) -> int:
+    requested_target = Path(args.target).expanduser()
+    if requested_target.is_symlink():
+        print("ERROR: Reference Pack target must not be a symlink", file=sys.stderr)
+        return 1
+    target = requested_target.resolve()
+    reference_pack_id = str(args.pack_id).strip()
+    name = str(args.name).strip()
+    owner = str(args.owner).strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", reference_pack_id):
+        print("ERROR: --pack-id must be a lowercase slug", file=sys.stderr)
+        return 1
+    if not name or not owner:
+        print("ERROR: --name and --owner must be non-empty", file=sys.stderr)
+        return 1
+    known_paths = [
+        target / "SKILL.md",
+        target / "VERSION",
+        target / "reference-pack.json",
+        target / "asset-ledger.json",
+    ]
+    conflicts = [path for path in known_paths if path.exists()]
+    if conflicts and not args.force:
+        print("ERROR: refusing to overwrite existing Reference Pack files:", file=sys.stderr)
+        for path in conflicts:
+            print(f"  {path}", file=sys.stderr)
+        print("Use --force only after reviewing the existing research library.", file=sys.stderr)
+        return 1
+    if target.exists() and any(target.iterdir()) and args.force:
+        suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup = target.with_name(f"{target.name}.bak.{suffix}")
+        shutil.copytree(target, backup, symlinks=True)
+        print(f"Backup: {backup}")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        ledger = {
+            "schema_version": "creative-craft.asset-ledger.v1",
+            "project_id": f"reference:{reference_pack_id}",
+            "assets": [],
+        }
+        ledger_path = target / "asset-ledger.json"
+        write_atomic(ledger_path, _json_text(ledger))
+        manifest = {
+            "schema_version": "creative-craft.reference-pack.v1",
+            "reference_pack_id": reference_pack_id,
+            "name": name,
+            "version": "0.1.0",
+            "status": "draft",
+            "classification": "internal",
+            "owner": owner,
+            "purpose": "TBD",
+            "reviewed_at": None,
+            "review_after": None,
+            "supersedes": None,
+            "entities": [],
+            "asset_ledger": {
+                "path": "asset-ledger.json",
+                "sha256": sha256_file(ledger_path),
+            },
+            "source_references": [],
+        }
+        write_atomic(target / "reference-pack.json", _json_text(manifest))
+        write_atomic(target / "SKILL.md", _reference_skill_text(reference_pack_id, name))
+        write_atomic(target / "VERSION", "0.1.0\n")
+        approved_dir = target / "assets" / "approved"
+        approved_dir.mkdir(parents=True, exist_ok=True)
+        write_atomic(approved_dir / ".gitkeep", "")
+        graph = validate_reference_pack(target)
+        if not graph.result.ok:
+            raise ValueError("; ".join(graph.result.errors))
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: failed to initialize Reference Pack: {exc}", file=sys.stderr)
+        return 1
+    print(target)
+    return 0
+
+
+def cmd_validate_reference_pack(args: argparse.Namespace) -> int:
+    graph = validate_reference_pack(Path(args.root))
+    payload = {
+        "root": str(graph.root),
+        "manifest": str(graph.manifest_path),
+        "reference_pack_id": graph.manifest.get("reference_pack_id"),
+        "name": graph.manifest.get("name"),
+        "version": graph.manifest.get("version"),
+        "status": graph.manifest.get("status"),
+        "classification": graph.manifest.get("classification"),
+        "valid": graph.result.ok,
+        "entity_count": len(graph.manifest.get("entities", [])),
+        "asset_count": len(graph.ledger.get("assets", [])),
+        "errors": graph.result.errors,
+        "warnings": graph.result.warnings,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"{'PASS' if graph.result.ok else 'FAIL'} reference pack: {graph.root}")
+        print(f"  Pack: {payload['reference_pack_id']}@{payload['version']} ({payload['status']})")
+        print(f"  Entities: {payload['entity_count']}")
+        print(f"  Assets: {payload['asset_count']}")
+        for message in graph.result.errors:
+            print(f"  ERROR: {message}")
+        for message in graph.result.warnings:
+            print(f"  WARN:  {message}")
+    return 0 if graph.result.ok else 1
+
+
 def _copy_snapshot_files(source: BrandPackGraph, target: Path) -> None:
     target.mkdir(parents=True, exist_ok=False)
     relative_files: set[str] = {"brand-pack.json"}
@@ -3322,6 +3875,388 @@ def _install_brand_snapshot(
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
     return backup
+
+
+def _copy_reference_snapshot_files(source: ReferencePackGraph, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=False)
+    relative_files: set[str] = {"reference-pack.json"}
+    ledger_relative = str(source.manifest.get("asset_ledger", {}).get("path"))
+    relative_files.add(ledger_relative)
+    for asset in source.ledger.get("assets", []):
+        if not isinstance(asset, dict):
+            continue
+        value = str(asset.get("path_or_uri", ""))
+        if not _is_external_asset_uri(value):
+            relative_files.add(value)
+    for relative in sorted(relative_files):
+        source_path, error = _safe_relative_path(
+            source.root, relative, label="reference snapshot source path"
+        )
+        if error or source_path is None or not source_path.is_file():
+            raise ValueError(
+                error or f"reference snapshot source file does not exist: {relative!r}"
+            )
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination)
+
+
+def _selected_reference_ids(
+    source: ReferencePackGraph, requested: Any
+) -> list[str]:
+    available = {
+        str(entity.get("reference_id"))
+        for entity in source.manifest.get("entities", [])
+        if isinstance(entity, dict)
+    }
+    selected = (
+        [str(item).strip() for item in requested]
+        if isinstance(requested, list) and requested
+        else sorted(available)
+    )
+    if not selected:
+        raise ValueError("Reference Pack binding requires at least one reference entity")
+    if any(not item for item in selected):
+        raise ValueError("--select values must be non-empty")
+    if len(selected) != len(set(selected)):
+        raise ValueError("--select must not repeat a reference_id")
+    unknown = sorted(set(selected).difference(available))
+    if unknown:
+        raise ValueError("selected reference_id does not exist: " + ", ".join(unknown))
+    return selected
+
+
+def _reference_asset_ids(
+    source: ReferencePackGraph, selected_reference_ids: Iterable[str]
+) -> set[str]:
+    selected = set(selected_reference_ids)
+    asset_ids: set[str] = set()
+    for entity in source.manifest.get("entities", []):
+        if not isinstance(entity, dict) or entity.get("reference_id") not in selected:
+            continue
+        asset_ids.update(str(item) for item in entity.get("asset_refs", []))
+    return asset_ids
+
+
+def _merged_reference_project_ledger(
+    project_ledger: dict[str, Any],
+    source: ReferencePackGraph,
+    selected_asset_ids: set[str],
+    old_asset_ids: set[str],
+) -> dict[str, Any]:
+    merged = copy.deepcopy(project_ledger)
+    existing = [
+        item
+        for item in merged.get("assets", [])
+        if isinstance(item, dict) and str(item.get("asset_id")) not in old_asset_ids
+    ]
+    ids = {str(item.get("asset_id")) for item in existing}
+    pack_id = str(source.manifest.get("reference_pack_id"))
+    source_assets = {
+        str(item.get("asset_id")): item
+        for item in source.ledger.get("assets", [])
+        if isinstance(item, dict)
+    }
+    for asset_id in sorted(selected_asset_ids):
+        source_asset = source_assets.get(asset_id)
+        if source_asset is None:
+            raise ValueError(f"selected reference asset does not exist: {asset_id}")
+        if asset_id in ids:
+            raise ValueError(
+                f"reference asset_id collides with a project or another pack asset: {asset_id}"
+            )
+        ids.add(asset_id)
+        asset = copy.deepcopy(source_asset)
+        value = str(asset.get("path_or_uri", ""))
+        if not _is_external_asset_uri(value):
+            asset["path_or_uri"] = (
+                f".creative-craft/reference-snapshots/{pack_id}/{Path(value).as_posix()}"
+            )
+        existing.append(asset)
+    merged["assets"] = existing
+    return merged
+
+
+def _backup_reference_state(
+    root: Path, reference_pack_id: str, paths: list[Path]
+) -> tuple[Path, dict[Path, bool]]:
+    suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = (
+        root
+        / ".creative-craft"
+        / "reference-backups"
+        / reference_pack_id
+        / suffix
+    )
+    backup.mkdir(parents=True, exist_ok=False)
+    existed: dict[Path, bool] = {}
+    for path in paths:
+        resolved = path.resolve(strict=False)
+        present = resolved.exists()
+        existed[resolved] = present
+        if not present:
+            continue
+        relative = resolved.relative_to(root)
+        destination = backup / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if resolved.is_dir():
+            shutil.copytree(resolved, destination)
+        else:
+            shutil.copy2(resolved, destination)
+    return backup, existed
+
+
+def _existing_reference_binding(
+    graph: ProjectGraph, reference_pack_id: str
+) -> dict[str, Any] | None:
+    matches = [
+        record
+        for (kind, _), record in graph.records.items()
+        if kind == "reference-binding"
+        and record["data"].get("reference_pack_id") == reference_pack_id
+    ]
+    if len(matches) > 1:
+        raise ValueError(
+            f"project has multiple bindings for Reference Pack {reference_pack_id!r}"
+        )
+    return matches[0] if matches else None
+
+
+def _install_reference_snapshot(
+    project_root: Path,
+    source_root: Path,
+    args: argparse.Namespace,
+    *,
+    require_existing_binding: bool,
+    retain_backup: bool,
+) -> Path:
+    project_root = project_root.resolve()
+    graph = validate_project(project_root)
+    if not graph.result.ok:
+        raise ValueError(
+            "project is invalid before Reference Pack update: "
+            + "; ".join(graph.result.errors)
+        )
+    source = validate_reference_pack(source_root)
+    if not source.result.ok:
+        raise ValueError("Reference Pack is invalid: " + "; ".join(source.result.errors))
+    if source.manifest.get("status") == "revoked":
+        raise ValueError("cannot bind a revoked Reference Pack")
+
+    reference_pack_id = str(source.manifest.get("reference_pack_id"))
+    existing_binding = _existing_reference_binding(graph, reference_pack_id)
+    if require_existing_binding and existing_binding is None:
+        raise ValueError(
+            "update-reference-snapshot requires an existing binding for "
+            f"{reference_pack_id!r}"
+        )
+    if not require_existing_binding and existing_binding is not None:
+        raise ValueError(
+            f"project already binds {reference_pack_id!r}; use update-reference-snapshot"
+        )
+
+    source_uri = getattr(args, "reference_source_uri", None)
+    source_commit = getattr(args, "reference_source_commit", None)
+    if source_commit and not source_uri:
+        raise ValueError("--reference-source-commit requires --reference-source-uri")
+    reason = str(
+        getattr(args, "reason", None) or "Initial Reference Pack import"
+    ).strip()
+    imported_by = str(getattr(args, "imported_by", None) or "TBD").strip()
+    if not reason or not imported_by:
+        raise ValueError("reason and imported_by must be non-empty")
+    selected_ids = _selected_reference_ids(source, getattr(args, "select", None))
+    selected_asset_ids = _reference_asset_ids(source, selected_ids)
+
+    creative_root = project_root / ".creative-craft"
+    suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    snapshot_parent = creative_root / "reference-snapshots"
+    staging = snapshot_parent / f".{reference_pack_id}.staging-{suffix}"
+    snapshot_path = snapshot_parent / reference_pack_id
+    binding_path = (
+        creative_root / "reference-bindings" / f"{reference_pack_id}.json"
+    )
+    manifest_path = graph.manifest_path
+    ledger_record = _project_ledger_record(graph)
+    ledger_path = Path(ledger_record["path"])
+    old_asset_ids: set[str] = set()
+    previous_binding_id: str | None = None
+    if existing_binding is not None:
+        previous_binding_id = str(existing_binding["data"].get("binding_id"))
+        old_snapshot = validate_reference_pack(snapshot_path)
+        if not old_snapshot.result.ok:
+            raise ValueError(
+                "existing Reference Pack snapshot is invalid: "
+                + "; ".join(old_snapshot.result.errors)
+            )
+        old_asset_ids = _reference_asset_ids(
+            old_snapshot, existing_binding["data"].get("selected_reference_ids", [])
+        )
+
+    try:
+        _copy_reference_snapshot_files(source, staging)
+        staged_validation = validate_reference_pack(staging)
+        if not staged_validation.result.ok:
+            raise ValueError(
+                "staged Reference Pack is invalid: "
+                + "; ".join(staged_validation.result.errors)
+            )
+        staged_tree_sha = tree_sha256(staging)
+        merged_ledger = _merged_reference_project_ledger(
+            ledger_record["data"], source, selected_asset_ids, old_asset_ids
+        )
+        tracked_paths = [snapshot_path, binding_path, ledger_path, manifest_path]
+        backup, existed = _backup_reference_state(
+            project_root, reference_pack_id, tracked_paths
+        )
+    except Exception:
+        _remove_path(staging)
+        raise
+
+    try:
+        _remove_path(snapshot_path)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        staging.replace(snapshot_path)
+        write_atomic(ledger_path, _json_text(merged_ledger))
+        imported_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        binding = {
+            "schema_version": "creative-craft.reference-binding.v1",
+            "binding_id": (
+                f"reference-binding-{graph.manifest.get('project_id')}-"
+                f"{reference_pack_id}-{suffix}"
+            ),
+            "project_id": str(graph.manifest.get("project_id")),
+            "reference_pack_id": reference_pack_id,
+            "pack_version": str(source.manifest.get("version")),
+            "source": {
+                "repository_or_uri": source_uri,
+                "ref": getattr(args, "reference_source_ref", None),
+                "commit": source_commit,
+                "pack_sha256": sha256_file(snapshot_path / "reference-pack.json"),
+            },
+            "snapshot": {
+                "path": f".creative-craft/reference-snapshots/{reference_pack_id}",
+                "tree_sha256": staged_tree_sha,
+            },
+            "selected_reference_ids": selected_ids,
+            "imported_at": imported_at,
+            "imported_by": imported_by,
+            "previous_binding_id": previous_binding_id,
+            "reason": reason,
+        }
+        write_atomic(binding_path, _json_text(binding))
+
+        relative_binding_path = binding_path.relative_to(project_root).as_posix()
+        manifest = copy.deepcopy(graph.manifest)
+        manifest["artifacts"] = [
+            item
+            for item in manifest.get("artifacts", [])
+            if isinstance(item, dict)
+            and not (
+                item.get("artifact_type") == "reference-pack"
+                and item.get("artifact_id") == reference_pack_id
+            )
+            and not (
+                item.get("artifact_type") == "reference-binding"
+                and (
+                    item.get("artifact_id") == previous_binding_id
+                    or item.get("path") == relative_binding_path
+                )
+            )
+        ]
+        for item in manifest["artifacts"]:
+            if item.get("artifact_type") == "asset-ledger" and Path(
+                str(item.get("path"))
+            ) == ledger_path.relative_to(project_root):
+                item["sha256"] = sha256_file(ledger_path)
+        manifest["artifacts"].extend(
+            [
+                {
+                    "artifact_type": "reference-pack",
+                    "artifact_id": reference_pack_id,
+                    "schema_version": "creative-craft.reference-pack.v1",
+                    "path": (
+                        f".creative-craft/reference-snapshots/{reference_pack_id}/"
+                        "reference-pack.json"
+                    ),
+                    "sha256": sha256_file(snapshot_path / "reference-pack.json"),
+                },
+                {
+                    "artifact_type": "reference-binding",
+                    "artifact_id": str(binding["binding_id"]),
+                    "schema_version": "creative-craft.reference-binding.v1",
+                    "path": relative_binding_path,
+                    "sha256": sha256_file(binding_path),
+                },
+            ]
+        )
+        write_atomic(manifest_path, _json_text(manifest))
+        validated = validate_project(project_root)
+        if not validated.result.ok:
+            raise ValueError(
+                "updated project is invalid: " + "; ".join(validated.result.errors)
+            )
+    except Exception:
+        _remove_path(staging)
+        _restore_brand_state(project_root, backup, existed)
+        raise
+
+    if not retain_backup:
+        _remove_path(backup)
+        parent = backup.parent
+        while parent != creative_root and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+    return backup
+
+
+def cmd_bind_reference_pack(args: argparse.Namespace) -> int:
+    try:
+        _install_reference_snapshot(
+            Path(args.target).expanduser(),
+            Path(args.reference_pack).expanduser(),
+            args,
+            require_existing_binding=False,
+            retain_backup=False,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: failed to bind Reference Pack: {exc}", file=sys.stderr)
+        return 1
+    reference_pack_id = load_json(
+        Path(args.reference_pack).expanduser().resolve() / "reference-pack.json"
+    )["reference_pack_id"]
+    print(
+        Path(args.target).expanduser().resolve()
+        / ".creative-craft"
+        / "reference-bindings"
+        / f"{reference_pack_id}.json"
+    )
+    return 0
+
+
+def cmd_update_reference_snapshot(args: argparse.Namespace) -> int:
+    try:
+        backup = _install_reference_snapshot(
+            Path(args.target).expanduser(),
+            Path(args.reference_pack).expanduser(),
+            args,
+            require_existing_binding=True,
+            retain_backup=True,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: failed to update Reference Pack snapshot: {exc}", file=sys.stderr)
+        return 1
+    reference_pack_id = load_json(
+        Path(args.reference_pack).expanduser().resolve() / "reference-pack.json"
+    )["reference_pack_id"]
+    print(f"Backup: {backup}")
+    print(
+        Path(args.target).expanduser().resolve()
+        / ".creative-craft"
+        / "reference-bindings"
+        / f"{reference_pack_id}.json"
+    )
+    return 0
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
@@ -3673,6 +4608,25 @@ def build_parser() -> argparse.ArgumentParser:
     validate_brand_parser.add_argument("--json", action="store_true")
     validate_brand_parser.set_defaults(func=cmd_validate_brand_pack)
 
+    init_reference_parser = sub.add_parser(
+        "init-reference-pack",
+        help="initialize a private draft non-authoritative creative Reference Pack",
+    )
+    init_reference_parser.add_argument("--target", required=True)
+    init_reference_parser.add_argument("--pack-id", required=True)
+    init_reference_parser.add_argument("--name", required=True)
+    init_reference_parser.add_argument("--owner", required=True)
+    init_reference_parser.add_argument("--force", action="store_true")
+    init_reference_parser.set_defaults(func=cmd_init_reference_pack)
+
+    validate_reference_parser = sub.add_parser(
+        "validate-reference-pack",
+        help="validate Reference Pack evidence, files, digests, and input rights",
+    )
+    validate_reference_parser.add_argument("--root", required=True)
+    validate_reference_parser.add_argument("--json", action="store_true")
+    validate_reference_parser.set_defaults(func=cmd_validate_reference_pack)
+
     seed_parser = sub.add_parser("seed", help="seed authority and job templates into a project")
     seed_parser.add_argument("--target", required=True)
     seed_parser.add_argument("--brand-pack")
@@ -3695,6 +4649,34 @@ def build_parser() -> argparse.ArgumentParser:
     update_brand_parser.add_argument("--brand-source-commit")
     update_brand_parser.add_argument("--imported-by", default="TBD")
     update_brand_parser.set_defaults(func=cmd_update_brand_snapshot)
+
+    bind_reference_parser = sub.add_parser(
+        "bind-reference-pack",
+        help="add an immutable Reference Pack snapshot without changing brand authority",
+    )
+    bind_reference_parser.add_argument("--target", required=True)
+    bind_reference_parser.add_argument("--reference-pack", required=True)
+    bind_reference_parser.add_argument("--select", action="append")
+    bind_reference_parser.add_argument("--reference-source-uri")
+    bind_reference_parser.add_argument("--reference-source-ref")
+    bind_reference_parser.add_argument("--reference-source-commit")
+    bind_reference_parser.add_argument("--imported-by", default="TBD")
+    bind_reference_parser.add_argument("--reason")
+    bind_reference_parser.set_defaults(func=cmd_bind_reference_pack)
+
+    update_reference_parser = sub.add_parser(
+        "update-reference-snapshot",
+        help="replace one Reference Pack snapshot with backup, lineage, and rollback",
+    )
+    update_reference_parser.add_argument("--target", required=True)
+    update_reference_parser.add_argument("--reference-pack", required=True)
+    update_reference_parser.add_argument("--select", action="append")
+    update_reference_parser.add_argument("--reference-source-uri")
+    update_reference_parser.add_argument("--reference-source-ref")
+    update_reference_parser.add_argument("--reference-source-commit")
+    update_reference_parser.add_argument("--imported-by", default="TBD")
+    update_reference_parser.add_argument("--reason", required=True)
+    update_reference_parser.set_defaults(func=cmd_update_reference_snapshot)
 
     project_parser = sub.add_parser(
         "validate-project", help="validate a project manifest, digests, and cross-artifact graph"

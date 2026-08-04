@@ -143,6 +143,48 @@ def main() -> int:
                 )
             else:
                 checks.append("installed-brand-pack-runtime")
+            reference_root = Path(directory) / "acme-creative-references"
+            reference_init = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts/creative_craft.py"),
+                    "init-reference-pack",
+                    "--target",
+                    str(reference_root),
+                    "--pack-id",
+                    "acme-creative-references",
+                    "--name",
+                    "Acme Creative References",
+                    "--owner",
+                    "host-smoke",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            reference_validation = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts/creative_craft.py"),
+                    "validate-reference-pack",
+                    "--root",
+                    str(reference_root),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if reference_init.returncode != 0 or reference_validation.returncode != 0:
+                errors.append(
+                    "installed runtime Reference Pack smoke failed: "
+                    + (
+                        reference_init.stderr.strip()
+                        or reference_validation.stdout.strip()
+                    )
+                )
+            else:
+                checks.append("installed-reference-pack-runtime")
 
     payload = {"valid": not errors, "checks": checks, "errors": errors}
     if args.json:
