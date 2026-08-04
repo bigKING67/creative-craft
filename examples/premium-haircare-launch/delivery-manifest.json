@@ -1,0 +1,62 @@
+{
+  "schema_version": "creative-craft.delivery.v1",
+  "delivery_id": "northstar-launch-planned-v1",
+  "project_id": "northstar-airlift-launch",
+  "status": "planned",
+  "selected_route": "motion-is-proof",
+  "files": [
+    {
+      "asset_id": "northstar-hero-image-final",
+      "path_or_uri": "planned://hero-image.png",
+      "role": "launch hero image",
+      "channel": "social feed and landing page",
+      "placement": "launch hero",
+      "dimensions": "1024x1536",
+      "aspect_ratio": "2:3",
+      "duration_seconds": null,
+      "format": "png",
+      "codec": null,
+      "language": "en",
+      "exact_copy": [
+        "VOLUME THAT MOVES"
+      ],
+      "sha256": null,
+      "source": "GPT Image 2 job northstar-motion-proof-hero-image-v1",
+      "approval_status": "planned",
+      "rights_status": "CLEARED",
+      "known_limitations": [
+        "Not generated or inspected."
+      ]
+    },
+    {
+      "asset_id": "northstar-vertical-film-final",
+      "path_or_uri": "planned://vertical-film.mp4",
+      "role": "launch hero video",
+      "channel": "vertical social",
+      "placement": "in-feed",
+      "dimensions": null,
+      "aspect_ratio": "9:16",
+      "duration_seconds": 15,
+      "format": "mp4",
+      "codec": "platform target to be confirmed",
+      "language": "en",
+      "exact_copy": [
+        "VOLUME THAT MOVES"
+      ],
+      "sha256": null,
+      "source": "Seedance 2.5 job northstar-motion-proof-vertical-15s-v1",
+      "approval_status": "planned",
+      "rights_status": "CLEARED",
+      "known_limitations": [
+        "Not generated or inspected.",
+        "Final API/platform export settings pending."
+      ]
+    }
+  ],
+  "validation": [
+    "Brief and job contracts prepared."
+  ],
+  "remaining_risks": [
+    "Actual output quality, text, product fidelity, motion physics, and export compliance remain unverified."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "creative-craft",
+  "version": "0.1.0",
+  "description": "Creative strategy, direction, generative image and video production, evaluation, iteration, and delivery governance for real creative work.",
+  "author": {
+    "name": "bigKING67",
+    "url": "https://github.com/bigKING67"
+  },
+  "homepage": "https://github.com/bigKING67/creative-craft#readme",
+  "repository": "https://github.com/bigKING67/creative-craft",
+  "license": "MIT",
+  "keywords": [
+    "creative-strategy",
+    "creative-direction",
+    "image-generation",
+    "video-generation",
+    "creative-operations",
+    "agent-skill"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Creative Craft",
+    "shortDescription": "Creative strategy and generative production system",
+    "longDescription": "Creative Craft turns briefs, ideas, references, and existing assets into evidence-aware creative strategy, distinct concept routes, art direction, provider-aware image and video jobs, controlled iteration, evaluation, and traceable delivery artifacts.",
+    "developerName": "bigKING67",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/bigKING67/creative-craft",
+    "defaultPrompt": [
+      "Turn this brief into distinct creative routes and recommend one.",
+      "Create an art direction and production plan for this campaign.",
+      "Critique these creative assets and propose controlled revisions."
+    ],
+    "brandColor": "#7C3AED"
+  }
+}

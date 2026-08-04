@@ -1,0 +1,30 @@
+{
+  "schema_version": "creative-craft.delivery.v1",
+  "delivery_id": "delivery-tbd",
+  "project_id": "project-tbd",
+  "status": "planned",
+  "selected_route": "TBD",
+  "files": [
+    {
+      "asset_id": "asset-tbd",
+      "path_or_uri": "TBD",
+      "role": "TBD",
+      "channel": "TBD",
+      "placement": "TBD",
+      "dimensions": null,
+      "aspect_ratio": "TBD",
+      "duration_seconds": null,
+      "format": "TBD",
+      "codec": null,
+      "language": "TBD",
+      "exact_copy": [],
+      "sha256": null,
+      "source": "TBD",
+      "approval_status": "planned",
+      "rights_status": "UNVERIFIED",
+      "known_limitations": []
+    }
+  ],
+  "validation": [],
+  "remaining_risks": []
+}

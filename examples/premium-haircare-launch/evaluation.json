@@ -1,0 +1,101 @@
+{
+  "schema_version": "creative-craft.evaluation.v1",
+  "evaluation_id": "northstar-motion-proof-route-eval-v1",
+  "target_id": "motion-is-proof",
+  "stage": "route",
+  "brief_id": "northstar-airlift-launch-v1",
+  "gates": {
+    "rights_clear": true,
+    "brief_locked": true,
+    "deliverable_specified": true,
+    "actual_output_observed": null
+  },
+  "dimensions": [
+    {
+      "id": "strategic_fit",
+      "weight": 15,
+      "score": 4.7,
+      "evidence_state": "SPECIFIED",
+      "evidence": "Directly expresses the locked proposition through movement as proof.",
+      "confidence": "high"
+    },
+    {
+      "id": "audience_relevance",
+      "weight": 10,
+      "score": 4.2,
+      "evidence_state": "HYPOTHESIZED",
+      "evidence": "Fits the working tension around visible control without visible effort; requires audience validation.",
+      "confidence": "medium"
+    },
+    {
+      "id": "message_clarity",
+      "weight": 10,
+      "score": 4.5,
+      "evidence_state": "SPECIFIED",
+      "evidence": "One proposition and one exact line are carried through the route.",
+      "confidence": "high"
+    },
+    {
+      "id": "concept_distinctiveness",
+      "weight": 15,
+      "score": 4.3,
+      "evidence_state": "INFERRED",
+      "evidence": "The product test and attention device are the same movement mechanism, not only a beauty style.",
+      "confidence": "medium"
+    },
+    {
+      "id": "attention_architecture",
+      "weight": 10,
+      "score": 4.4,
+      "evidence_state": "INFERRED",
+      "evidence": "Stillness-to-motion contrast creates a clear opening behavior and reveal.",
+      "confidence": "medium"
+    },
+    {
+      "id": "creative_coherence",
+      "weight": 10,
+      "score": 4.5,
+      "evidence_state": "INFERRED",
+      "evidence": "Visual, camera, sound, and copy all support controlled movement.",
+      "confidence": "medium"
+    },
+    {
+      "id": "production_feasibility",
+      "weight": 10,
+      "score": 4.0,
+      "evidence_state": "INFERRED",
+      "evidence": "Image is straightforward; video is feasible but hair physics and product fidelity require retries.",
+      "confidence": "medium"
+    },
+    {
+      "id": "platform_fit",
+      "weight": 10,
+      "score": 4.4,
+      "evidence_state": "SPECIFIED",
+      "evidence": "The route has a 15-second vertical structure and static derivative.",
+      "confidence": "high"
+    },
+    {
+      "id": "rights_provenance",
+      "weight": 5,
+      "score": 5.0,
+      "evidence_state": "SPECIFIED",
+      "evidence": "All assets and talent are fictional and cleared for this example.",
+      "confidence": "high"
+    },
+    {
+      "id": "testability",
+      "weight": 5,
+      "score": 4.5,
+      "evidence_state": "SPECIFIED",
+      "evidence": "Can compare motion proof against the metaphor route while holding proposition and slot stable.",
+      "confidence": "high"
+    }
+  ],
+  "recommendation": "Select as the primary route, retain The Quiet Lift as a controlled creative-system test, and withhold output-quality judgment until actual generations are inspected.",
+  "remaining_unknowns": [
+    "Audience tension and insight are still hypotheses.",
+    "Actual GPT Image 2 and Seedance outputs have not been observed.",
+    "Hair-motion and product-fidelity retry rate is unknown."
+  ]
+}

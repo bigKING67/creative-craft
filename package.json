@@ -1,0 +1,46 @@
+{
+  "name": "@bigking67/creative-craft",
+  "version": "0.1.0",
+  "description": "Creative strategy, direction, generative image and video production, evaluation, iteration, and delivery governance for real creative work.",
+  "license": "MIT",
+  "author": "bigKING67",
+  "homepage": "https://github.com/bigKING67/creative-craft#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bigKING67/creative-craft.git"
+  },
+  "files": [
+    ".codex-plugin",
+    "skills/creative-craft",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "VERSION",
+    "sources.lock.json",
+    "!skills/creative-craft/**/__pycache__",
+    "!skills/creative-craft/**/*.pyc",
+    "!skills/creative-craft/**/*.pyo"
+  ],
+  "keywords": [
+    "pi-package",
+    "agent-skill",
+    "creative-strategy",
+    "creative-direction",
+    "image-generation",
+    "video-generation",
+    "gpt-image-2",
+    "seedance",
+    "creative-operations"
+  ],
+  "pi": {
+    "skills": [
+      "skills/creative-craft"
+    ]
+  },
+  "scripts": {
+    "doctor": "python3 skills/creative-craft/scripts/creative_craft.py doctor",
+    "validate": "python3 skills/creative-craft/scripts/creative_craft.py self-test",
+    "test": "python3 skills/creative-craft/scripts/creative_craft.py self-test"
+  }
+}
