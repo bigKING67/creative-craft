@@ -104,6 +104,45 @@ def main() -> int:
                 errors.append(f"installed runtime validation failed: {validation.stdout.strip()}")
             else:
                 checks.append("installed-runtime")
+            brand_root = Path(directory) / "acme-brand"
+            brand_init = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts/creative_craft.py"),
+                    "init-brand-pack",
+                    "--target",
+                    str(brand_root),
+                    "--brand-id",
+                    "acme",
+                    "--brand-name",
+                    "Acme",
+                    "--owner",
+                    "host-smoke",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            brand_validation = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts/creative_craft.py"),
+                    "validate-brand-pack",
+                    "--root",
+                    str(brand_root),
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if brand_init.returncode != 0 or brand_validation.returncode != 0:
+                errors.append(
+                    "installed runtime Brand Pack smoke failed: "
+                    + (brand_init.stderr.strip() or brand_validation.stdout.strip())
+                )
+            else:
+                checks.append("installed-brand-pack-runtime")
 
     payload = {"valid": not errors, "checks": checks, "errors": errors}
     if args.json:

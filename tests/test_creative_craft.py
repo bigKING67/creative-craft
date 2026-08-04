@@ -48,6 +48,71 @@ def refresh_manifest(root: Path) -> dict:
     return manifest
 
 
+def init_brand_pack(root: Path, brand_id: str = "acme", brand_name: str = "Acme") -> Path:
+    skill_root = root / f"{brand_id}-brand"
+    args = type("Args", (), {
+        "target": str(skill_root),
+        "brand_id": brand_id,
+        "brand_name": brand_name,
+        "owner": "fixture-owner",
+        "force": False,
+    })()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        if cc.cmd_init_brand_pack(args) != 0:
+            raise AssertionError("Brand Pack fixture initialization failed")
+    return skill_root
+
+
+def approve_brand_pack(
+    skill_root: Path, version: str = "0.1.0", *, require_valid: bool = True
+) -> dict:
+    manifest_path = skill_root / "brand-pack.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update({
+        "version": version,
+        "status": "approved",
+        "approved_at": "2026-08-04T00:00:00Z",
+        "review_after": "2027-08-04T00:00:00Z",
+        "source_references": [{
+            "source_id": "fixture-authority",
+            "uri": "https://brand.invalid/authority",
+            "version": version,
+            "reviewed_at": "2026-08-04T00:00:00Z",
+            "notes": "Synthetic test authority only.",
+        }],
+    })
+    for item in manifest["authority_files"]:
+        authority_path = skill_root / item["path"]
+        authority_path.write_text(
+            f"# Reviewed {item['role']} authority\n\n"
+            "Status: `APPROVED`\n\nSynthetic fixture authority; no real brand claim.\n",
+            encoding="utf-8",
+        )
+        item["sha256"] = cc.sha256_file(authority_path)
+    write_json(manifest_path, manifest)
+    graph = cc.validate_brand_pack(skill_root)
+    if require_valid and not graph.result.ok:
+        raise AssertionError(graph.result.errors)
+    return manifest
+
+
+def bind_brand_pack(project: Path, skill_root: Path) -> None:
+    args = type("Args", (), {
+        "brand_source_uri": "https://git.invalid/acme-brand-pack.git",
+        "brand_source_ref": "main",
+        "brand_source_commit": "1" * 40,
+        "imported_by": "fixture-operator",
+        "reason": "Initial fixture binding",
+    })()
+    cc._install_brand_snapshot(
+        project,
+        skill_root,
+        args,
+        require_existing_binding=False,
+        retain_backup=False,
+    )
+
+
 class DoctorTests(unittest.TestCase):
     def test_doctor_passes(self) -> None:
         result = cc.doctor(ROOT)
@@ -251,9 +316,329 @@ class SeedTests(unittest.TestCase):
                 self.assertEqual(0, cc.cmd_seed(args))
                 self.assertTrue((Path(directory) / "BRAND.md").is_file())
                 self.assertTrue((Path(directory) / ".creative-craft/critique.json").is_file())
+                self.assertFalse((Path(directory) / ".creative-craft/brand-pack.json").exists())
+                self.assertFalse((Path(directory) / ".creative-craft/brand-binding.json").exists())
                 self.assertTrue(cc.validate_project(Path(directory)).result.ok)
                 self.assertEqual(1, cc.cmd_seed(args))
             self.assertIn("refusing to overwrite", stderr.getvalue())
+
+
+class BrandPackTests(unittest.TestCase):
+    def copy_example(self, directory: str) -> Path:
+        target = Path(directory) / "project"
+        shutil.copytree(ROOT / "examples/premium-haircare-launch", target)
+        return target
+
+    def test_init_brand_pack_is_draft_unverified_and_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            self.assertEqual("draft", graph.manifest["status"])
+            self.assertEqual("internal", graph.manifest["classification"])
+            self.assertEqual([], graph.ledger["assets"])
+            self.assertIn("UNVERIFIED", (skill_root / "references/claims.md").read_text())
+            self.assertNotIn("creative-craft.brand-pack.v1", (skill_root / "SKILL.md").read_text())
+
+    def test_brand_pack_path_traversal_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            manifest_path = skill_root / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["authority_files"][0]["path"] = "../outside.md"
+            write_json(manifest_path, manifest)
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("unsafe root-relative" in item for item in graph.result.errors))
+
+    def test_brand_pack_symlink_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            brand_path = skill_root / "references/brand.md"
+            content = brand_path.read_text(encoding="utf-8")
+            real_path = skill_root / "references/brand-real.md"
+            real_path.write_text(content, encoding="utf-8")
+            brand_path.unlink()
+            brand_path.symlink_to(real_path.name)
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("must not use a symlink" in item for item in graph.result.errors))
+
+    def test_authority_digest_drift_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            with (skill_root / "references/brand.md").open("a", encoding="utf-8") as handle:
+                handle.write("\nDrift.\n")
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("sha256 mismatch" in item for item in graph.result.errors))
+
+    def test_approved_pack_requires_approval_and_reviewed_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            manifest_path = skill_root / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["status"] = "approved"
+            write_json(manifest_path, manifest)
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("requires approved_at" in item for item in graph.result.errors))
+            self.assertTrue(any("requires at least one source" in item
+                                for item in graph.result.errors))
+
+    def test_approved_pack_rejects_placeholder_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            manifest_path = skill_root / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.update({
+                "status": "approved",
+                "approved_at": "2026-08-04T00:00:00Z",
+                "source_references": [{
+                    "source_id": "fixture",
+                    "uri": "https://brand.invalid/authority",
+                    "version": "0.1.0",
+                    "reviewed_at": "2026-08-04T00:00:00Z",
+                    "notes": "Synthetic fixture.",
+                }],
+            })
+            write_json(manifest_path, manifest)
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("still contains TBD" in item for item in graph.result.errors))
+
+    def test_approved_pack_rejects_unresolved_asset_rights(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            ledger_path = skill_root / "asset-ledger.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["assets"].append({
+                "asset_id": "acme-dam-001",
+                "path_or_uri": "dam://acme/asset-001",
+                "mime_type": "image/png",
+                "sha256": "1" * 64,
+                "creator": "fixture",
+                "owner": "fixture",
+                "rights_status": "UNVERIFIED",
+                "consent_status": "NOT_APPLICABLE",
+                "allowed_use": [],
+                "expires_at": None,
+                "reference_roles": ["brand"],
+                "parent_assets": [],
+                "notes": "Synthetic fixture.",
+            })
+            write_json(ledger_path, ledger)
+            manifest_path = skill_root / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["asset_ledger"]["sha256"] = cc.sha256_file(ledger_path)
+            write_json(manifest_path, manifest)
+            approve_brand_pack(skill_root, require_valid=False)
+            graph = cc.validate_brand_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("unresolved rights" in item for item in graph.result.errors))
+
+    def test_seed_creates_content_bound_snapshot_without_live_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_brand_pack(root)
+            project = root / "project"
+            args = type("Args", (), {
+                "target": str(project),
+                "force": False,
+                "brand_pack": str(skill_root),
+                "brand_source_uri": "https://git.invalid/acme.git",
+                "brand_source_ref": "main",
+                "brand_source_commit": "1" * 40,
+                "imported_by": "fixture",
+            })()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_seed(args))
+            snapshot_brand = project / ".creative-craft/brand-snapshot/references/brand.md"
+            before = snapshot_brand.read_bytes()
+            source_brand = skill_root / "references/brand.md"
+            source_brand.write_text("Source changed after binding.\n", encoding="utf-8")
+            self.assertEqual(before, snapshot_brand.read_bytes())
+            self.assertFalse(snapshot_brand.is_symlink())
+            self.assertTrue(cc.validate_project(project).result.ok)
+
+    def test_draft_brand_pack_blocks_ready_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_brand_pack(root)
+            project = root / "project"
+            args = type("Args", (), {
+                "target": str(project),
+                "force": False,
+                "brand_pack": str(skill_root),
+                "brand_source_uri": None,
+                "brand_source_ref": None,
+                "brand_source_commit": None,
+                "imported_by": "fixture",
+            })()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_seed(args))
+            job_path = project / ".creative-craft/image-job.json"
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            job["declared_status"] = "ready"
+            write_json(job_path, job)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("requires an approved bound brand pack" in item
+                                for item in graph.result.errors))
+
+    def test_approved_brand_pack_allows_existing_ready_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            approve_brand_pack(skill_root)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, skill_root)
+            graph = cc.validate_project(project)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+
+    def test_binding_identity_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            approve_brand_pack(skill_root)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, skill_root)
+            binding_path = project / ".creative-craft/brand-binding.json"
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["pack_version"] = "9.9.9"
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("pack_version differs" in item for item in graph.result.errors))
+
+    def test_binding_source_digest_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            approve_brand_pack(skill_root)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, skill_root)
+            binding_path = project / ".creative-craft/brand-binding.json"
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["source"]["pack_sha256"] = "f" * 64
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("source.pack_sha256 differs" in item
+                                for item in graph.result.errors))
+
+    def test_snapshot_tree_digest_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            approve_brand_pack(skill_root)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, skill_root)
+            path = project / ".creative-craft/brand-snapshot/references/brand.md"
+            path.write_text(path.read_text(encoding="utf-8") + "\nDrift.\n", encoding="utf-8")
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("tree_sha256 mismatch" in item for item in graph.result.errors))
+
+    def test_project_brand_digest_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_brand_pack(Path(directory))
+            approve_brand_pack(skill_root)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, skill_root)
+            (project / "BRAND.md").write_text("Drift.\n", encoding="utf-8")
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("project_brand.sha256 mismatch" in item
+                                for item in graph.result.errors))
+
+    def test_update_brand_snapshot_creates_backup_and_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = init_brand_pack(root / "first")
+            approve_brand_pack(first)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, first)
+            old_binding = json.loads(
+                (project / ".creative-craft/brand-binding.json").read_text(encoding="utf-8")
+            )
+            second = root / "second/acme-brand"
+            shutil.copytree(first, second)
+            brand_path = second / "references/brand.md"
+            brand_path.write_text(brand_path.read_text(encoding="utf-8") + "\nVersion 0.2.0.\n",
+                                  encoding="utf-8")
+            manifest_path = second / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = "0.2.0"
+            for item in manifest["authority_files"]:
+                if item["role"] == "brand":
+                    item["sha256"] = cc.sha256_file(brand_path)
+            write_json(manifest_path, manifest)
+            args = type("Args", (), {
+                "target": str(project),
+                "brand_pack": str(second),
+                "reason": "Adopt approved authority 0.2.0",
+                "brand_source_uri": "https://git.invalid/acme.git",
+                "brand_source_ref": "v0.2.0",
+                "brand_source_commit": "2" * 40,
+                "imported_by": "fixture",
+            })()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_update_brand_snapshot(args))
+            binding = json.loads(
+                (project / ".creative-craft/brand-binding.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(old_binding["binding_id"], binding["previous_binding_id"])
+            self.assertEqual("0.2.0", binding["pack_version"])
+            backups = list((project / ".creative-craft/brand-backups").iterdir())
+            self.assertEqual(1, len(backups))
+            self.assertTrue(cc.validate_project(project).result.ok)
+
+    def test_update_failure_rolls_back_project_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = init_brand_pack(root / "first")
+            approve_brand_pack(first)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, first)
+            second = root / "second/acme-brand"
+            shutil.copytree(first, second)
+            manifest_path = second / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = "0.2.0"
+            write_json(manifest_path, manifest)
+            binding_path = project / ".creative-craft/brand-binding.json"
+            before_binding = binding_path.read_bytes()
+            before_brand = (project / "BRAND.md").read_bytes()
+            original_validate = cc.validate_project
+            calls = 0
+
+            def fail_final_validation(root_path: Path) -> cc.ProjectGraph:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return original_validate(root_path)
+                graph = original_validate(root_path)
+                graph.result.errors.append("synthetic post-write failure")
+                return graph
+
+            args = type("Args", (), {
+                "target": str(project),
+                "brand_pack": str(second),
+                "reason": "Synthetic rollback test",
+                "brand_source_uri": "https://git.invalid/acme.git",
+                "brand_source_ref": "v0.2.0",
+                "brand_source_commit": "2" * 40,
+                "imported_by": "fixture",
+            })()
+            with (
+                mock.patch.object(cc, "validate_project", side_effect=fail_final_validation),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(1, cc.cmd_update_brand_snapshot(args))
+            self.assertEqual(before_binding, binding_path.read_bytes())
+            self.assertEqual(before_brand, (project / "BRAND.md").read_bytes())
+            self.assertTrue(original_validate(project).result.ok)
 
 
 class ArtifactSemanticTests(unittest.TestCase):

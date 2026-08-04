@@ -43,7 +43,11 @@ def main() -> int:
     required = {
         ".codex-plugin/plugin.json",
         "skills/creative-craft/SKILL.md",
+        "skills/creative-craft/schemas/brand-binding.schema.json",
+        "skills/creative-craft/schemas/brand-pack.schema.json",
         "skills/creative-craft/scripts/creative_craft.py",
+        "skills/creative-craft/templates/brand-binding.json",
+        "skills/creative-craft/templates/brand-pack.json",
         "skills/creative-craft/VERSION",
     }
     missing = sorted(required.difference(paths))
