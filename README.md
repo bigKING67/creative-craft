@@ -22,9 +22,11 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.1.0` provides the canonical skill, provider profiles, versioned job
-artifacts, prompt compilers, validation, evidence-aware evaluation, provenance
-rules, and a fictional end-to-end example.
+Version `0.2.0` is the evidence-bound production-contract release. It adds a
+content-bound project manifest, formal creative direction, v2 image/video jobs,
+execution receipts, output inspections, revision lineage, derived lifecycle
+status, cross-artifact validation, evidence-strength scoring, execution-surface
+profiles, atomic installation, and real CI.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -148,14 +150,26 @@ an assumption rather than silently invented.
 
 ## Versioned artifacts
 
-The first release defines:
+The current contracts are:
 
 - `creative-craft.brief.v1`
 - `creative-craft.asset-ledger.v1`
-- `creative-craft.image-job.v1`
-- `creative-craft.video-job.v1`
-- `creative-craft.evaluation.v1`
-- `creative-craft.delivery.v1`
+- `creative-craft.concept-routes.v1`
+- `creative-craft.critique.v1`
+- `creative-craft.project-manifest.v1`
+- `creative-craft.creative-direction.v1`
+- `creative-craft.image-job.v2`
+- `creative-craft.video-job.v2`
+- `creative-craft.execution-receipt.v1`
+- `creative-craft.output-inspection.v1`
+- `creative-craft.revision-lineage.v1`
+- `creative-craft.evaluation.v2`
+- `creative-craft.delivery.v2`
+
+The v1 job, evaluation, and delivery contracts remain readable for migration,
+but new projects seed v2 contracts. Job v2 can declare only `draft`, `ready`,
+or `superseded`; generated, inspected, approved, and delivered states are
+derived from receipts, files, digests, inspections, and delivery evidence.
 
 Schemas live under `skills/creative-craft/schemas/`. Human-oriented templates
 live under `skills/creative-craft/templates/`.
@@ -166,6 +180,7 @@ Provider facts are dated and isolated:
 
 - `providers/openai-gpt-image-2.json`
 - `providers/bytedance-seedance-2.5.json`
+- `providers/surfaces/*.json`
 
 The core skill may say “use a low-cost draft pass before a final pass.” Only a
 provider profile may state current model names, size limits, reference counts,
@@ -196,6 +211,42 @@ creative-craft/
 
 `skills/creative-craft/` is the canonical installable runtime. Repository-root
 files provide governance, CI, examples, and release support.
+
+## Install as an Agent Skill
+
+Distribution is **GitHub-only**. The npm package name is reserved for package
+metadata and Pi discovery, but this project is private-to-npm and is not
+published to the npm registry.
+
+Pi is a Tier 1 host. Install the immutable release globally or for one project:
+
+```bash
+pi install git:github.com/bigKING67/creative-craft@v0.2.0
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.0
+```
+
+Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.0`, or run:
+
+```bash
+python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo bigKING67/creative-craft \
+  --ref v0.2.0 \
+  --path skills/creative-craft
+```
+
+The skill becomes available to Codex on the next turn/session. A generic Agent
+host can clone the repository and use the atomic installer:
+
+```bash
+python3 scripts/install_skill.py --target /path/to/host/skills
+```
+
+The installer stages on the target filesystem, validates the copy, writes
+`INSTALL_PROVENANCE.json`, atomically swaps it into place, and preserves the
+previous installation as a backup when `--force` is used. Claude and Cursor
+directories currently document thin-adapter expectations; they are not Tier 1
+runtime claims.
 
 ## Quick start
 
@@ -254,7 +305,18 @@ Evaluate a route or output:
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py score \
-  --file examples/premium-haircare-launch/evaluation.json
+  --file examples/premium-haircare-launch/evaluation.json \
+  --root examples/premium-haircare-launch
+```
+
+Validate the content-bound project graph and inspect derived state:
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py validate-project \
+  --root examples/premium-haircare-launch
+
+python3 skills/creative-craft/scripts/creative_craft.py project-status \
+  --root examples/premium-haircare-launch --json
 ```
 
 Hash a source or output for the asset ledger:
@@ -291,5 +353,18 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-`0.1.0` proves the planning and artifact contracts. It does not claim that
-unobserved image or video output is production quality.
+`0.2.0` proves the planning-to-evidence graph and synthetic lifecycle fixtures.
+It still does not claim that unobserved image or video output is production
+quality, that real Golden Evals are complete, or that provider network adapters
+exist.
+
+Maintainers build one release candidate from a clean commit after installing
+`requirements-dev.txt`:
+
+```bash
+python3 scripts/build_release.py
+```
+
+The ignored `dist/release/` directory contains the `.tgz`, its SHA-256 file,
+and a command-bound validation summary for the GitHub Release. It is not an npm
+publication workflow.

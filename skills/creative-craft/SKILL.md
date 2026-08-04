@@ -104,6 +104,50 @@ or a controlled test.
 - Keep a legitimate `KEEP` decision. Existing work does not need modification
   merely because a different style is possible.
 
+## Evidence-bound artifact protocol
+
+For a project that needs traceability, use this causal graph:
+
+```text
+project-manifest.v1
+-> brief.v1
+-> concept-routes.v1
+-> creative-direction.v1
+-> image-job.v2 / video-job.v2
+-> execution-receipt.v1
+-> output-inspection.v1
+-> revision-lineage.v1
+-> evaluation.v2
+-> delivery.v2
+```
+
+- JSON Schema is the structural authority. Use the bundled CLI for structure,
+  Provider/Surface semantics, safe paths, SHA-256, references, rights, and
+  lifecycle checks.
+- Job v2 may declare only `draft`, `ready`, or `superseded`. Never write
+  `generated`, `inspected`, `approved`, or `delivered` into a Job. Those states
+  are projected by `project-status` from receipts, output files, inspections,
+  approvals, and delivery evidence.
+- An Execution Receipt records what a host/provider actually attempted. It is
+  not a creative-quality approval.
+- `inspect-output` creates only a digest-bound draft skeleton. The agent must
+  actually inspect the image/video before adding findings or approval.
+- Every Evaluation v2 evidence claim cites a resolvable
+  `cc://<artifact-type>/<artifact-id>#<json-pointer>` reference. Report evidence
+  coverage and strength separately; hypotheses do not become strong evidence
+  merely because every dimension contains text.
+- Delivery v2 marked `delivered` requires real files, digest parity, cleared or
+  limited rights, approved inspections, and linked upstream evidence.
+
+Useful local commands:
+
+```bash
+python3 scripts/creative_craft.py validate-project --root <project>
+python3 scripts/creative_craft.py project-status --root <project> --json
+python3 scripts/creative_craft.py score --file <evaluation.json> --root <project>
+python3 scripts/creative_craft.py verify-delivery --root <project> --file <delivery.json>
+```
+
 ## Core workflow
 
 1. **Frame**

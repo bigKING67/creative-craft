@@ -1,12 +1,16 @@
 {
-  "schema_version": "creative-craft.video-job.v1",
+  "schema_version": "creative-craft.video-job.v2",
   "job_id": "northstar-motion-proof-vertical-15s-v1",
   "brief_id": "northstar-airlift-launch-v1",
-  "status": "ready",
+  "direction_id": "northstar-motion-proof-direction-v1",
+  "selected_route_id": "motion-is-proof",
+  "declared_status": "ready",
   "provider_profile": "bytedance.seedance-2.5.2026-07-31",
+  "execution_surface": "bytedance.jimeng_web",
   "task_type": "reference_to_video",
   "execution_mode": "single_pass",
   "intended_use": "15-second vertical launch film for a social feed.",
+  "asset_refs": ["product-pack-001", "light-ref-001", "motion-ref-001"],
   "duration_seconds": 15,
   "format": {
     "aspect_ratio": "9:16",

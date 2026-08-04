@@ -1,9 +1,10 @@
 # Video execution pack — northstar-motion-proof-vertical-15s-v1
 
 - Provider profile: `bytedance.seedance-2.5.2026-07-31`
+- Execution surface: `bytedance.jimeng_web`
 - Task: `reference_to_video`
 - Execution mode: `single_pass`
-- Status: `ready`
+- Declared status: `ready`
 - Duration: `15s`
 - Aspect ratio: `9:16`
 - Resolution target: `platform-high`
@@ -57,7 +58,7 @@ The bottle and lifted hair settle into a clean shared frame while the line 'VOLU
 - Physics: Hair movement follows inertia, gravity, air resistance, and the completed body turn; no impossible strand reversal or clipping.
 
 ### DIALOGUE / VOICE / AMBIENCE / EFFECTS / MUSIC
-- Voice:
+- Voice: (none)
 - Ambience: Quiet premium studio room tone with subtle air movement.
 - Effect: soft hair/fabric movement
 - Effect: single glass-like product click
@@ -85,4 +86,4 @@ The bottle and lifted hair settle into a clean shared frame while the line 'VOLU
 
 Rights status: `CLEARED`
 
-This pack is `prompt_ready`; it is not evidence that a video was generated or approved.
+This pack was compiled from declared status `ready`; compilation is not evidence that a video was generated or approved.

@@ -1,12 +1,16 @@
 {
-  "schema_version": "creative-craft.video-job.v1",
+  "schema_version": "creative-craft.video-job.v2",
   "job_id": "video-job-tbd",
   "brief_id": "brief-tbd",
-  "status": "draft",
+  "direction_id": "direction-tbd",
+  "selected_route_id": "route-1",
+  "declared_status": "draft",
   "provider_profile": "bytedance.seedance-2.5.2026-07-31",
+  "execution_surface": "bytedance.jimeng_web",
   "task_type": "text_to_video",
   "execution_mode": "single_pass",
   "intended_use": "TBD",
+  "asset_refs": [],
   "duration_seconds": 15,
   "format": {
     "aspect_ratio": "9:16",

@@ -1,12 +1,16 @@
 {
-  "schema_version": "creative-craft.image-job.v1",
+  "schema_version": "creative-craft.image-job.v2",
   "job_id": "image-job-tbd",
   "brief_id": "brief-tbd",
-  "status": "draft",
+  "direction_id": "direction-tbd",
+  "selected_route_id": "route-1",
+  "declared_status": "draft",
   "provider_profile": "openai.gpt-image-2.2026-04-21",
+  "execution_surface": "openai.image_api",
   "task_type": "generate",
   "execution_mode": "single_turn",
   "intended_use": "TBD",
+  "asset_refs": [],
   "canvas": {
     "size": "1024x1024",
     "quality": "low",

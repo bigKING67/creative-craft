@@ -1,6 +1,19 @@
 # Codex adapter
 
-Install the canonical skill or Codex plugin without changing the core. Provider execution remains governed by available tools and user authorization.
+Codex is a Tier 1 host. The repository exposes `./skills/` through
+`.codex-plugin/plugin.json`; the canonical runtime remains
+`../../skills/creative-craft/`.
 
-The adapter is intentionally documentation-only in `0.1.0`. Use
-`../../skills/creative-craft/` as the single source of truth.
+Use Codex's built-in `skill-installer` with repository
+`bigKING67/creative-craft`, ref `v0.2.0`, and path `skills/creative-craft`, or:
+
+```bash
+python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo bigKING67/creative-craft \
+  --ref v0.2.0 \
+  --path skills/creative-craft
+```
+
+The installed skill becomes discoverable on the next turn/session. Provider
+execution still depends on available host tools and explicit authorization;
+Creative Craft itself includes no network adapter.

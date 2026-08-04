@@ -17,8 +17,9 @@ a verification date, and a compatibility note.
 Run:
 
 ```bash
-python3 scripts/validate.py
-python3 -m unittest discover -s tests -p "test_*.py"
+python3 -m pip install -r requirements-dev.txt
+make validate-all
+ruff check skills/creative-craft/scripts/creative_craft.py scripts tests
 ```
 
 Do not add a global rule from one successful output. Add a fixture, describe

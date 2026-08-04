@@ -1,30 +1,17 @@
 {
-  "schema_version": "creative-craft.delivery.v1",
+  "schema_version": "creative-craft.delivery.v2",
   "delivery_id": "delivery-tbd",
   "project_id": "project-tbd",
   "status": "planned",
-  "selected_route": "TBD",
-  "files": [
-    {
-      "asset_id": "asset-tbd",
-      "path_or_uri": "TBD",
-      "role": "TBD",
-      "channel": "TBD",
-      "placement": "TBD",
-      "dimensions": null,
-      "aspect_ratio": "TBD",
-      "duration_seconds": null,
-      "format": "TBD",
-      "codec": null,
-      "language": "TBD",
-      "exact_copy": [],
-      "sha256": null,
-      "source": "TBD",
-      "approval_status": "planned",
-      "rights_status": "UNVERIFIED",
-      "known_limitations": []
-    }
-  ],
+  "brief_id": "brief-tbd",
+  "selected_route_id": "route-1",
+  "direction_id": "direction-tbd",
+  "job_refs": [],
+  "receipt_refs": [],
+  "inspection_refs": [],
+  "revision_refs": [],
+  "evaluation_refs": [],
+  "files": [],
   "validation": [],
   "remaining_risks": []
 }

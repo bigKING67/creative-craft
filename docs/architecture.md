@@ -54,6 +54,10 @@ Own dated facts:
 
 A provider update should not require rewriting the creative method.
 
+Execution surfaces live under `providers/surfaces/` and distinguish the model
+from the UI/API used to execute it. A surface declares availability, compatible
+provider profiles, supported modes, and surface-specific limitations.
+
 ### 4. Versioned artifacts and schemas
 
 `skills/creative-craft/templates/`
@@ -70,9 +74,10 @@ Standard-library CLI:
 
 - checks repository integrity;
 - seeds project authority;
-- validates jobs;
+- validates JSON Schema structure and cross-field semantics;
+- validates a content-bound project graph and derives lifecycle status;
 - compiles provider-aware prompts;
-- calculates evidence-aware comparative scores;
+- calculates evidence-bound coverage, strength, confidence, and scores;
 - hashes assets.
 
 It does not call providers or incur costs.
@@ -92,6 +97,9 @@ promoting historical results to current model guarantees.
 user / project authority
         |
         v
+project manifest -- content hashes and artifact registry
+        |
+        v
 creative brief ---- asset ledger
         |
         v
@@ -109,13 +117,19 @@ evaluation <------ actual output inspection
 revision lineage -> adaptation -> delivery manifest -> learning
 ```
 
-## Why no direct model adapter in v0.1.0
+The declared state inside image/video Job v2 is intentionally limited to
+`draft`, `ready`, and `superseded`. The resolver projects `generated`,
+`inspected`, `revision_required`, `approved`, and `delivered` only when the
+corresponding receipt, output file, digest, inspection, approval, and delivery
+evidence exists.
+
+## Why no direct model adapter in v0.2.0
 
 The first failure mode of a creative system is usually not API syntax. It is a
 missing brief, collapsed concept/execution thinking, vague reference use,
 uncontrolled edits, unobserved output claims, or absent rights.
 
-The first release therefore stabilizes the upstream contracts. Direct adapters
+The current release therefore stabilizes the end-to-end evidence contracts. Direct adapters
 can be added later as opt-in integrations with explicit credentials, cost,
 network, moderation, receipt, and provider-version handling.
 
@@ -124,3 +138,9 @@ network, moderation, receipt, and provider-version handling.
 Artifacts use versioned `schema_version` values. A future version may add
 fields without changing the meaning of existing fields. Breaking semantic
 changes require a new schema version and migration notes.
+
+JSON Schema is the structural source of truth. The installed standard-library
+runtime interprets the schema keyword subset used by this repository; CI compares
+that result with the `jsonschema` Draft 2020-12 reference implementation. Python
+semantic validators are limited to Provider/Surface capability rules,
+cross-field constraints, digests, references, rights, and lifecycle evidence.

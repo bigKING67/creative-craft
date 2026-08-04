@@ -17,10 +17,12 @@ def run(*args: str) -> None:
 
 def main() -> int:
     run(str(CLI), "doctor")
+    run(str(CLI), "validate-project", "--root", str(ROOT / "examples/premium-haircare-launch"))
 
     artifact_dirs = [
         ROOT / "skills" / "creative-craft" / "templates",
         ROOT / "examples",
+        ROOT / "tests" / "fixtures",
     ]
     for directory in artifact_dirs:
         for path in sorted(directory.rglob("*.json")):

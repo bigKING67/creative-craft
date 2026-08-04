@@ -9,21 +9,24 @@ costs.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import math
 import re
 import shutil
 import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
 TEMPLATES_DIR = SKILL_ROOT / "templates"
 PROVIDERS_DIR = SKILL_ROOT / "providers"
+SURFACES_DIR = PROVIDERS_DIR / "surfaces"
 
 EVIDENCE_STATES = {
     "SPECIFIED",
@@ -35,6 +38,100 @@ EVIDENCE_STATES = {
 IMAGE_PROFILE_ID = "openai.gpt-image-2.2026-04-21"
 VIDEO_PROFILE_ID = "bytedance.seedance-2.5.2026-07-31"
 
+ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
+    "creative-craft.brief.v1": {
+        "kind": "brief", "schema": "creative-brief.schema.json",
+        "template": "creative-brief.json", "legacy": False,
+    },
+    "creative-craft.asset-ledger.v1": {
+        "kind": "asset-ledger", "schema": "asset-ledger.schema.json",
+        "template": "asset-ledger.json", "legacy": False,
+    },
+    "creative-craft.concept-routes.v1": {
+        "kind": "concept-routes", "schema": "concept-routes.schema.json",
+        "template": "concept-routes.json", "legacy": False,
+    },
+    "creative-craft.critique.v1": {
+        "kind": "critique", "schema": "critique.schema.json",
+        "template": "critique.json", "legacy": False,
+    },
+    "creative-craft.image-job.v1": {
+        "kind": "image", "schema": "image-job.schema.json",
+        "template": None, "legacy": True,
+    },
+    "creative-craft.video-job.v1": {
+        "kind": "video", "schema": "video-job.schema.json",
+        "template": None, "legacy": True,
+    },
+    "creative-craft.evaluation.v1": {
+        "kind": "evaluation", "schema": "evaluation.schema.json",
+        "template": None, "legacy": True,
+    },
+    "creative-craft.delivery.v1": {
+        "kind": "delivery", "schema": "delivery-manifest.schema.json",
+        "template": None, "legacy": True,
+    },
+    "creative-craft.project-manifest.v1": {
+        "kind": "project-manifest", "schema": "project-manifest.schema.json",
+        "template": "project-manifest.json", "legacy": False,
+    },
+    "creative-craft.creative-direction.v1": {
+        "kind": "creative-direction", "schema": "creative-direction.schema.json",
+        "template": "creative-direction.json", "legacy": False,
+    },
+    "creative-craft.image-job.v2": {
+        "kind": "image", "schema": "image-job-v2.schema.json",
+        "template": "image-job.json", "legacy": False,
+    },
+    "creative-craft.video-job.v2": {
+        "kind": "video", "schema": "video-job-v2.schema.json",
+        "template": "video-job.json", "legacy": False,
+    },
+    "creative-craft.execution-receipt.v1": {
+        "kind": "execution-receipt", "schema": "execution-receipt.schema.json",
+        "template": "execution-receipt.json", "legacy": False,
+    },
+    "creative-craft.output-inspection.v1": {
+        "kind": "output-inspection", "schema": "output-inspection.schema.json",
+        "template": "output-inspection.json", "legacy": False,
+    },
+    "creative-craft.revision-lineage.v1": {
+        "kind": "revision-lineage", "schema": "revision-lineage.schema.json",
+        "template": "revision-lineage.json", "legacy": False,
+    },
+    "creative-craft.evaluation.v2": {
+        "kind": "evaluation", "schema": "evaluation-v2.schema.json",
+        "template": "evaluation.json", "legacy": False,
+    },
+    "creative-craft.delivery.v2": {
+        "kind": "delivery", "schema": "delivery-manifest-v2.schema.json",
+        "template": "delivery-manifest.json", "legacy": False,
+    },
+}
+
+METADATA_SCHEMAS = {
+    "creative-craft.provider.v1": "provider-profile.schema.json",
+    "creative-craft.surface.v1": "surface-profile.schema.json",
+    "creative-craft.sources.v1": "source-lock.schema.json",
+}
+
+
+@dataclass(frozen=True)
+class ValidationContext:
+    skill_root: Path = SKILL_ROOT
+
+    @property
+    def schemas_dir(self) -> Path:
+        return self.skill_root / "schemas"
+
+    @property
+    def providers_dir(self) -> Path:
+        return self.skill_root / "providers"
+
+    @property
+    def surfaces_dir(self) -> Path:
+        return self.providers_dir / "surfaces"
+
 
 @dataclass
 class Result:
@@ -45,7 +142,7 @@ class Result:
     def ok(self) -> bool:
         return not self.errors
 
-    def extend(self, other: "Result") -> None:
+    def extend(self, other: Result) -> None:
         self.errors.extend(other.errors)
         self.warnings.extend(other.warnings)
 
@@ -68,7 +165,7 @@ def load_json(path: Path) -> dict[str, Any]:
             f"invalid JSON in {path}: line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from exc
     if not isinstance(value, dict):
-        raise ValueError(f"top-level JSON value must be an object: {path}")
+        raise ValueError(f"top-level JSON value must be an object: {path}")  # noqa: TRY004
     return value
 
 
@@ -91,13 +188,179 @@ def require_list(result: Result, data: dict[str, Any], key: str, prefix: str = "
     result.require(isinstance(data.get(key), list), f"{prefix}{key} must be an array")
 
 
-def provider_profiles() -> dict[str, dict[str, Any]]:
+def _schema_type_matches(value: Any, expected: str) -> bool:
+    checks = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+        "null": lambda item: item is None,
+    }
+    checker = checks.get(expected)
+    return bool(checker and checker(value))
+
+
+def _json_path(parts: tuple[Any, ...]) -> str:
+    if not parts:
+        return "<root>"
+    return ".".join(str(part) for part in parts)
+
+
+def _resolve_local_ref(root_schema: dict[str, Any], reference: str) -> dict[str, Any]:
+    if not reference.startswith("#/"):
+        raise ValueError(f"only local JSON Schema references are supported: {reference}")
+    current: Any = root_schema
+    for raw_part in reference[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"unresolved local JSON Schema reference: {reference}")
+        current = current[part]
+    if not isinstance(current, dict):
+        raise ValueError(  # noqa: TRY004
+            f"JSON Schema reference is not an object: {reference}"
+        )
+    return current
+
+
+def _validate_schema_node(
+    value: Any,
+    schema: dict[str, Any],
+    root_schema: dict[str, Any],
+    path: tuple[Any, ...],
+    result: Result,
+) -> None:
+    if "$ref" in schema:
+        try:
+            target = _resolve_local_ref(root_schema, str(schema["$ref"]))
+        except ValueError as exc:
+            result.errors.append(str(exc))
+            return
+        _validate_schema_node(value, target, root_schema, path, result)
+        return
+
+    expected = schema.get("type")
+    expected_types = [expected] if isinstance(expected, str) else expected
+    if isinstance(expected_types, list) and not any(
+        isinstance(item, str) and _schema_type_matches(value, item)
+        for item in expected_types
+    ):
+        label = " or ".join(str(item) for item in expected_types)
+        result.errors.append(f"{_json_path(path)} must be {label}")
+        return
+
+    if "const" in schema and value != schema["const"]:
+        result.errors.append(
+            f"{_json_path(path)} must equal {schema['const']!r}"
+        )
+    if "enum" in schema and value not in schema["enum"]:
+        result.errors.append(
+            f"{_json_path(path)} must be one of {schema['enum']!r}"
+        )
+
+    if isinstance(value, dict):
+        required = schema.get("required", [])
+        if isinstance(required, list):
+            for key in required:
+                if key not in value:
+                    result.errors.append(f"{_json_path(path + (key,))} is required")
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            for key, child_value in value.items():
+                child_schema = properties.get(key)
+                if isinstance(child_schema, dict):
+                    _validate_schema_node(
+                        child_value, child_schema, root_schema, path + (key,), result
+                    )
+                elif schema.get("additionalProperties") is False:
+                    result.errors.append(
+                        f"{_json_path(path + (key,))} is not allowed"
+                    )
+
+    if isinstance(value, list):
+        minimum = schema.get("minItems")
+        if isinstance(minimum, int) and len(value) < minimum:
+            result.errors.append(
+                f"{_json_path(path)} must contain at least {minimum} items"
+            )
+        maximum = schema.get("maxItems")
+        if isinstance(maximum, int) and len(value) > maximum:
+            result.errors.append(
+                f"{_json_path(path)} must contain at most {maximum} items"
+            )
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, child_value in enumerate(value):
+                _validate_schema_node(
+                    child_value, item_schema, root_schema, path + (index,), result
+                )
+
+    if isinstance(value, str):
+        minimum = schema.get("minLength")
+        if isinstance(minimum, int) and len(value) < minimum:
+            result.errors.append(
+                f"{_json_path(path)} must contain at least {minimum} characters"
+            )
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and re.search(pattern, value) is None:
+            result.errors.append(
+                f"{_json_path(path)} does not match pattern {pattern!r}"
+            )
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)) and value < minimum:
+            result.errors.append(f"{_json_path(path)} must be >= {minimum}")
+        maximum = schema.get("maximum")
+        if isinstance(maximum, (int, float)) and value > maximum:
+            result.errors.append(f"{_json_path(path)} must be <= {maximum}")
+        exclusive_minimum = schema.get("exclusiveMinimum")
+        if isinstance(exclusive_minimum, (int, float)) and value <= exclusive_minimum:
+            result.errors.append(
+                f"{_json_path(path)} must be > {exclusive_minimum}"
+            )
+        exclusive_maximum = schema.get("exclusiveMaximum")
+        if isinstance(exclusive_maximum, (int, float)) and value >= exclusive_maximum:
+            result.errors.append(
+                f"{_json_path(path)} must be < {exclusive_maximum}"
+            )
+
+
+def validate_against_schema(data: dict[str, Any], schema_path: Path) -> Result:
+    result = Result()
+    try:
+        schema = load_json(schema_path)
+    except ValueError as exc:
+        result.errors.append(str(exc))
+        return result
+    _validate_schema_node(data, schema, schema, (), result)
+    return result
+
+
+def provider_profiles(providers_dir: Path | None = None) -> dict[str, dict[str, Any]]:
+    root = providers_dir or PROVIDERS_DIR
     profiles: dict[str, dict[str, Any]] = {}
-    for path in sorted(PROVIDERS_DIR.glob("*.json")):
+    for path in sorted(root.glob("*.json")):
         data = load_json(path)
         profile_id = data.get("profile_id")
         if isinstance(profile_id, str):
+            if profile_id in profiles:
+                raise ValueError(f"duplicate provider profile_id: {profile_id}")
             profiles[profile_id] = data
+    return profiles
+
+
+def surface_profiles(surfaces_dir: Path | None = None) -> dict[str, dict[str, Any]]:
+    root = surfaces_dir or SURFACES_DIR
+    profiles: dict[str, dict[str, Any]] = {}
+    for path in sorted(root.glob("*.json")):
+        data = load_json(path)
+        surface_id = data.get("surface_id")
+        if isinstance(surface_id, str):
+            if surface_id in profiles:
+                raise ValueError(f"duplicate execution surface_id: {surface_id}")
+            profiles[surface_id] = data
     return profiles
 
 
@@ -195,23 +458,57 @@ def parse_image_size(size: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
-def validate_image_job(data: dict[str, Any]) -> Result:
+def validate_image_job(
+    data: dict[str, Any], context: ValidationContext | None = None
+) -> Result:
+    context = context or ValidationContext()
     r = Result()
-    r.require(data.get("schema_version") == "creative-craft.image-job.v1",
-              "schema_version must be creative-craft.image-job.v1")
+    version = data.get("schema_version")
+    r.require(version in {"creative-craft.image-job.v1", "creative-craft.image-job.v2"},
+              "schema_version must be creative-craft.image-job.v1 or v2")
     for key in ("job_id", "brief_id", "provider_profile", "intended_use"):
         require_string(r, data, key)
     r.require(data.get("task_type") in {"generate", "edit"}, "task_type is invalid")
     r.require(data.get("execution_mode") in {"single_turn", "multi_turn"},
               "execution_mode is invalid")
-    r.require(data.get("status") in {
-        "draft", "ready", "executed", "inspected", "approved", "superseded"
-    }, "status is invalid")
+    if version == "creative-craft.image-job.v1":
+        r.require(data.get("status") in {
+            "draft", "ready", "executed", "inspected", "approved", "superseded"
+        }, "status is invalid")
+    else:
+        for key in ("direction_id", "selected_route_id", "execution_surface"):
+            require_string(r, data, key)
+        require_list(r, data, "asset_refs")
+        asset_refs = data.get("asset_refs", [])
+        if isinstance(asset_refs, list):
+            r.require(len(asset_refs) == len(set(asset_refs)),
+                      "asset_refs must not contain duplicates")
+        r.require(data.get("declared_status") in {"draft", "ready", "superseded"},
+                  "declared_status is invalid")
 
-    profiles = provider_profiles()
+    try:
+        profiles = provider_profiles(context.providers_dir)
+        surfaces = surface_profiles(context.surfaces_dir)
+    except ValueError as exc:
+        r.errors.append(str(exc))
+        profiles = {}
+        surfaces = {}
     profile_id = data.get("provider_profile")
     profile = profiles.get(profile_id)
     r.require(profile is not None, f"unknown provider_profile: {profile_id!r}")
+    if version == "creative-craft.image-job.v2":
+        surface_id = data.get("execution_surface")
+        surface = surfaces.get(surface_id)
+        r.require(surface is not None, f"unknown execution_surface: {surface_id!r}")
+        if surface:
+            r.require(surface.get("available") is True,
+                      f"execution_surface is not currently available: {surface_id!r}")
+            r.require(profile_id in surface.get("provider_profiles", []),
+                      "execution_surface does not support provider_profile")
+            r.require(data.get("execution_mode") in surface.get("modes", []),
+                      "execution_surface does not support execution_mode")
+            r.require(data.get("task_type") in surface.get("modes", []),
+                      "execution_surface does not support task_type")
 
     canvas = data.get("canvas")
     r.require(isinstance(canvas, dict), "canvas must be an object")
@@ -301,10 +598,14 @@ def validate_image_job(data: dict[str, Any]) -> Result:
     return r
 
 
-def validate_video_job(data: dict[str, Any]) -> Result:
+def validate_video_job(
+    data: dict[str, Any], context: ValidationContext | None = None
+) -> Result:
+    context = context or ValidationContext()
     r = Result()
-    r.require(data.get("schema_version") == "creative-craft.video-job.v1",
-              "schema_version must be creative-craft.video-job.v1")
+    version = data.get("schema_version")
+    r.require(version in {"creative-craft.video-job.v1", "creative-craft.video-job.v2"},
+              "schema_version must be creative-craft.video-job.v1 or v2")
     for key in ("job_id", "brief_id", "provider_profile", "intended_use", "premise", "end_state"):
         require_string(r, data, key)
     r.require(data.get("task_type") in {
@@ -312,14 +613,42 @@ def validate_video_job(data: dict[str, Any]) -> Result:
     }, "task_type is invalid")
     r.require(data.get("execution_mode") in {"single_pass", "extension", "edit"},
               "execution_mode is invalid")
-    r.require(data.get("status") in {
-        "draft", "ready", "executed", "inspected", "approved", "superseded"
-    }, "status is invalid")
+    if version == "creative-craft.video-job.v1":
+        r.require(data.get("status") in {
+            "draft", "ready", "executed", "inspected", "approved", "superseded"
+        }, "status is invalid")
+    else:
+        for key in ("direction_id", "selected_route_id", "execution_surface"):
+            require_string(r, data, key)
+        require_list(r, data, "asset_refs")
+        asset_refs = data.get("asset_refs", [])
+        if isinstance(asset_refs, list):
+            r.require(len(asset_refs) == len(set(asset_refs)),
+                      "asset_refs must not contain duplicates")
+        r.require(data.get("declared_status") in {"draft", "ready", "superseded"},
+                  "declared_status is invalid")
 
-    profiles = provider_profiles()
+    try:
+        profiles = provider_profiles(context.providers_dir)
+        surfaces = surface_profiles(context.surfaces_dir)
+    except ValueError as exc:
+        r.errors.append(str(exc))
+        profiles = {}
+        surfaces = {}
     profile_id = data.get("provider_profile")
     profile = profiles.get(profile_id)
     r.require(profile is not None, f"unknown provider_profile: {profile_id!r}")
+    if version == "creative-craft.video-job.v2":
+        surface_id = data.get("execution_surface")
+        surface = surfaces.get(surface_id)
+        r.require(surface is not None, f"unknown execution_surface: {surface_id!r}")
+        if surface:
+            r.require(surface.get("available") is True,
+                      f"execution_surface is not currently available: {surface_id!r}")
+            r.require(profile_id in surface.get("provider_profiles", []),
+                      "execution_surface does not support provider_profile")
+            r.require(data.get("execution_mode") in surface.get("modes", []),
+                      "execution_surface does not support execution_mode")
 
     duration = data.get("duration_seconds")
     r.require(isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration > 0,
@@ -363,9 +692,9 @@ def validate_video_job(data: dict[str, Any]) -> Result:
                 counts["audio"] += 1
     if profile:
         limits = profile["capabilities"]["reference_limits"]
-        for key in counts:
-            r.require(counts[key] <= limits[key],
-                      f"{key} reference count {counts[key]} exceeds provider profile limit {limits[key]}")
+        for key, count in counts.items():
+            r.require(count <= limits[key],
+                      f"{key} reference count {count} exceeds provider profile limit {limits[key]}")
 
     require_list(r, data, "continuity_locks")
     timeline = data.get("timeline")
@@ -392,11 +721,11 @@ def validate_video_job(data: dict[str, Any]) -> Result:
                 last_end = max(last_end, float(end))
             for key in ("visual", "action", "camera", "audio"):
                 require_string(r, beat, key, f"timeline[{i}].")
-        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and timeline:
-            if last_end < duration:
-                r.warnings.append(
-                    f"timeline ends at {last_end:g}s but duration_seconds is {duration:g}s"
-                )
+        if (isinstance(duration, (int, float)) and not isinstance(duration, bool)
+                and timeline and last_end < duration):
+            r.warnings.append(
+                f"timeline ends at {last_end:g}s but duration_seconds is {duration:g}s"
+            )
 
     env = data.get("environment")
     r.require(isinstance(env, dict), "environment must be an object")
@@ -581,41 +910,704 @@ def validate_delivery(data: dict[str, Any]) -> Result:
     return r
 
 
-VALIDATORS: dict[str, Callable[[dict[str, Any]], Result]] = {
-    "brief": validate_brief,
-    "asset-ledger": validate_asset_ledger,
-    "image": validate_image_job,
-    "video": validate_video_job,
-    "evaluation": validate_evaluation,
-    "concept-routes": validate_concept_routes,
-    "critique": validate_critique,
-    "delivery": validate_delivery,
-}
+def validate_project_manifest(data: dict[str, Any]) -> Result:
+    r = Result()
+    seen_ids: set[tuple[str, str]] = set()
+    seen_paths: set[str] = set()
+    for index, artifact in enumerate(data.get("artifacts", [])):
+        if not isinstance(artifact, dict):
+            continue
+        key = (str(artifact.get("artifact_type")), str(artifact.get("artifact_id")))
+        r.require(key not in seen_ids, f"artifacts[{index}] duplicates artifact identity {key}")
+        seen_ids.add(key)
+        path = str(artifact.get("path", ""))
+        r.require(path not in seen_paths, f"artifacts[{index}] duplicates path {path!r}")
+        seen_paths.add(path)
+        r.require(artifact.get("schema_version") in ARTIFACT_REGISTRY,
+                  f"artifacts[{index}] has unsupported schema_version")
+    return r
+
+
+def validate_creative_direction(data: dict[str, Any]) -> Result:
+    r = Result()
+    approval = data.get("approval", {})
+    if data.get("status") == "approved":
+        r.require(approval.get("status") == "approved",
+                  "approved direction requires approval.status=approved")
+        for key in ("approved_by", "approved_at", "basis"):
+            r.require(nonempty(approval.get(key)), f"approved direction requires approval.{key}")
+    if data.get("status") == "locked":
+        for key in ("message_hierarchy", "visual_world", "invariants", "deliverables"):
+            r.require(bool(data.get(key)), f"locked direction requires {key}")
+        r.require(bool(data.get("image_art_direction") or data.get("video_treatment")),
+                  "locked direction requires image_art_direction or video_treatment")
+    seen: set[str] = set()
+    for index, ref in enumerate(data.get("reference_roles", [])):
+        if isinstance(ref, dict):
+            asset_id = ref.get("asset_id")
+            if isinstance(asset_id, str):
+                r.require(asset_id not in seen,
+                          f"reference_roles[{index}] duplicates asset_id {asset_id}")
+                seen.add(asset_id)
+    return r
+
+
+def validate_execution_receipt(
+    data: dict[str, Any], context: ValidationContext | None = None
+) -> Result:
+    context = context or ValidationContext()
+    r = Result()
+    try:
+        profiles = provider_profiles(context.providers_dir)
+        surfaces = surface_profiles(context.surfaces_dir)
+    except ValueError as exc:
+        r.errors.append(str(exc))
+        return r
+    profile_id = data.get("provider_profile")
+    surface_id = data.get("execution_surface")
+    r.require(profile_id in profiles, f"unknown provider_profile: {profile_id!r}")
+    r.require(surface_id in surfaces, f"unknown execution_surface: {surface_id!r}")
+    if profile_id in profiles:
+        profile = profiles[profile_id]
+        r.require(data.get("model") == profile.get("model"),
+                  "receipt model differs from provider profile")
+        expected_snapshot = profile.get("snapshot")
+        if expected_snapshot is not None:
+            r.require(data.get("snapshot") == expected_snapshot,
+                      "receipt snapshot differs from provider profile")
+    if surface_id in surfaces:
+        r.require(profile_id in surfaces[surface_id].get("provider_profiles", []),
+                  "execution_surface does not support provider_profile")
+    if data.get("outcome") in {"succeeded", "partial"}:
+        r.require(bool(data.get("outputs")),
+                  f"{data.get('outcome')} receipt requires at least one output")
+    if data.get("outcome") in {"failed", "cancelled"}:
+        r.require(not data.get("outputs"),
+                  f"{data.get('outcome')} receipt must not claim outputs; use partial")
+    try:
+        started = dt.datetime.fromisoformat(str(data.get("started_at")).replace("Z", "+00:00"))
+        completed = dt.datetime.fromisoformat(str(data.get("completed_at")).replace("Z", "+00:00"))
+        r.require(completed >= started, "completed_at must be at or after started_at")
+    except ValueError:
+        r.errors.append("started_at and completed_at must be ISO-8601 timestamps")
+    seen: set[str] = set()
+    seen_paths: set[str] = set()
+    for index, output in enumerate(data.get("outputs", [])):
+        if isinstance(output, dict):
+            asset_id = output.get("asset_id")
+            if isinstance(asset_id, str):
+                r.require(asset_id not in seen,
+                          f"outputs[{index}] duplicates asset_id {asset_id}")
+                seen.add(asset_id)
+            path = output.get("path")
+            if isinstance(path, str):
+                r.require(path not in seen_paths, f"outputs[{index}] duplicates path {path}")
+                seen_paths.add(path)
+    return r
+
+
+def validate_output_inspection(data: dict[str, Any]) -> Result:
+    r = Result()
+    approval = data.get("approval", {})
+    check_ids: set[str] = set()
+    for group in ("findings", "invariant_checks", "copy_checks", "technical_checks", "rights_checks"):
+        for index, check in enumerate(data.get(group, [])):
+            if isinstance(check, dict) and isinstance(check.get("id"), str):
+                r.require(check["id"] not in check_ids,
+                          f"{group}[{index}] duplicates check id {check['id']}")
+                check_ids.add(check["id"])
+    if data.get("decision") == "approved":
+        for group in ("invariant_checks", "technical_checks", "rights_checks"):
+            r.require(bool(data.get(group)), f"approved inspection requires {group}")
+        for key in ("approved_by", "approved_at", "approval_basis"):
+            r.require(nonempty(approval.get(key)),
+                      f"approved inspection requires approval.{key}")
+        for group in ("invariant_checks", "copy_checks", "technical_checks", "rights_checks"):
+            failed = [item for item in data.get(group, [])
+                      if isinstance(item, dict) and item.get("status") in {"fail", "unknown"}]
+            r.require(not failed, f"approved inspection has unresolved {group}")
+        try:
+            inspected_at = dt.datetime.fromisoformat(
+                str(data.get("inspected_at")).replace("Z", "+00:00")
+            )
+            approved_at = dt.datetime.fromisoformat(
+                str(approval.get("approved_at")).replace("Z", "+00:00")
+            )
+            r.require(approved_at >= inspected_at,
+                      "approval.approved_at must be at or after inspected_at")
+        except ValueError:
+            r.errors.append("inspected_at and approval.approved_at must be ISO-8601 timestamps")
+    return r
+
+
+def validate_revision_lineage(data: dict[str, Any]) -> Result:
+    r = Result()
+    if data.get("decision") != "draft":
+        for key in ("new_job_ref", "new_receipt_ref", "new_output_ref",
+                    "observed_result", "comparison"):
+            r.require(nonempty(data.get(key)), f"completed revision requires {key}")
+    r.warn(len(data.get("integration_changes", [])) <= 3,
+           "revision has many integration changes; verify that one primary variable remains isolated")
+    return r
+
+
+def validate_evaluation_v2(data: dict[str, Any]) -> Result:
+    r = Result()
+    seen: set[str] = set()
+    total_weight = 0.0
+    for index, dimension in enumerate(data.get("dimensions", [])):
+        if not isinstance(dimension, dict):
+            continue
+        dimension_id = dimension.get("id")
+        if isinstance(dimension_id, str):
+            r.require(dimension_id not in seen, f"duplicate dimension id: {dimension_id}")
+            seen.add(dimension_id)
+        weight = dimension.get("weight")
+        if isinstance(weight, (int, float)) and not isinstance(weight, bool):
+            total_weight += float(weight)
+        refs = dimension.get("evidence_refs", [])
+        if dimension.get("evidence_state") == "UNVERIFIED":
+            r.require(not refs, f"dimensions[{index}] UNVERIFIED evidence must not cite refs")
+        else:
+            r.require(bool(refs), f"dimensions[{index}] evidence_refs must not be empty")
+    r.warn(math.isclose(total_weight, 100.0, rel_tol=0, abs_tol=0.001),
+           f"dimension weights sum to {total_weight:g}, not 100")
+    return r
+
+
+def validate_delivery_v2(data: dict[str, Any]) -> Result:
+    r = Result()
+    asset_ids = [item.get("asset_id") for item in data.get("files", []) if isinstance(item, dict)]
+    r.require(len(asset_ids) == len(set(asset_ids)), "delivery files must not duplicate asset_id")
+    if data.get("status") == "delivered":
+        r.require(bool(data.get("files")), "delivered manifest requires files")
+        for key in ("job_refs", "receipt_refs", "inspection_refs"):
+            r.require(bool(data.get(key)), f"delivered manifest requires {key}")
+        for index, item in enumerate(data.get("files", [])):
+            if isinstance(item, dict):
+                r.require(item.get("rights_status") in {"CLEARED", "LIMITED"},
+                          f"files[{index}] has unresolved rights")
+    return r
+
+
+def _no_semantic_validation(data: dict[str, Any]) -> Result:
+    del data
+    return Result()
+
+
+def _call_semantic_validator(
+    schema_version: str, data: dict[str, Any], context: ValidationContext
+) -> Result:
+    simple: dict[str, Callable[[dict[str, Any]], Result]] = {
+        "creative-craft.brief.v1": validate_brief,
+        "creative-craft.asset-ledger.v1": validate_asset_ledger,
+        "creative-craft.concept-routes.v1": validate_concept_routes,
+        "creative-craft.critique.v1": validate_critique,
+        "creative-craft.evaluation.v1": validate_evaluation,
+        "creative-craft.delivery.v1": validate_delivery,
+        "creative-craft.project-manifest.v1": validate_project_manifest,
+        "creative-craft.creative-direction.v1": validate_creative_direction,
+        "creative-craft.output-inspection.v1": validate_output_inspection,
+        "creative-craft.revision-lineage.v1": validate_revision_lineage,
+        "creative-craft.evaluation.v2": validate_evaluation_v2,
+        "creative-craft.delivery.v2": validate_delivery_v2,
+    }
+    if schema_version in {"creative-craft.image-job.v1", "creative-craft.image-job.v2"}:
+        return validate_image_job(data, context)
+    if schema_version in {"creative-craft.video-job.v1", "creative-craft.video-job.v2"}:
+        return validate_video_job(data, context)
+    if schema_version == "creative-craft.execution-receipt.v1":
+        return validate_execution_receipt(data, context)
+    return simple.get(schema_version, _no_semantic_validation)(data)
+
 
 SCHEMA_TO_KIND = {
-    "creative-craft.brief.v1": "brief",
-    "creative-craft.asset-ledger.v1": "asset-ledger",
-    "creative-craft.image-job.v1": "image",
-    "creative-craft.video-job.v1": "video",
-    "creative-craft.evaluation.v1": "evaluation",
-    "creative-craft.concept-routes.v1": "concept-routes",
-    "creative-craft.critique.v1": "critique",
-    "creative-craft.delivery.v1": "delivery",
+    schema_version: entry["kind"] for schema_version, entry in ARTIFACT_REGISTRY.items()
 }
 
 
-def validate_data(data: dict[str, Any], kind: str = "auto") -> tuple[str, Result]:
-    resolved = kind
-    if kind == "auto":
-        resolved = SCHEMA_TO_KIND.get(str(data.get("schema_version")), "")
-        if not resolved:
-            return "unknown", Result(errors=[
-                f"cannot infer kind from schema_version {data.get('schema_version')!r}"
-            ])
-    validator = VALIDATORS.get(resolved)
-    if validator is None:
-        return resolved, Result(errors=[f"unsupported validation kind: {resolved}"])
-    return resolved, validator(data)
+def validate_data(
+    data: dict[str, Any], kind: str = "auto", context: ValidationContext | None = None
+) -> tuple[str, Result]:
+    context = context or ValidationContext()
+    schema_version = str(data.get("schema_version"))
+    entry = ARTIFACT_REGISTRY.get(schema_version)
+    if entry is None:
+        return "unknown", Result(errors=[
+            f"cannot infer kind from schema_version {data.get('schema_version')!r}"
+        ])
+    resolved = str(entry["kind"])
+    if kind != "auto" and kind != resolved:
+        return resolved, Result(errors=[
+            f"artifact kind {resolved!r} does not match requested kind {kind!r}"
+        ])
+    structural = validate_against_schema(data, context.schemas_dir / str(entry["schema"]))
+    if not structural.ok:
+        return resolved, structural
+    structural.extend(_call_semantic_validator(schema_version, data, context))
+    return resolved, structural
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+ARTIFACT_ID_FIELDS = {
+    "brief": "brief_id",
+    "concept-routes": None,
+    "creative-direction": "direction_id",
+    "image": "job_id",
+    "video": "job_id",
+    "execution-receipt": "receipt_id",
+    "output-inspection": "inspection_id",
+    "revision-lineage": "revision_id",
+    "evaluation": "evaluation_id",
+    "delivery": "delivery_id",
+    "project-manifest": "manifest_id",
+    "critique": "critique_id",
+    "asset-ledger": None,
+}
+
+
+@dataclass
+class ProjectGraph:
+    root: Path
+    manifest_path: Path
+    manifest: dict[str, Any]
+    records: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    result: Result = field(default_factory=Result)
+    job_statuses: dict[str, str] = field(default_factory=dict)
+
+    def record(self, artifact_type: str, artifact_id: str) -> dict[str, Any] | None:
+        return self.records.get((artifact_type, artifact_id))
+
+
+def _project_manifest_path(root: Path) -> Path:
+    nested = root / ".creative-craft" / "project-manifest.json"
+    direct = root / "project-manifest.json"
+    if nested.is_file():
+        return nested
+    return direct
+
+
+def _safe_project_path(root: Path, value: Any) -> tuple[Path | None, str | None]:
+    if not isinstance(value, str) or not value:
+        return None, "path must be a non-empty string"
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None, f"unsafe project-relative path: {value!r}"
+    candidate = root / relative
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved.relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None, f"path escapes project root: {value!r}"
+    if candidate.is_symlink():
+        return None, f"artifact path must not be a symlink: {value!r}"
+    return candidate, None
+
+
+def _json_pointer(value: Any, pointer: str) -> tuple[bool, Any]:
+    if pointer in {"", "/"}:
+        return True, value
+    if not pointer.startswith("/"):
+        return False, None
+    current = value
+    for raw_part in pointer[1:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        else:
+            return False, None
+    return True, current
+
+
+CC_REF_PATTERN = re.compile(r"^cc://([a-z0-9-]+)/([^#]+)#(.*)$")
+
+
+def resolve_evidence_ref(graph: ProjectGraph, reference: Any) -> tuple[bool, Any, str]:
+    if not isinstance(reference, str):
+        return False, None, "reference must be a string"
+    match = CC_REF_PATTERN.fullmatch(reference)
+    if not match:
+        return False, None, f"invalid Creative Craft reference: {reference!r}"
+    artifact_type, artifact_id, pointer = match.groups()
+    record = graph.record(artifact_type, artifact_id)
+    if record is None:
+        return False, None, f"reference target does not exist: {reference!r}"
+    found, value = _json_pointer(record["data"], pointer)
+    if not found:
+        return False, None, f"reference JSON pointer does not exist: {reference!r}"
+    return True, value, ""
+
+
+def _require_record(
+    graph: ProjectGraph, artifact_type: str, artifact_id: Any, message: str
+) -> dict[str, Any] | None:
+    record = graph.record(artifact_type, str(artifact_id))
+    graph.result.require(record is not None, message)
+    return record
+
+
+def _project_cross_checks(graph: ProjectGraph) -> None:
+    assets: dict[str, dict[str, Any]] = {}
+    for (artifact_type, _), record in graph.records.items():
+        if artifact_type == "asset-ledger":
+            for asset in record["data"].get("assets", []):
+                if isinstance(asset, dict) and isinstance(asset.get("asset_id"), str):
+                    asset_id = asset["asset_id"]
+                    graph.result.require(asset_id not in assets,
+                                         f"duplicate asset_id across ledgers: {asset_id}")
+                    assets[asset_id] = asset
+
+    routes_by_brief: dict[str, dict[str, dict[str, Any]]] = {}
+    for (artifact_type, _), record in graph.records.items():
+        data = record["data"]
+        if artifact_type == "asset-ledger":
+            graph.result.require(data.get("project_id") == graph.manifest.get("project_id"),
+                                 "asset ledger project_id differs from project manifest")
+        if artifact_type == "concept-routes":
+            brief_id = data.get("brief_id")
+            _require_record(graph, "brief", brief_id,
+                            f"concept routes references missing brief_id {brief_id!r}")
+            route_map = routes_by_brief.setdefault(str(brief_id), {})
+            for route in data.get("routes", []):
+                if isinstance(route, dict) and isinstance(route.get("route_id"), str):
+                    graph.result.require(route["route_id"] not in route_map,
+                                         f"duplicate route_id across route artifacts: {route['route_id']}")
+                    route_map[route["route_id"]] = route
+
+    for (artifact_type, artifact_id), record in graph.records.items():
+        data = record["data"]
+        if artifact_type == "creative-direction":
+            brief_id = data.get("brief_id")
+            route_id = data.get("selected_route_id")
+            _require_record(graph, "brief", brief_id,
+                            f"direction {artifact_id} references missing brief_id {brief_id!r}")
+            graph.result.require(route_id in routes_by_brief.get(str(brief_id), {}),
+                                 f"direction {artifact_id} selected_route_id does not belong to its brief")
+            selected_route = routes_by_brief.get(str(brief_id), {}).get(str(route_id))
+            if selected_route:
+                graph.result.require(
+                    selected_route.get("decision") in {"SELECT", "SELECT_FOR_TEST"},
+                    f"direction {artifact_id} selected route is not selected for production",
+                )
+            for ref in data.get("reference_roles", []):
+                if isinstance(ref, dict):
+                    graph.result.require(ref.get("asset_id") in assets,
+                                         f"direction {artifact_id} references unknown asset {ref.get('asset_id')!r}")
+
+        if artifact_type in {"image", "video"} and data.get("schema_version", "").endswith(".v2"):
+            brief_id = data.get("brief_id")
+            direction = _require_record(
+                graph, "creative-direction", data.get("direction_id"),
+                f"job {artifact_id} references missing direction_id {data.get('direction_id')!r}",
+            )
+            brief = _require_record(graph, "brief", brief_id,
+                                    f"job {artifact_id} references missing brief_id {brief_id!r}")
+            if direction:
+                graph.result.require(direction["data"].get("brief_id") == brief_id,
+                                     f"job {artifact_id} brief_id differs from direction")
+                graph.result.require(
+                    direction["data"].get("selected_route_id") == data.get("selected_route_id"),
+                    f"job {artifact_id} selected_route_id differs from direction",
+                )
+            referenced_assets = set(data.get("asset_refs", []))
+            if artifact_type == "image":
+                referenced_assets.update(
+                    ref.get("asset_id") for ref in data.get("prompt", {}).get("references", [])
+                    if isinstance(ref, dict)
+                )
+            else:
+                referenced_assets.update(
+                    ref.get("asset_id") for ref in data.get("references", [])
+                    if isinstance(ref, dict)
+                )
+            for asset_id_ref in referenced_assets:
+                graph.result.require(asset_id_ref in assets,
+                                     f"job {artifact_id} references unknown asset {asset_id_ref!r}")
+            if data.get("declared_status") == "ready":
+                graph.result.require(bool(brief and brief["data"].get("status") == "locked"),
+                                     f"ready job {artifact_id} requires a locked brief")
+                graph.result.require(
+                    bool(direction and direction["data"].get("status") in {"locked", "approved"}),
+                    f"ready job {artifact_id} requires a locked or approved direction",
+                )
+                graph.result.require(data.get("rights", {}).get("status") in {"CLEARED", "LIMITED"},
+                                     f"ready job {artifact_id} has unresolved rights")
+                for asset_id_ref in referenced_assets:
+                    asset = assets.get(str(asset_id_ref), {})
+                    graph.result.require(asset.get("rights_status") in {"CLEARED", "LIMITED"},
+                                         f"ready job {artifact_id} asset {asset_id_ref!r} has unresolved rights")
+                    graph.result.require(
+                        asset.get("consent_status") in {"CLEARED", "LIMITED", "NOT_APPLICABLE"},
+                        f"ready job {artifact_id} asset {asset_id_ref!r} has unresolved consent",
+                    )
+
+        if artifact_type == "execution-receipt":
+            job = graph.record("image", str(data.get("job_id"))) or graph.record(
+                "video", str(data.get("job_id"))
+            )
+            graph.result.require(job is not None,
+                                 f"receipt {artifact_id} references missing job_id {data.get('job_id')!r}")
+            if job:
+                graph.result.require(job["data"].get("schema_version") in {
+                    "creative-craft.image-job.v2", "creative-craft.video-job.v2"
+                }, f"receipt {artifact_id} requires a v2 job")
+                graph.result.require(data.get("job_sha256") == job["sha256"],
+                                     f"receipt {artifact_id} job_sha256 does not match job artifact")
+                graph.result.require(data.get("provider_profile") == job["data"].get("provider_profile"),
+                                     f"receipt {artifact_id} provider_profile differs from job")
+                graph.result.require(data.get("execution_surface") == job["data"].get("execution_surface"),
+                                     f"receipt {artifact_id} execution_surface differs from job")
+            for output in data.get("outputs", []):
+                if not isinstance(output, dict):
+                    continue
+                output_path, error = _safe_project_path(graph.root, output.get("path"))
+                graph.result.require(error is None, f"receipt {artifact_id}: {error}")
+                if output_path and output_path.is_file():
+                    graph.result.require(sha256_file(output_path) == output.get("sha256"),
+                                         f"receipt {artifact_id} output digest mismatch: {output.get('path')}")
+                    graph.result.require(output_path.stat().st_size == output.get("bytes"),
+                                         f"receipt {artifact_id} output byte size mismatch: {output.get('path')}")
+                else:
+                    graph.result.errors.append(
+                        f"receipt {artifact_id} output file does not exist: {output.get('path')!r}"
+                    )
+
+        if artifact_type == "output-inspection":
+            receipt = _require_record(
+                graph, "execution-receipt", data.get("receipt_id"),
+                f"inspection {artifact_id} references missing receipt_id {data.get('receipt_id')!r}",
+            )
+            if receipt:
+                graph.result.require(receipt["data"].get("job_id") == data.get("job_id"),
+                                     f"inspection {artifact_id} job_id differs from receipt")
+                matching = [output for output in receipt["data"].get("outputs", [])
+                            if isinstance(output, dict)
+                            and output.get("asset_id") == data.get("output_asset_id")]
+                graph.result.require(bool(matching),
+                                     f"inspection {artifact_id} output_asset_id is absent from receipt")
+                if matching:
+                    graph.result.require(matching[0].get("sha256") == data.get("output_sha256"),
+                                         f"inspection {artifact_id} output_sha256 differs from receipt")
+
+        if artifact_type == "revision-lineage":
+            for key in ("parent_output_ref", "parent_inspection_ref"):
+                ok, _, message = resolve_evidence_ref(graph, data.get(key))
+                graph.result.require(ok, f"revision {artifact_id}: {message}")
+            for key in ("new_job_ref", "new_receipt_ref", "new_output_ref"):
+                reference = data.get(key)
+                if reference:
+                    ok, _, message = resolve_evidence_ref(graph, reference)
+                    graph.result.require(ok, f"revision {artifact_id}: {message}")
+
+        if artifact_type == "evaluation" and data.get("schema_version") == "creative-craft.evaluation.v2":
+            ok, _, message = resolve_evidence_ref(graph, data.get("target_ref"))
+            graph.result.require(ok, f"evaluation {artifact_id}: {message}")
+            _require_record(graph, "brief", data.get("brief_id"),
+                            f"evaluation {artifact_id} references missing brief_id")
+            for dimension in data.get("dimensions", []):
+                if isinstance(dimension, dict):
+                    for reference in dimension.get("evidence_refs", []):
+                        ok, _, message = resolve_evidence_ref(graph, reference)
+                        graph.result.require(ok, f"evaluation {artifact_id}: {message}")
+
+        if artifact_type == "delivery" and data.get("schema_version") == "creative-craft.delivery.v2":
+            graph.result.require(data.get("project_id") == graph.manifest.get("project_id"),
+                                 f"delivery {artifact_id} project_id differs from manifest")
+            direction = _require_record(
+                graph, "creative-direction", data.get("direction_id"),
+                f"delivery {artifact_id} references missing direction_id",
+            )
+            if direction:
+                graph.result.require(direction["data"].get("brief_id") == data.get("brief_id"),
+                                     f"delivery {artifact_id} brief_id differs from direction")
+                graph.result.require(direction["data"].get("selected_route_id") == data.get("selected_route_id"),
+                                     f"delivery {artifact_id} selected_route_id differs from direction")
+            for ref_key in ("job_refs", "receipt_refs", "inspection_refs", "revision_refs", "evaluation_refs"):
+                for reference in data.get(ref_key, []):
+                    ok, _, message = resolve_evidence_ref(graph, reference)
+                    graph.result.require(ok, f"delivery {artifact_id}: {message}")
+            for index, item in enumerate(data.get("files", [])):
+                if not isinstance(item, dict):
+                    continue
+                job = graph.record("image", str(item.get("job_id"))) or graph.record(
+                    "video", str(item.get("job_id"))
+                )
+                receipt = graph.record("execution-receipt", str(item.get("receipt_id")))
+                graph.result.require(job is not None,
+                                     f"delivery {artifact_id} files[{index}] job does not exist")
+                graph.result.require(receipt is not None,
+                                     f"delivery {artifact_id} files[{index}] receipt does not exist")
+                if job:
+                    job_type = str(job["entry"].get("artifact_type"))
+                    graph.result.require(
+                        f"cc://{job_type}/{item.get('job_id')}#" in data.get("job_refs", []),
+                        f"delivery {artifact_id} files[{index}] job is absent from job_refs",
+                    )
+                graph.result.require(
+                    f"cc://execution-receipt/{item.get('receipt_id')}#" in data.get("receipt_refs", []),
+                    f"delivery {artifact_id} files[{index}] receipt is absent from receipt_refs",
+                )
+                graph.result.require(
+                    f"cc://output-inspection/{item.get('inspection_id')}#" in data.get("inspection_refs", []),
+                    f"delivery {artifact_id} files[{index}] inspection is absent from inspection_refs",
+                )
+                if receipt:
+                    graph.result.require(receipt["data"].get("job_id") == item.get("job_id"),
+                                         f"delivery {artifact_id} files[{index}] receipt/job mismatch")
+                    matching_output = next(
+                        (output for output in receipt["data"].get("outputs", [])
+                         if isinstance(output, dict) and output.get("asset_id") == item.get("asset_id")),
+                        None,
+                    )
+                    graph.result.require(matching_output is not None,
+                                         f"delivery {artifact_id} files[{index}] asset is absent from receipt")
+                    if matching_output:
+                        graph.result.require(matching_output.get("sha256") == item.get("sha256"),
+                                             f"delivery {artifact_id} files[{index}] digest differs from receipt")
+                output_path, error = _safe_project_path(graph.root, item.get("path"))
+                graph.result.require(error is None, f"delivery {artifact_id}: {error}")
+                if output_path and output_path.is_file():
+                    graph.result.require(sha256_file(output_path) == item.get("sha256"),
+                                         f"delivery {artifact_id} files[{index}] digest mismatch")
+                    graph.result.require(output_path.stat().st_size == item.get("bytes"),
+                                         f"delivery {artifact_id} files[{index}] byte size mismatch")
+                elif data.get("status") == "delivered":
+                    graph.result.errors.append(
+                        f"delivery {artifact_id} file does not exist: {item.get('path')!r}"
+                    )
+                inspection = graph.record("output-inspection", str(item.get("inspection_id")))
+                graph.result.require(inspection is not None,
+                                     f"delivery {artifact_id} files[{index}] inspection does not exist")
+                if inspection:
+                    graph.result.require(inspection["data"].get("job_id") == item.get("job_id"),
+                                         f"delivery {artifact_id} files[{index}] inspection/job mismatch")
+                    graph.result.require(inspection["data"].get("receipt_id") == item.get("receipt_id"),
+                                         f"delivery {artifact_id} files[{index}] inspection/receipt mismatch")
+                    graph.result.require(inspection["data"].get("output_asset_id") == item.get("asset_id"),
+                                         f"delivery {artifact_id} files[{index}] inspection/asset mismatch")
+                    graph.result.require(inspection["data"].get("decision") == "approved",
+                                         f"delivery {artifact_id} files[{index}] inspection is not approved")
+                    graph.result.require(inspection["data"].get("output_sha256") == item.get("sha256"),
+                                         f"delivery {artifact_id} files[{index}] digest differs from inspection")
+
+
+def _project_job_statuses(graph: ProjectGraph) -> None:
+    receipts_by_job: dict[str, list[dict[str, Any]]] = {}
+    inspections_by_job: dict[str, list[dict[str, Any]]] = {}
+    delivered_jobs: set[str] = set()
+    for (artifact_type, _), record in graph.records.items():
+        if artifact_type == "execution-receipt":
+            receipts_by_job.setdefault(str(record["data"].get("job_id")), []).append(record)
+        elif artifact_type == "output-inspection":
+            inspections_by_job.setdefault(str(record["data"].get("job_id")), []).append(record)
+        elif artifact_type == "delivery" and record["data"].get("status") == "delivered":
+            delivered_jobs.update(
+                str(item.get("job_id")) for item in record["data"].get("files", [])
+                if isinstance(item, dict)
+            )
+    for (artifact_type, job_id), record in graph.records.items():
+        if artifact_type not in {"image", "video"}:
+            continue
+        declared = record["data"].get("declared_status", record["data"].get("status", "draft"))
+        status = str(declared)
+        if status == "superseded":
+            graph.job_statuses[job_id] = status
+            continue
+        successful_receipts = [receipt for receipt in receipts_by_job.get(job_id, [])
+                               if receipt["data"].get("outcome") in {"succeeded", "partial"}
+                               and receipt["data"].get("outputs")]
+        if successful_receipts:
+            status = "generated"
+        inspections = inspections_by_job.get(job_id, [])
+        if inspections:
+            decisions = {item["data"].get("decision") for item in inspections}
+            if "approved" in decisions:
+                status = "approved"
+            elif "needs_revision" in decisions:
+                status = "revision_required"
+            else:
+                status = "inspected"
+        if job_id in delivered_jobs:
+            status = "delivered"
+        graph.job_statuses[job_id] = status
+
+
+def validate_project(root: Path, context: ValidationContext | None = None) -> ProjectGraph:
+    root = root.resolve()
+    context = context or ValidationContext()
+    manifest_path = _project_manifest_path(root)
+    try:
+        manifest = load_json(manifest_path)
+    except ValueError as exc:
+        return ProjectGraph(root, manifest_path, {}, result=Result(errors=[str(exc)]))
+    graph = ProjectGraph(root, manifest_path, manifest)
+    _, manifest_result = validate_data(manifest, "project-manifest", context)
+    graph.result.extend(manifest_result)
+    if not manifest_result.ok:
+        return graph
+    for index, entry in enumerate(manifest.get("artifacts", [])):
+        if not isinstance(entry, dict):
+            continue
+        artifact_path, error = _safe_project_path(root, entry.get("path"))
+        if error:
+            graph.result.errors.append(f"artifacts[{index}]: {error}")
+            continue
+        if artifact_path is None or not artifact_path.is_file():
+            graph.result.errors.append(
+                f"artifacts[{index}] file does not exist: {entry.get('path')!r}"
+            )
+            continue
+        actual_sha = sha256_file(artifact_path)
+        graph.result.require(actual_sha == entry.get("sha256"),
+                             f"artifacts[{index}] sha256 mismatch: {entry.get('path')}")
+        try:
+            data = load_json(artifact_path)
+        except ValueError as exc:
+            graph.result.errors.append(str(exc))
+            continue
+        schema_version = str(data.get("schema_version"))
+        graph.result.require(schema_version == entry.get("schema_version"),
+                             f"artifacts[{index}] schema_version differs from file")
+        registry_entry = ARTIFACT_REGISTRY.get(schema_version)
+        if registry_entry is None:
+            graph.result.errors.append(f"artifacts[{index}] has unsupported schema_version")
+            continue
+        expected_type = str(registry_entry["kind"])
+        graph.result.require(entry.get("artifact_type") == expected_type,
+                             f"artifacts[{index}] artifact_type must be {expected_type!r}")
+        _, artifact_result = validate_data(data, expected_type, context)
+        graph.result.errors.extend(
+            f"{entry.get('path')}: {message}" for message in artifact_result.errors
+        )
+        graph.result.warnings.extend(
+            f"{entry.get('path')}: {message}" for message in artifact_result.warnings
+        )
+        artifact_id = str(entry.get("artifact_id"))
+        id_field = ARTIFACT_ID_FIELDS.get(expected_type)
+        if id_field:
+            graph.result.require(data.get(id_field) == artifact_id,
+                                 f"artifacts[{index}] artifact_id differs from file {id_field}")
+        key = (expected_type, artifact_id)
+        graph.result.require(key not in graph.records,
+                             f"artifacts[{index}] duplicates artifact identity {key}")
+        graph.records[key] = {
+            "data": data,
+            "path": artifact_path,
+            "sha256": actual_sha,
+            "entry": entry,
+        }
+    _project_cross_checks(graph)
+    _project_job_statuses(graph)
+    return graph
 
 
 def render_result(path: Path, kind: str, result: Result, as_json: bool) -> int:
@@ -653,13 +1645,15 @@ def section(title: str, lines: Iterable[str]) -> list[str]:
 def compile_image_markdown(data: dict[str, Any]) -> str:
     canvas = data["canvas"]
     prompt = data["prompt"]
+    declared_status = data.get("declared_status", data.get("status", "unknown"))
     out: list[str] = [
         f"# Image execution pack — {data['job_id']}",
         "",
         f"- Provider profile: `{data['provider_profile']}`",
+        f"- Execution surface: `{data.get('execution_surface', 'legacy-unspecified')}`",
         f"- Task: `{data['task_type']}`",
         f"- Execution mode: `{data['execution_mode']}`",
-        f"- Status: `{data['status']}`",
+        f"- Declared status: `{declared_status}`",
         f"- Size: `{canvas['size']}`",
         f"- Quality: `{canvas['quality']}`",
         f"- Format: `{canvas['format']}`",
@@ -673,9 +1667,11 @@ def compile_image_markdown(data: dict[str, Any]) -> str:
     prompt_lines: list[str] = []
     prompt_lines += section("INTENDED USE AND OUTPUT", [
         data["intended_use"],
-        f"Create {canvas['variants']} output variant(s) at {canvas['size']}, "
-        f"{canvas['quality']} quality, {canvas['format']} format, "
-        f"{canvas['background']} background."
+        (
+            f"Create {canvas['variants']} output variant(s) at {canvas['size']}, "
+            f"{canvas['quality']} quality, {canvas['format']} format, "
+            f"{canvas['background']} background."
+        )
     ])
     prompt_lines += section("BACKGROUND / SCENE", [prompt["scene"]])
     prompt_lines += section("SUBJECT", [prompt["subject"]])
@@ -718,20 +1714,25 @@ def compile_image_markdown(data: dict[str, Any]) -> str:
         "",
         f"Rights status: `{data.get('rights', {}).get('status', 'UNVERIFIED')}`",
         "",
-        "This pack is `prompt_ready`; it is not evidence that an image was generated or approved.",
+        (
+            f"This pack was compiled from declared status `{declared_status}`; compilation is not "
+            "evidence that an image was generated or approved."
+        ),
     ])
     return "\n".join(out).rstrip() + "\n"
 
 
 def compile_video_markdown(data: dict[str, Any]) -> str:
     fmt = data["format"]
+    declared_status = data.get("declared_status", data.get("status", "unknown"))
     out: list[str] = [
         f"# Video execution pack — {data['job_id']}",
         "",
         f"- Provider profile: `{data['provider_profile']}`",
+        f"- Execution surface: `{data.get('execution_surface', 'legacy-unspecified')}`",
         f"- Task: `{data['task_type']}`",
         f"- Execution mode: `{data['execution_mode']}`",
-        f"- Status: `{data['status']}`",
+        f"- Declared status: `{declared_status}`",
         f"- Duration: `{data['duration_seconds']}s`",
         f"- Aspect ratio: `{fmt['aspect_ratio']}`",
         f"- Resolution target: `{fmt['resolution_target']}`",
@@ -743,8 +1744,10 @@ def compile_video_markdown(data: dict[str, Any]) -> str:
     prompt_lines: list[str] = []
     prompt_lines += section("FORMAT AND INTENDED USE", [
         data["intended_use"],
-        f"{data['duration_seconds']}-second audiovisual video, "
-        f"{fmt['aspect_ratio']}, {fmt['resolution_target']}, language {fmt['language']}."
+        (
+            f"{data['duration_seconds']}-second audiovisual video, "
+            f"{fmt['aspect_ratio']}, {fmt['resolution_target']}, language {fmt['language']}."
+        )
     ])
     prompt_lines += section("CREATIVE PREMISE", [data["premise"]])
     prompt_lines += section("END STATE", [data["end_state"]])
@@ -783,11 +1786,11 @@ def compile_video_markdown(data: dict[str, Any]) -> str:
     for dialogue in audio.get("dialogue", []):
         audio_lines.append(f'- Dialogue: "{dialogue}"')
     audio_lines.extend([
-        f"- Voice: {audio.get('voice', '')}",
-        f"- Ambience: {audio.get('ambience', '')}",
+        f"- Voice: {audio.get('voice') or '(none)'}",
+        f"- Ambience: {audio.get('ambience') or '(none)'}",
     ])
     audio_lines.extend(f"- Effect: {x}" for x in audio.get("effects", []))
-    audio_lines.append(f"- Music: {audio.get('music', '')}")
+    audio_lines.append(f"- Music: {audio.get('music') or '(none)'}")
     prompt_lines += section("DIALOGUE / VOICE / AMBIENCE / EFFECTS / MUSIC", audio_lines)
 
     edit = data.get("edit", {})
@@ -805,13 +1808,16 @@ def compile_video_markdown(data: dict[str, Any]) -> str:
         "",
         f"Rights status: `{data.get('rights', {}).get('status', 'UNVERIFIED')}`",
         "",
-        "This pack is `prompt_ready`; it is not evidence that a video was generated or approved.",
+        (
+            f"This pack was compiled from declared status `{declared_status}`; compilation is not "
+            "evidence that a video was generated or approved."
+        ),
     ])
     return "\n".join(out).rstrip() + "\n"
 
 
-def score_evaluation(data: dict[str, Any]) -> dict[str, Any]:
-    kind, validation = validate_data(data, "evaluation")
+def _score_evaluation_v1(data: dict[str, Any]) -> dict[str, Any]:
+    _, validation = validate_data(data, "evaluation")
     if not validation.ok:
         return {
             "status": "invalid",
@@ -888,6 +1894,174 @@ def score_evaluation(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+EVIDENCE_STRENGTH = {
+    "OBSERVED": 1.0,
+    "SPECIFIED": 0.9,
+    "INFERRED": 0.7,
+    "HYPOTHESIZED": 0.4,
+    "UNVERIFIED": 0.0,
+}
+
+
+def _evaluation_gates(data: dict[str, Any], graph: ProjectGraph) -> dict[str, bool]:
+    brief = graph.record("brief", str(data.get("brief_id")))
+    brief_locked = bool(brief and brief["data"].get("status") == "locked")
+    target_ok, target, _ = resolve_evidence_ref(graph, data.get("target_ref"))
+    deliverable_specified = bool(brief and brief["data"].get("deliverables"))
+    if target_ok and isinstance(target, dict):
+        if target.get("schema_version") == "creative-craft.creative-direction.v1":
+            deliverable_specified = bool(target.get("deliverables"))
+        elif target.get("schema_version") == "creative-craft.delivery.v2":
+            deliverable_specified = bool(target.get("files") or target.get("validation"))
+
+    relevant_asset_ids: set[str] = set()
+    relevant_job_rights: list[str] = []
+    if target_ok and isinstance(target, dict):
+        for ref in target.get("reference_roles", []):
+            if isinstance(ref, dict) and isinstance(ref.get("asset_id"), str):
+                relevant_asset_ids.add(ref["asset_id"])
+    for (artifact_type, _), record in graph.records.items():
+        if artifact_type in {"image", "video"} and record["data"].get("brief_id") == data.get("brief_id"):
+            relevant_job_rights.append(str(record["data"].get("rights", {}).get("status")))
+            relevant_asset_ids.update(
+                str(asset_id) for asset_id in record["data"].get("asset_refs", [])
+            )
+    rights_values: list[str] = list(relevant_job_rights)
+    consent_values: list[str] = []
+    for (artifact_type, _), record in graph.records.items():
+        if artifact_type != "asset-ledger":
+            continue
+        for asset in record["data"].get("assets", []):
+            if isinstance(asset, dict) and asset.get("asset_id") in relevant_asset_ids:
+                rights_values.append(str(asset.get("rights_status")))
+                consent_values.append(str(asset.get("consent_status")))
+    rights_clear = bool(rights_values) and all(
+        value in {"CLEARED", "LIMITED"} for value in rights_values
+    ) and all(value in {"CLEARED", "LIMITED", "NOT_APPLICABLE"}
+              for value in consent_values)
+
+    actual_output_observed = False
+    if target_ok and isinstance(target, dict):
+        schema_version = target.get("schema_version")
+        if schema_version == "creative-craft.output-inspection.v1":
+            actual_output_observed = True
+        elif schema_version == "creative-craft.delivery.v2":
+            actual_output_observed = bool(target.get("inspection_refs"))
+    if data.get("stage") in {"output", "delivery"} and not actual_output_observed:
+        actual_output_observed = any(
+            artifact_type == "output-inspection"
+            for artifact_type, _ in graph.records
+        )
+    return {
+        "rights_clear": rights_clear,
+        "brief_locked": brief_locked,
+        "deliverable_specified": deliverable_specified,
+        "actual_output_observed": actual_output_observed,
+    }
+
+
+def _score_evaluation_v2(data: dict[str, Any], graph: ProjectGraph | None) -> dict[str, Any]:
+    context = ValidationContext()
+    _, validation = validate_data(data, "evaluation", context)
+    if not validation.ok:
+        return {
+            "status": "invalid",
+            "errors": validation.errors,
+            "warnings": validation.warnings,
+        }
+    if graph is None:
+        return {
+            "status": "blocked",
+            "score": None,
+            "gate_status": {"project_evidence_bound": False},
+            "failed_gates": ["project_evidence_bound"],
+            "coverage": 0.0,
+            "evidence_strength": 0.0,
+            "evidence_distribution": {},
+            "confidence": "INSUFFICIENT",
+            "uncertainty": ["Evaluation v2 requires --root and a valid project manifest."],
+            "warnings": validation.warnings,
+        }
+    if not graph.result.ok:
+        return {
+            "status": "invalid",
+            "errors": graph.result.errors,
+            "warnings": graph.result.warnings,
+        }
+
+    gates = _evaluation_gates(data, graph)
+    required_gates = ["rights_clear", "brief_locked", "deliverable_specified"]
+    if data["stage"] in {"output", "delivery"}:
+        required_gates.append("actual_output_observed")
+    failed_gates = [name for name in required_gates if not gates[name]]
+    dimensions = data["dimensions"]
+    total_weight = sum(float(item["weight"]) for item in dimensions)
+    covered = [item for item in dimensions
+               if item["evidence_state"] != "UNVERIFIED" and item["evidence_refs"]]
+    covered_weight = sum(float(item["weight"]) for item in covered)
+    coverage = 100.0 * covered_weight / total_weight if total_weight else 0.0
+    distribution = {
+        state: round(100.0 * sum(float(item["weight"]) for item in dimensions
+                                 if item["evidence_state"] == state) / total_weight, 2)
+        if total_weight else 0.0
+        for state in EVIDENCE_STRENGTH
+    }
+    strength = 100.0 * sum(
+        float(item["weight"]) * EVIDENCE_STRENGTH[item["evidence_state"]]
+        for item in dimensions
+    ) / total_weight if total_weight else 0.0
+    strong_weight = distribution["OBSERVED"] + distribution["SPECIFIED"]
+    hypothesized_weight = distribution["HYPOTHESIZED"]
+    if not failed_gates and coverage == 100.0 and strong_weight >= 80.0 and hypothesized_weight == 0:
+        confidence = "STRONG"
+    elif not failed_gates and coverage >= 90.0 and hypothesized_weight <= 20.0:
+        confidence = "MIXED"
+    elif not failed_gates and coverage >= 80.0:
+        confidence = "WEAK"
+    else:
+        confidence = "INSUFFICIENT"
+    score = None
+    if coverage >= 80.0 and not failed_gates:
+        score = 100.0 * sum(
+            (float(item["score"]) / 5.0) * float(item["weight"])
+            for item in covered
+        ) / covered_weight if covered_weight else None
+    uncertainty = list(data.get("remaining_unknowns", []))
+    uncertainty.extend(
+        f"{item['id']} is {item['evidence_state']}"
+        for item in dimensions
+        if item["evidence_state"] in {"HYPOTHESIZED", "UNVERIFIED"}
+    )
+    if failed_gates:
+        status = "blocked"
+    elif coverage < 80.0:
+        status = "withheld"
+    else:
+        status = "scored"
+    return {
+        "status": status,
+        "score": round(score, 2) if score is not None else None,
+        "gate_status": gates,
+        "failed_gates": failed_gates,
+        "coverage": round(coverage, 2),
+        "evidence_strength": round(strength, 2),
+        "evidence_distribution": distribution,
+        "confidence": confidence,
+        "uncertainty": uncertainty,
+        "stage": data["stage"],
+        "recommendation": data["recommendation"],
+        "warnings": validation.warnings,
+    }
+
+
+def score_evaluation(
+    data: dict[str, Any], graph: ProjectGraph | None = None
+) -> dict[str, Any]:
+    if data.get("schema_version") == "creative-craft.evaluation.v2":
+        return _score_evaluation_v2(data, graph)
+    return _score_evaluation_v1(data)
+
+
 def markdown_local_links(path: Path) -> Iterable[tuple[str, Path]]:
     text = path.read_text(encoding="utf-8")
     for target in re.findall(r"\]\(([^)]+)\)", text):
@@ -899,6 +2073,8 @@ def markdown_local_links(path: Path) -> Iterable[tuple[str, Path]]:
 
 def doctor(root: Path = REPO_ROOT) -> Result:
     r = Result()
+    skill_root = root / "skills" / "creative-craft"
+    context = ValidationContext(skill_root)
     required = [
         "README.md",
         "README.zh-CN.md",
@@ -911,6 +2087,8 @@ def doctor(root: Path = REPO_ROOT) -> Result:
         "skills/creative-craft/VERSION",
         "skills/creative-craft/providers/openai-gpt-image-2.json",
         "skills/creative-craft/providers/bytedance-seedance-2.5.json",
+        "skills/creative-craft/providers/surfaces/openai-image-api.json",
+        "skills/creative-craft/providers/surfaces/bytedance-jimeng-web.json",
         "skills/creative-craft/scripts/creative_craft.py",
     ]
     for rel in required:
@@ -946,12 +2124,52 @@ def doctor(root: Path = REPO_ROOT) -> Result:
         except ValueError as exc:
             r.errors.append(str(exc))
 
-    profiles = provider_profiles()
+    for schema_version, entry in ARTIFACT_REGISTRY.items():
+        r.require((context.schemas_dir / str(entry["schema"])).is_file(),
+                  f"missing schema for {schema_version}: {entry['schema']}")
+        template = entry.get("template")
+        if template:
+            r.require((skill_root / "templates" / str(template)).is_file(),
+                      f"missing template for {schema_version}: {template}")
+    for schema_version, filename in METADATA_SCHEMAS.items():
+        r.require((context.schemas_dir / filename).is_file(),
+                  f"missing metadata schema for {schema_version}: {filename}")
+
+    try:
+        profiles = provider_profiles(context.providers_dir)
+        surfaces = surface_profiles(context.surfaces_dir)
+    except ValueError as exc:
+        r.errors.append(str(exc))
+        profiles = {}
+        surfaces = {}
     r.require(IMAGE_PROFILE_ID in profiles, f"missing provider profile {IMAGE_PROFILE_ID}")
     r.require(VIDEO_PROFILE_ID in profiles, f"missing provider profile {VIDEO_PROFILE_ID}")
     for profile_id, profile in profiles.items():
-        r.require(nonempty(profile.get("verified_at")), f"{profile_id} has no verified_at")
-        r.require(bool(profile.get("sources")), f"{profile_id} has no sources")
+        metadata_result = validate_against_schema(
+            profile, context.schemas_dir / METADATA_SCHEMAS["creative-craft.provider.v1"]
+        )
+        r.errors.extend(f"provider {profile_id}: {message}" for message in metadata_result.errors)
+    for surface_id, surface in surfaces.items():
+        metadata_result = validate_against_schema(
+            surface, context.schemas_dir / METADATA_SCHEMAS["creative-craft.surface.v1"]
+        )
+        r.errors.extend(f"surface {surface_id}: {message}" for message in metadata_result.errors)
+        for profile_id in surface.get("provider_profiles", []):
+            r.require(profile_id in profiles,
+                      f"surface {surface_id} references unknown provider_profile {profile_id}")
+    source_lock = root / "sources.lock.json"
+    if source_lock.is_file():
+        source_data = load_json(source_lock)
+        metadata_result = validate_against_schema(
+            source_data, context.schemas_dir / METADATA_SCHEMAS["creative-craft.sources.v1"]
+        )
+        r.errors.extend(f"sources.lock.json: {message}" for message in metadata_result.errors)
+        source_ids: set[str] = set()
+        for source in source_data.get("sources", []):
+            if isinstance(source, dict) and isinstance(source.get("id"), str):
+                r.require(source["id"] not in source_ids,
+                          f"sources.lock.json has duplicate source id {source['id']}")
+                source_ids.add(source["id"])
 
     for path in sorted(root.rglob("*.md")):
         if any(part in {".git", "node_modules"} for part in path.parts):
@@ -972,6 +2190,7 @@ def cmd_self_test(args: argparse.Namespace) -> int:
     """Run package-contained smoke tests without network or dev dependencies."""
     root = Path(args.root).resolve() if args.root else REPO_ROOT
     repository = doctor(root)
+    context = ValidationContext(root / "skills" / "creative-craft")
     checks: list[dict[str, Any]] = []
     errors = list(repository.errors)
     warnings = list(repository.warnings)
@@ -984,7 +2203,7 @@ def cmd_self_test(args: argparse.Namespace) -> int:
             errors.append(str(exc))
             checks.append({"file": str(path), "kind": "unknown", "valid": False})
             continue
-        kind, result = validate_data(data, "auto")
+        kind, result = validate_data(data, "auto", context)
         errors.extend(f"{path.name}: {message}" for message in result.errors)
         warnings.extend(f"{path.name}: {message}" for message in result.warnings)
         checks.append({
@@ -1058,7 +2277,7 @@ def cmd_compile_image(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    result = validate_image_job(data)
+    _, result = validate_data(data, "image")
     if not result.ok:
         render_result(path, "image", result, False)
         return 1
@@ -1075,7 +2294,7 @@ def cmd_compile_video(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    result = validate_video_job(data)
+    _, result = validate_data(data, "video")
     if not result.ok:
         render_result(path, "video", result, False)
         return 1
@@ -1092,7 +2311,8 @@ def cmd_score(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    result = score_evaluation(data)
+    graph = validate_project(Path(args.root)) if args.root else None
+    result = score_evaluation(data, graph)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
@@ -1121,36 +2341,30 @@ def cmd_hash(args: argparse.Namespace) -> int:
     if not path.is_file():
         print(f"ERROR: file not found: {path}", file=sys.stderr)
         return 1
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    digest = sha256_file(path)
     if args.json:
         print(json.dumps({
             "file": str(path),
             "bytes": path.stat().st_size,
-            "sha256": digest.hexdigest(),
+            "sha256": digest,
         }, indent=2))
     else:
-        print(digest.hexdigest())
+        print(digest)
     return 0
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
     target = Path(args.target).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
-    copies = {
+    copies: dict[Path, Path] = {
         TEMPLATES_DIR / "BRAND.md": target / "BRAND.md",
         TEMPLATES_DIR / "CREATIVE.md": target / "CREATIVE.md",
         TEMPLATES_DIR / "DELIVERABLES.md": target / "DELIVERABLES.md",
-        TEMPLATES_DIR / "creative-brief.json": target / ".creative-craft" / "creative-brief.json",
-        TEMPLATES_DIR / "concept-routes.json": target / ".creative-craft" / "concept-routes.json",
-        TEMPLATES_DIR / "asset-ledger.json": target / ".creative-craft" / "asset-ledger.json",
-        TEMPLATES_DIR / "image-job.json": target / ".creative-craft" / "image-job.json",
-        TEMPLATES_DIR / "video-job.json": target / ".creative-craft" / "video-job.json",
-        TEMPLATES_DIR / "evaluation.json": target / ".creative-craft" / "evaluation.json",
-        TEMPLATES_DIR / "delivery-manifest.json": target / ".creative-craft" / "delivery-manifest.json",
     }
+    for entry in ARTIFACT_REGISTRY.values():
+        template = entry.get("template")
+        if template and not entry.get("legacy"):
+            copies[TEMPLATES_DIR / str(template)] = target / ".creative-craft" / str(template)
     conflicts = [dst for dst in copies.values() if dst.exists() and not args.force]
     if conflicts:
         print("ERROR: refusing to overwrite existing files:", file=sys.stderr)
@@ -1158,11 +2372,224 @@ def cmd_seed(args: argparse.Namespace) -> int:
             print(f"  {path}", file=sys.stderr)
         print("Use --force only after reviewing the existing authority.", file=sys.stderr)
         return 1
+    backup_suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     for src, dst in copies.items():
         dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists() and args.force:
+            backup = dst.with_name(f"{dst.name}.bak.{backup_suffix}")
+            shutil.copy2(dst, backup)
+            print(backup)
         shutil.copy2(src, dst)
         print(dst)
+    manifest_entries: list[dict[str, Any]] = []
+    seed_types = {
+        "brief", "asset-ledger", "concept-routes", "creative-direction",
+        "image", "video", "evaluation", "delivery",
+    }
+    fallback_ids = {
+        "asset-ledger": "asset-ledger-tbd",
+        "concept-routes": "routes-tbd",
+    }
+    for schema_version, entry in ARTIFACT_REGISTRY.items():
+        template = entry.get("template")
+        artifact_type = str(entry["kind"])
+        if not template or artifact_type not in seed_types or entry.get("legacy"):
+            continue
+        path = target / ".creative-craft" / str(template)
+        data = load_json(path)
+        id_field = ARTIFACT_ID_FIELDS.get(artifact_type)
+        artifact_id = str(data.get(id_field)) if id_field else fallback_ids[artifact_type]
+        manifest_entries.append({
+            "artifact_type": artifact_type,
+            "artifact_id": artifact_id,
+            "schema_version": schema_version,
+            "path": str(path.relative_to(target)),
+            "sha256": sha256_file(path),
+        })
+    manifest_path = target / ".creative-craft" / "project-manifest.json"
+    manifest = {
+        "schema_version": "creative-craft.project-manifest.v1",
+        "project_id": "project-tbd",
+        "manifest_id": "manifest-tbd",
+        "artifacts": manifest_entries,
+    }
+    write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     return 0
+
+
+def _write_json_artifact(path: Path, data: dict[str, Any], force: bool) -> None:
+    if path.exists() and not force:
+        raise ValueError(f"refusing to overwrite existing file: {path}; use --force after review")
+    if path.exists():
+        suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup = path.with_name(f"{path.name}.bak.{suffix}")
+        shutil.copy2(path, backup)
+        print(f"Backup: {backup}")
+    write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def _project_payload(graph: ProjectGraph) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for artifact_type, _ in graph.records:
+        counts[artifact_type] = counts.get(artifact_type, 0) + 1
+    return {
+        "root": str(graph.root),
+        "manifest": str(graph.manifest_path),
+        "project_id": graph.manifest.get("project_id"),
+        "valid": graph.result.ok,
+        "artifact_counts": counts,
+        "job_statuses": graph.job_statuses,
+        "errors": graph.result.errors,
+        "warnings": graph.result.warnings,
+    }
+
+
+def cmd_validate_project(args: argparse.Namespace) -> int:
+    graph = validate_project(Path(args.root))
+    payload = _project_payload(graph)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"{'PASS' if graph.result.ok else 'FAIL'} project: {graph.root}")
+        print(f"  Manifest: {graph.manifest_path}")
+        print(f"  Artifacts: {sum(payload['artifact_counts'].values())}")
+        for job_id, status in sorted(graph.job_statuses.items()):
+            print(f"  Job {job_id}: {status}")
+        for message in graph.result.errors:
+            print(f"  ERROR: {message}")
+        for message in graph.result.warnings:
+            print(f"  WARN:  {message}")
+    return 0 if graph.result.ok else 1
+
+
+def cmd_project_status(args: argparse.Namespace) -> int:
+    graph = validate_project(Path(args.root))
+    payload = _project_payload(graph)
+    payload["status"] = "valid" if graph.result.ok else "invalid"
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"Project status: {payload['status']}")
+        print(f"Project ID: {payload['project_id']}")
+        for artifact_type, count in sorted(payload["artifact_counts"].items()):
+            print(f"  {artifact_type}: {count}")
+        for job_id, status in sorted(graph.job_statuses.items()):
+            print(f"  {job_id}: {status}")
+        for message in graph.result.errors:
+            print(f"ERROR: {message}")
+    return 0 if graph.result.ok else 1
+
+
+def cmd_inspect_output(args: argparse.Namespace) -> int:
+    job_path = Path(args.job).resolve()
+    receipt_path = Path(args.receipt).resolve()
+    file_path = Path(args.file).resolve()
+    output_path = Path(args.output).resolve()
+    try:
+        job = load_json(job_path)
+        receipt = load_json(receipt_path)
+        _, job_result = validate_data(job, "auto")
+        _, receipt_result = validate_data(receipt, "execution-receipt")
+        if not job_result.ok or not receipt_result.ok:
+            raise ValueError("job or receipt is structurally invalid")
+        if receipt.get("job_id") != job.get("job_id"):
+            raise ValueError("receipt.job_id does not match job.job_id")
+        if receipt.get("job_sha256") != sha256_file(job_path):
+            raise ValueError("receipt.job_sha256 does not match the job file")
+        if not file_path.is_file():
+            raise ValueError(f"output file not found: {file_path}")
+        digest = sha256_file(file_path)
+        matches = [item for item in receipt.get("outputs", [])
+                   if isinstance(item, dict) and item.get("sha256") == digest]
+        if not matches:
+            raise ValueError("output file digest is not present in the execution receipt")
+        receipt_output = matches[0]
+        now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        inspection = {
+            "schema_version": "creative-craft.output-inspection.v1",
+            "inspection_id": f"inspection-{receipt_output['asset_id']}",
+            "job_id": str(job["job_id"]),
+            "receipt_id": str(receipt["receipt_id"]),
+            "output_asset_id": str(receipt_output["asset_id"]),
+            "output_sha256": digest,
+            "inspector": args.inspector,
+            "inspected_at": now,
+            "findings": [],
+            "invariant_checks": [],
+            "copy_checks": [],
+            "technical_checks": [{
+                "id": "file-digest",
+                "status": "pass",
+                "observation": "The inspected file exists and its SHA-256 matches the execution receipt.",
+                "interpretation": "File identity is bound; creative quality has not been inspected.",
+            }],
+            "rights_checks": [],
+            "decision": "deferred",
+            "approval": {"approved_by": None, "approved_at": None, "approval_basis": ""},
+            "remaining_unknowns": [
+                "Visual or audiovisual inspection has not been completed.",
+                "Invariants, exact copy, technical quality, and rights still require explicit checks.",
+            ],
+        }
+        _write_json_artifact(output_path, inspection, args.force)
+    except (KeyError, OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(output_path)
+    return 0
+
+
+def cmd_start_revision(args: argparse.Namespace) -> int:
+    inspection_path = Path(args.inspection).resolve()
+    output_path = Path(args.output).resolve()
+    try:
+        inspection = load_json(inspection_path)
+        _, result = validate_data(inspection, "output-inspection")
+        if not result.ok:
+            raise ValueError("inspection artifact is invalid: " + "; ".join(result.errors))
+        revision = {
+            "schema_version": "creative-craft.revision-lineage.v1",
+            "revision_id": f"revision-{inspection['inspection_id']}",
+            "parent_output_ref": (
+                f"cc://output-inspection/{inspection['inspection_id']}#/output_asset_id"
+            ),
+            "parent_inspection_ref": f"cc://output-inspection/{inspection['inspection_id']}#",
+            "primary_variable": args.primary_variable,
+            "reason": args.reason,
+            "change": [],
+            "preserve": [],
+            "integration_changes": [],
+            "new_job_ref": None,
+            "new_receipt_ref": None,
+            "new_output_ref": None,
+            "observed_result": None,
+            "comparison": None,
+            "decision": "draft",
+            "next_action": "Create one new job that changes the primary variable and preserves all locked invariants.",
+        }
+        _write_json_artifact(output_path, revision, args.force)
+    except (KeyError, OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(output_path)
+    return 0
+
+
+def cmd_verify_delivery(args: argparse.Namespace) -> int:
+    graph = validate_project(Path(args.root))
+    delivery_path = Path(args.file).resolve()
+    delivery_record = next(
+        (record for (artifact_type, _), record in graph.records.items()
+         if artifact_type == "delivery" and record["path"] == delivery_path),
+        None,
+    )
+    if delivery_record is None:
+        graph.result.errors.append("delivery file is not registered in project-manifest.json")
+    elif delivery_record["data"].get("schema_version") != "creative-craft.delivery.v2":
+        graph.result.errors.append("verify-delivery requires creative-craft.delivery.v2")
+    elif delivery_record["data"].get("status") != "delivered":
+        graph.result.errors.append("delivery status is not delivered")
+    return render_result(delivery_path, "delivery", graph.result, args.json)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1189,7 +2616,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument(
         "--kind",
         default="auto",
-        choices=["auto", *sorted(VALIDATORS)],
+        choices=["auto", *sorted(set(SCHEMA_TO_KIND.values()))],
     )
     validate_parser.add_argument("--json", action="store_true")
     validate_parser.set_defaults(func=cmd_validate)
@@ -1206,6 +2633,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     score_parser = sub.add_parser("score", help="calculate an evidence-aware comparative score")
     score_parser.add_argument("--file", required=True)
+    score_parser.add_argument("--root", help="project root required for evidence-bound evaluation v2")
     score_parser.add_argument("--json", action="store_true")
     score_parser.set_defaults(func=cmd_score)
 
@@ -1218,6 +2646,49 @@ def build_parser() -> argparse.ArgumentParser:
     seed_parser.add_argument("--target", required=True)
     seed_parser.add_argument("--force", action="store_true")
     seed_parser.set_defaults(func=cmd_seed)
+
+    project_parser = sub.add_parser(
+        "validate-project", help="validate a project manifest, digests, and cross-artifact graph"
+    )
+    project_parser.add_argument("--root", required=True)
+    project_parser.add_argument("--json", action="store_true")
+    project_parser.set_defaults(func=cmd_validate_project)
+
+    status_parser = sub.add_parser(
+        "project-status", help="project evidence and derived job status summary"
+    )
+    status_parser.add_argument("--root", required=True)
+    status_parser.add_argument("--json", action="store_true")
+    status_parser.set_defaults(func=cmd_project_status)
+
+    inspection_parser = sub.add_parser(
+        "inspect-output", help="create a digest-bound draft inspection skeleton"
+    )
+    inspection_parser.add_argument("--job", required=True)
+    inspection_parser.add_argument("--receipt", required=True)
+    inspection_parser.add_argument("--file", required=True)
+    inspection_parser.add_argument("--output", required=True)
+    inspection_parser.add_argument("--inspector", default="TBD")
+    inspection_parser.add_argument("--force", action="store_true")
+    inspection_parser.set_defaults(func=cmd_inspect_output)
+
+    revision_parser = sub.add_parser(
+        "start-revision", help="create a draft one-variable revision lineage artifact"
+    )
+    revision_parser.add_argument("--inspection", required=True)
+    revision_parser.add_argument("--output", required=True)
+    revision_parser.add_argument("--primary-variable", default="TBD")
+    revision_parser.add_argument("--reason", default="TBD")
+    revision_parser.add_argument("--force", action="store_true")
+    revision_parser.set_defaults(func=cmd_start_revision)
+
+    delivery_parser = sub.add_parser(
+        "verify-delivery", help="verify a delivered v2 manifest against project evidence"
+    )
+    delivery_parser.add_argument("--root", required=True)
+    delivery_parser.add_argument("--file", required=True)
+    delivery_parser.add_argument("--json", action="store_true")
+    delivery_parser.set_defaults(func=cmd_verify_delivery)
     return parser
 
 
