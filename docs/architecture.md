@@ -101,16 +101,22 @@ photography, packaging, editorial systems, or social accounts.
 `creative-craft.reference-pack.v1` separates `OBSERVED`, `INFERRED`,
 `HYPOTHESIZED`, and `UNVERIFIED` evidence; records transferable principles and
 non-transferable expression; binds sources and optional assets; and permanently
-sets `may_override_primary_brand` to false. `creative-craft.reference-binding.v1`
-records the selected entities, source identity, snapshot tree digest, and update
-lineage.
+sets `may_override_primary_brand` to false. A reviewed source must include a
+symlink-free local snapshot whose content SHA-256 matches the manifest.
+`creative-craft.reference-binding.v1` records the selected entities, source
+identity, and snapshot tree digest. Each update archives its prior Binding as a
+registered `creative-craft.reference-binding-history.v1` artifact so the entire
+predecessor chain can be resolved and validated.
 
 A project may bind many Reference Packs. Each complete pack snapshot lives at
 `.creative-craft/reference-snapshots/<pack-id>/`, each binding lives under
-`.creative-craft/reference-bindings/`, and only assets from selected entities
-are merged into the project ledger. Updating one reference creates a scoped
-backup and cannot replace the Primary Brand Pack or another Reference Pack.
-Draft packs warn but do not block Ready Jobs; revoked packs fail closed.
+`.creative-craft/reference-bindings/`, immutable predecessors live under
+`.creative-craft/reference-lineage/<pack-id>/`, and only assets from selected
+entities are merged into the project ledger. Updating one reference creates a
+scoped backup and cannot replace the Primary Brand Pack or another Reference
+Pack. Every write destination rejects symlinks and project-root escapes. Draft
+packs warn but do not block Ready Jobs; revoked packs fail closed; superseded
+snapshots remain readable only when already bound as historical evidence.
 
 ### 4. Versioned artifacts and schemas
 
@@ -210,3 +216,13 @@ runtime interprets the schema keyword subset used by this repository; CI compare
 that result with the `jsonschema` Draft 2020-12 reference implementation. Python
 semantic validators are limited to Provider/Surface capability rules,
 cross-field constraints, digests, references, rights, and lifecycle evidence.
+
+## Release package evidence
+
+Repository and installed-leaf checks do not prove the final archive. The release
+builder therefore creates one `.tgz`, validates all tar members before extraction,
+rejects absolute/traversal paths and link or special-file members, and exercises
+the extracted `package/skills/creative-craft` leaf directly. Its self-test and
+Reference bind/update/validation/rollback E2E must pass before the package digest
+and release receipt are written. This remains package-runtime evidence, not npm
+publication or live validation in every compatible Agent host.

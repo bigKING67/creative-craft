@@ -14,6 +14,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def normalize_receipt_argv(argv: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in argv:
+        if value == sys.executable:
+            normalized.append("<python>")
+            continue
+        path = Path(value)
+        if not path.is_absolute():
+            normalized.append(value)
+            continue
+        try:
+            relative = path.resolve(strict=False).relative_to(ROOT)
+        except ValueError:
+            normalized.append(f"<absolute>/{path.name}")
+        else:
+            normalized.append(f"<repo>/{relative.as_posix()}")
+    return normalized
+
+
 def run(argv: list[str]) -> dict[str, object]:
     completed = subprocess.run(
         argv,
@@ -22,8 +41,9 @@ def run(argv: list[str]) -> dict[str, object]:
         capture_output=True,
         check=False,
     )
+    receipt_argv = normalize_receipt_argv(argv)
     receipt: dict[str, object] = {
-        "argv": argv,
+        "argv": receipt_argv,
         "exit_code": completed.returncode,
         "stdout_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
         "stderr_sha256": hashlib.sha256(completed.stderr.encode()).hexdigest(),
@@ -31,7 +51,7 @@ def run(argv: list[str]) -> dict[str, object]:
     if completed.returncode != 0:
         print(completed.stdout)
         print(completed.stderr, file=sys.stderr)
-        raise RuntimeError(f"release gate failed: {' '.join(argv)}")
+        raise RuntimeError(f"release gate failed: {' '.join(receipt_argv)}")
     return receipt
 
 
@@ -68,6 +88,17 @@ def main() -> int:
     if len(packages) != 1:
         raise RuntimeError(f"expected exactly one package, found {len(packages)}")
     package = packages[0]
+    receipts.append(
+        run(
+            [
+                sys.executable,
+                "scripts/package_smoke.py",
+                "--package",
+                str(package),
+                "--json",
+            ]
+        )
+    )
     digest = hashlib.sha256(package.read_bytes()).hexdigest()
     checksum_path = output / f"{package.name}.sha256"
     checksum_path.write_text(f"{digest}  {package.name}\n", encoding="utf-8")
@@ -84,6 +115,7 @@ def main() -> int:
         "claims": {
             "provider_network_adapters": False,
             "real_golden_evals": False,
+            "packaged_reference_runtime_e2e": True,
             "npm_published": False,
             "distribution": "github-release",
         },

@@ -124,10 +124,17 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
         "kind": "reference-binding", "schema": "reference-binding.schema.json",
         "template": "reference-binding.json", "legacy": False,
     },
+    "creative-craft.reference-binding-history.v1": {
+        "kind": "reference-binding-history",
+        "schema": "reference-binding-history.schema.json",
+        "template": "reference-binding-history.json",
+        "legacy": False,
+    },
 }
 
-# Brand artifacts are opt-in. Keeping an explicit project inventory prevents a
-# generic seed from silently acquiring empty brand authority templates.
+# Brand and Reference artifacts are opt-in. Keeping an explicit project
+# inventory prevents a generic seed from silently acquiring authority,
+# research, binding, or lineage templates.
 PROJECT_SEED_SCHEMA_VERSIONS = {
     "creative-craft.brief.v1",
     "creative-craft.asset-ledger.v1",
@@ -223,6 +230,39 @@ def write_atomic(path: Path, text: str) -> None:
 
 def nonempty(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+PLACEHOLDER_VALUE_PATTERN = re.compile(
+    r"^(?:tbd|todo|unknown|placeholder|replace-me|example(?:\.[a-z]+)?)$",
+    re.IGNORECASE,
+)
+
+
+def is_placeholder_value(value: Any) -> bool:
+    if not nonempty(value):
+        return True
+    stripped = str(value).strip()
+    return (
+        bool(PLACEHOLDER_VALUE_PATTERN.fullmatch(stripped))
+        or ("<" in stripped and ">" in stripped)
+        or bool(re.search(r"://[^/]*\.invalid(?:/|$)", stripped, re.IGNORECASE))
+    )
+
+
+def json_content_sha256(data: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def reference_history_filename(binding_id: str) -> str:
+    digest = hashlib.sha256(binding_id.encode("utf-8")).hexdigest()
+    return f"{digest}.json"
 
 
 def require_string(result: Result, data: dict[str, Any], key: str, prefix: str = "") -> None:
@@ -1286,6 +1326,19 @@ def validate_reference_pack_artifact(data: dict[str, Any]) -> Result:
             if isinstance(source, dict):
                 r.require(nonempty(source.get("captured_at")),
                           f"reviewed reference pack requires source_references[{index}].captured_at")
+                r.require(
+                    not is_placeholder_value(source.get("uri")),
+                    f"reviewed reference pack source_references[{index}].uri must not be a placeholder",
+                )
+                r.require(
+                    isinstance(source.get("sha256"), str)
+                    and bool(re.fullmatch(r"[0-9a-f]{64}", str(source.get("sha256")))),
+                    f"reviewed reference pack source_references[{index}] requires a content SHA-256",
+                )
+                r.require(
+                    nonempty(source.get("snapshot_path")),
+                    f"reviewed reference pack source_references[{index}] requires snapshot_path",
+                )
         for entity in data.get("entities", []):
             if not isinstance(entity, dict):
                 continue
@@ -1308,6 +1361,27 @@ def validate_reference_binding(data: dict[str, Any]) -> Result:
     if isinstance(source, dict) and source.get("commit") is not None:
         r.require(nonempty(source.get("repository_or_uri")),
                   "source.commit requires source.repository_or_uri")
+    return r
+
+
+def validate_reference_binding_history(data: dict[str, Any]) -> Result:
+    r = Result()
+    try:
+        dt.datetime.fromisoformat(str(data.get("archived_at")).replace("Z", "+00:00"))
+    except ValueError:
+        r.errors.append("archived_at must be an ISO-8601 timestamp")
+    binding = data.get("binding")
+    if not isinstance(binding, dict):
+        return r
+    r.extend(validate_reference_binding(binding))
+    r.require(
+        data.get("history_id") == binding.get("binding_id"),
+        "history_id must equal binding.binding_id",
+    )
+    r.require(
+        data.get("binding_sha256") == json_content_sha256(binding),
+        "binding_sha256 must match canonical binding content",
+    )
     return r
 
 
@@ -1336,6 +1410,7 @@ def _call_semantic_validator(
         "creative-craft.brand-binding.v1": validate_brand_binding,
         "creative-craft.reference-pack.v1": validate_reference_pack_artifact,
         "creative-craft.reference-binding.v1": validate_reference_binding,
+        "creative-craft.reference-binding-history.v1": validate_reference_binding_history,
     }
     if schema_version in {"creative-craft.image-job.v1", "creative-craft.image-job.v2"}:
         return validate_image_job(data, context)
@@ -1399,6 +1474,7 @@ ARTIFACT_ID_FIELDS = {
     "brand-binding": "binding_id",
     "reference-pack": "reference_pack_id",
     "reference-binding": "binding_id",
+    "reference-binding-history": "history_id",
 }
 
 
@@ -1451,6 +1527,13 @@ def _safe_project_path(root: Path, value: Any) -> tuple[Path | None, str | None]
         return path, error.replace("unsafe root-relative project-relative path",
                                    "unsafe project-relative path", 1)
     return path, error
+
+
+def _require_safe_project_write_path(root: Path, value: str, *, label: str) -> Path:
+    path, error = _safe_relative_path(root, value, label=label)
+    if error or path is None:
+        raise ValueError(error or f"{label} is invalid")
+    return path
 
 
 def tree_sha256(root: Path) -> str:
@@ -1699,6 +1782,28 @@ def validate_reference_pack(
         f"asset ledger project_id must be {expected_project_id!r}",
     )
 
+    for index, source in enumerate(manifest.get("source_references", [])):
+        if not isinstance(source, dict) or source.get("snapshot_path") is None:
+            continue
+        snapshot_path, snapshot_error = _safe_relative_path(
+            resolved_root,
+            source.get("snapshot_path"),
+            label=f"source_references[{index}].snapshot_path",
+        )
+        if snapshot_error:
+            graph.result.errors.append(snapshot_error)
+        elif snapshot_path is None or not snapshot_path.is_file():
+            graph.result.errors.append(
+                f"source_references[{index}] snapshot file does not exist: "
+                f"{source.get('snapshot_path')!r}"
+            )
+        elif isinstance(source.get("sha256"), str):
+            graph.result.require(
+                sha256_file(snapshot_path) == source.get("sha256"),
+                f"source_references[{index}] snapshot sha256 mismatch: "
+                f"{source.get('snapshot_path')}",
+            )
+
     assets: dict[str, dict[str, Any]] = {}
     for index, asset in enumerate(graph.ledger.get("assets", [])):
         if not isinstance(asset, dict):
@@ -1911,7 +2016,12 @@ def _project_reference_cross_checks(graph: ProjectGraph) -> None:
     binding_records = [
         record for (kind, _), record in graph.records.items() if kind == "reference-binding"
     ]
-    if not pack_records and not binding_records:
+    history_records = [
+        record
+        for (kind, _), record in graph.records.items()
+        if kind == "reference-binding-history"
+    ]
+    if not pack_records and not binding_records and not history_records:
         return
 
     packs: dict[str, dict[str, Any]] = {}
@@ -1930,6 +2040,40 @@ def _project_reference_cross_checks(graph: ProjectGraph) -> None:
         set(packs) == set(bindings),
         "every reference pack must have exactly one matching reference binding",
     )
+
+    histories: dict[str, dict[str, dict[str, Any]]] = {}
+    for record in history_records:
+        history = record["data"]
+        archived_binding = history.get("binding", {})
+        if not isinstance(archived_binding, dict):
+            continue
+        pack_id = str(archived_binding.get("reference_pack_id"))
+        history_id = str(history.get("history_id"))
+        pack_histories = histories.setdefault(pack_id, {})
+        graph.result.require(
+            history_id not in pack_histories,
+            f"duplicate reference binding history {history_id!r}",
+        )
+        pack_histories[history_id] = record
+        expected_history_path = (
+            graph.root
+            / ".creative-craft"
+            / "reference-lineage"
+            / pack_id
+            / reference_history_filename(history_id)
+        )
+        graph.result.require(
+            record["path"] == expected_history_path,
+            f"reference binding history {history_id!r} uses a non-canonical path",
+        )
+        graph.result.require(
+            archived_binding.get("project_id") == graph.manifest.get("project_id"),
+            f"reference binding history {history_id!r} project_id differs from project manifest",
+        )
+        graph.result.require(
+            pack_id in packs,
+            f"reference binding history {history_id!r} has no current Reference Pack",
+        )
 
     project_ledgers = [
         record for (kind, _), record in graph.records.items() if kind == "asset-ledger"
@@ -1968,6 +2112,50 @@ def _project_reference_cross_checks(graph: ProjectGraph) -> None:
             graph.result.warnings.append(
                 f"reference pack {pack_id!r} is draft; treat its contents as exploratory evidence"
             )
+        elif pack.get("status") == "superseded":
+            graph.result.warnings.append(
+                f"reference pack {pack_id!r} is superseded; preserve it only as historical evidence"
+            )
+
+        pack_histories = histories.get(pack_id, {})
+        current_binding_id = str(binding.get("binding_id"))
+        graph.result.require(
+            current_binding_id not in pack_histories,
+            f"current reference binding {current_binding_id!r} must not also be archived",
+        )
+        visited: set[str] = set()
+        predecessor = binding.get("previous_binding_id")
+        while predecessor is not None:
+            predecessor_id = str(predecessor)
+            if predecessor_id in visited:
+                graph.result.errors.append(
+                    f"reference binding lineage for {pack_id!r} contains a cycle at {predecessor_id!r}"
+                )
+                break
+            visited.add(predecessor_id)
+            history_record = pack_histories.get(predecessor_id)
+            if history_record is None:
+                graph.result.errors.append(
+                    f"reference binding {current_binding_id!r} has unresolved predecessor "
+                    f"{predecessor_id!r}"
+                )
+                break
+            archived_binding = history_record["data"].get("binding", {})
+            if not isinstance(archived_binding, dict):
+                break
+            graph.result.require(
+                archived_binding.get("project_id") == binding.get("project_id"),
+                f"reference binding predecessor {predecessor_id!r} belongs to another project",
+            )
+            graph.result.require(
+                archived_binding.get("reference_pack_id") == pack_id,
+                f"reference binding predecessor {predecessor_id!r} belongs to another pack",
+            )
+            predecessor = archived_binding.get("previous_binding_id")
+        graph.result.require(
+            visited == set(pack_histories),
+            f"reference binding lineage for {pack_id!r} contains orphan history records",
+        )
 
         snapshot = binding.get("snapshot", {})
         snapshot_value = snapshot.get("path") if isinstance(snapshot, dict) else None
@@ -3034,7 +3222,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_self_test(args: argparse.Namespace) -> int:
     """Run repository or installed-runtime smoke tests without network access."""
     requested_root = Path(args.root).resolve() if args.root else None
-    repository_scope = requested_root is not None or is_repository_checkout(REPO_ROOT)
+    requested_scope = getattr(args, "scope", "auto")
+    repository_scope = requested_scope == "repository" or (
+        requested_scope == "auto"
+        and (requested_root is not None or is_repository_checkout(REPO_ROOT))
+    )
     if repository_scope:
         root = requested_root or REPO_ROOT
         skill_root = root / "skills" / "creative-craft"
@@ -3042,8 +3234,8 @@ def cmd_self_test(args: argparse.Namespace) -> int:
         runtime_valid = validate_skill_runtime(skill_root).ok
         label = "package self-test"
     else:
-        root = SKILL_ROOT
-        skill_root = SKILL_ROOT
+        root = requested_root or SKILL_ROOT
+        skill_root = root
         preflight = validate_skill_runtime(skill_root)
         runtime_valid = preflight.ok
         label = "installed runtime self-test"
@@ -3492,14 +3684,15 @@ description: {json.dumps(description, ensure_ascii=False)}
 
 Use this skill only when the request or bound project explicitly needs `{reference_pack_id}`.
 
-1. Read `reference-pack.json` and reject a `revoked` pack.
+1. Read `reference-pack.json`; reject `revoked`, and do not create a new binding from `superseded`.
 2. Load only the selected reference entities needed for the task.
 3. Keep `OBSERVED`, `INFERRED`, `HYPOTHESIZED`, and `UNVERIFIED` distinct.
 4. Treat references as research, not as brand authority or permission to imitate.
 5. Never override the project's Primary Brand Pack, Brief, exact copy, rights, claims, or product invariants.
-6. Resolve assets through `asset-ledger.json`; public visibility does not grant generation-input rights.
-7. Use the generic `creative-craft` skill for briefs, routes, direction, jobs, inspection, revision, evaluation, and delivery.
-8. For project work, use the immutable project snapshot instead of this live checkout.
+6. Require every `reviewed` source to resolve to a local, symlink-free snapshot with matching SHA-256.
+7. Resolve assets through `asset-ledger.json`; public visibility does not grant generation-input rights.
+8. Use the generic `creative-craft` skill for briefs, routes, direction, jobs, inspection, revision, evaluation, and delivery.
+9. For project work, use the immutable project snapshot instead of this live checkout.
 
 This skill contains non-authoritative creative reference intelligence only. It does not replace or duplicate Creative Craft schemas, provider profiles, production methods, or a Primary Brand Pack.
 """
@@ -3572,6 +3765,9 @@ def cmd_init_reference_pack(args: argparse.Namespace) -> int:
         approved_dir = target / "assets" / "approved"
         approved_dir.mkdir(parents=True, exist_ok=True)
         write_atomic(approved_dir / ".gitkeep", "")
+        sources_dir = target / "sources"
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        write_atomic(sources_dir / ".gitkeep", "")
         graph = validate_reference_pack(target)
         if not graph.result.ok:
             raise ValueError("; ".join(graph.result.errors))
@@ -3613,7 +3809,10 @@ def cmd_validate_reference_pack(args: argparse.Namespace) -> int:
 
 
 def _copy_snapshot_files(source: BrandPackGraph, target: Path) -> None:
-    target.mkdir(parents=True, exist_ok=False)
+    try:
+        target.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError(f"brand staging path already exists: {target}") from exc
     relative_files: set[str] = {"brand-pack.json"}
     relative_files.update(
         str(item["path"]) for item in source.manifest.get("authority_files", [])
@@ -3627,13 +3826,21 @@ def _copy_snapshot_files(source: BrandPackGraph, target: Path) -> None:
         value = str(asset.get("path_or_uri", ""))
         if not _is_external_asset_uri(value):
             relative_files.add(value)
-    for relative in sorted(relative_files):
-        source_path, error = _safe_relative_path(source.root, relative, label="snapshot source path")
-        if error or source_path is None or not source_path.is_file():
-            raise ValueError(error or f"snapshot source file does not exist: {relative!r}")
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, destination)
+    try:
+        for relative in sorted(relative_files):
+            source_path, error = _safe_relative_path(
+                source.root, relative, label="snapshot source path"
+            )
+            if error or source_path is None or not source_path.is_file():
+                raise ValueError(
+                    error or f"snapshot source file does not exist: {relative!r}"
+                )
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination)
+    except Exception:
+        _remove_path(target)
+        raise
 
 
 def _project_ledger_record(graph: ProjectGraph) -> dict[str, Any]:
@@ -3680,25 +3887,58 @@ def _merged_project_ledger(
     return merged
 
 
+def _backup_project_state(
+    root: Path,
+    backup_relative: str,
+    paths: list[Path],
+    *,
+    label: str,
+) -> tuple[Path, dict[Path, bool]]:
+    backup = _require_safe_project_write_path(root, backup_relative, label=label)
+    tracked: list[tuple[Path, Path]] = []
+    for path in paths:
+        try:
+            relative = path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"{label} tracked path escapes project: {path}") from exc
+        safe_path = _require_safe_project_write_path(
+            root,
+            relative.as_posix(),
+            label=f"{label} tracked path",
+        )
+        tracked.append((safe_path, relative))
+    try:
+        backup.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError(f"{label} already exists: {backup}") from exc
+    existed: dict[Path, bool] = {}
+    try:
+        for safe_path, relative in tracked:
+            present = safe_path.exists()
+            existed[safe_path] = present
+            if not present:
+                continue
+            destination = backup / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if safe_path.is_dir():
+                shutil.copytree(safe_path, destination)
+            else:
+                shutil.copy2(safe_path, destination)
+    except Exception:
+        _remove_path(backup)
+        _prune_empty_parents(backup.parent, root)
+        raise
+    return backup, existed
+
+
 def _backup_brand_state(root: Path, paths: list[Path]) -> tuple[Path, dict[Path, bool]]:
     suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup = root / ".creative-craft" / "brand-backups" / suffix
-    backup.mkdir(parents=True, exist_ok=False)
-    existed: dict[Path, bool] = {}
-    for path in paths:
-        path = path.resolve(strict=False)
-        present = path.exists()
-        existed[path] = present
-        if not present:
-            continue
-        relative = path.relative_to(root)
-        destination = backup / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_dir():
-            shutil.copytree(path, destination)
-        else:
-            shutil.copy2(path, destination)
-    return backup, existed
+    return _backup_project_state(
+        root,
+        f".creative-craft/brand-backups/{suffix}",
+        paths,
+        label="brand backup path",
+    )
 
 
 def _remove_path(path: Path) -> None:
@@ -3706,6 +3946,15 @@ def _remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.is_dir():
         shutil.rmtree(path)
+
+
+def _prune_empty_parents(start: Path, stop: Path) -> None:
+    current = start
+    while current != stop and current.is_dir() and not current.is_symlink():
+        if any(current.iterdir()):
+            break
+        current.rmdir()
+        current = current.parent
 
 
 def _restore_brand_state(
@@ -3721,6 +3970,20 @@ def _restore_brand_state(
             shutil.copytree(source, path)
         else:
             shutil.copy2(source, path)
+
+
+def _discard_operation_backup(root: Path, backup: Path) -> None:
+    _remove_path(backup)
+    _prune_empty_parents(backup.parent, root)
+
+
+def _cleanup_rolled_back_operation(
+    root: Path, backup: Path, existed: dict[Path, bool]
+) -> None:
+    _discard_operation_backup(root, backup)
+    for path, was_present in existed.items():
+        if not was_present:
+            _prune_empty_parents(path.parent, root)
 
 
 def _brand_source_value(args: argparse.Namespace, name: str) -> Any:
@@ -3761,12 +4024,27 @@ def _install_brand_snapshot(
     if not reason or not imported_by:
         raise ValueError("reason and imported_by must be non-empty")
 
-    creative_root = project_root / ".creative-craft"
     suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    staging = creative_root / f".brand-snapshot.staging-{suffix}"
-    snapshot_path = creative_root / "brand-snapshot"
-    binding_path = creative_root / "brand-binding.json"
-    project_brand_path = project_root / "BRAND.md"
+    staging = _require_safe_project_write_path(
+        project_root,
+        f".creative-craft/.brand-snapshot.staging-{suffix}",
+        label="brand staging path",
+    )
+    snapshot_path = _require_safe_project_write_path(
+        project_root,
+        ".creative-craft/brand-snapshot",
+        label="brand snapshot path",
+    )
+    binding_path = _require_safe_project_write_path(
+        project_root,
+        ".creative-craft/brand-binding.json",
+        label="brand binding path",
+    )
+    project_brand_path = _require_safe_project_write_path(
+        project_root,
+        "BRAND.md",
+        label="project brand path",
+    )
     manifest_path = graph.manifest_path
     ledger_record = _project_ledger_record(graph)
     ledger_path = Path(ledger_record["path"])
@@ -3777,8 +4055,10 @@ def _install_brand_snapshot(
         if existing_binding_records else None
     )
 
+    staging_owned = False
     try:
         _copy_snapshot_files(source, staging)
+        staging_owned = True
         staged_validation = validate_brand_pack(staging)
         if not staged_validation.result.ok:
             raise ValueError(
@@ -3795,7 +4075,8 @@ def _install_brand_snapshot(
         ]
         backup, existed = _backup_brand_state(project_root, tracked_paths)
     except Exception:
-        _remove_path(staging)
+        if staging_owned:
+            _remove_path(staging)
         raise
     try:
         _remove_path(snapshot_path)
@@ -3868,37 +4149,48 @@ def _install_brand_snapshot(
     except Exception:
         _remove_path(staging)
         _restore_brand_state(project_root, backup, existed)
+        _cleanup_rolled_back_operation(project_root, backup, existed)
         raise
     if not retain_backup:
-        _remove_path(backup)
-        parent = backup.parent
-        if parent.is_dir() and not any(parent.iterdir()):
-            parent.rmdir()
+        _discard_operation_backup(project_root, backup)
     return backup
 
 
 def _copy_reference_snapshot_files(source: ReferencePackGraph, target: Path) -> None:
-    target.mkdir(parents=True, exist_ok=False)
+    try:
+        target.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError(f"reference staging path already exists: {target}") from exc
     relative_files: set[str] = {"reference-pack.json"}
     ledger_relative = str(source.manifest.get("asset_ledger", {}).get("path"))
     relative_files.add(ledger_relative)
+    for source_reference in source.manifest.get("source_references", []):
+        if not isinstance(source_reference, dict):
+            continue
+        snapshot_path = source_reference.get("snapshot_path")
+        if nonempty(snapshot_path):
+            relative_files.add(str(snapshot_path))
     for asset in source.ledger.get("assets", []):
         if not isinstance(asset, dict):
             continue
         value = str(asset.get("path_or_uri", ""))
         if not _is_external_asset_uri(value):
             relative_files.add(value)
-    for relative in sorted(relative_files):
-        source_path, error = _safe_relative_path(
-            source.root, relative, label="reference snapshot source path"
-        )
-        if error or source_path is None or not source_path.is_file():
-            raise ValueError(
-                error or f"reference snapshot source file does not exist: {relative!r}"
+    try:
+        for relative in sorted(relative_files):
+            source_path, error = _safe_relative_path(
+                source.root, relative, label="reference snapshot source path"
             )
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, destination)
+            if error or source_path is None or not source_path.is_file():
+                raise ValueError(
+                    error or f"reference snapshot source file does not exist: {relative!r}"
+                )
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination)
+    except Exception:
+        _remove_path(target)
+        raise
 
 
 def _selected_reference_ids(
@@ -3981,29 +4273,12 @@ def _backup_reference_state(
     root: Path, reference_pack_id: str, paths: list[Path]
 ) -> tuple[Path, dict[Path, bool]]:
     suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup = (
-        root
-        / ".creative-craft"
-        / "reference-backups"
-        / reference_pack_id
-        / suffix
+    return _backup_project_state(
+        root,
+        f".creative-craft/reference-backups/{reference_pack_id}/{suffix}",
+        paths,
+        label="reference backup path",
     )
-    backup.mkdir(parents=True, exist_ok=False)
-    existed: dict[Path, bool] = {}
-    for path in paths:
-        resolved = path.resolve(strict=False)
-        present = resolved.exists()
-        existed[resolved] = present
-        if not present:
-            continue
-        relative = resolved.relative_to(root)
-        destination = backup / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if resolved.is_dir():
-            shutil.copytree(resolved, destination)
-        else:
-            shutil.copy2(resolved, destination)
-    return backup, existed
 
 
 def _existing_reference_binding(
@@ -4042,6 +4317,8 @@ def _install_reference_snapshot(
         raise ValueError("Reference Pack is invalid: " + "; ".join(source.result.errors))
     if source.manifest.get("status") == "revoked":
         raise ValueError("cannot bind a revoked Reference Pack")
+    if source.manifest.get("status") == "superseded":
+        raise ValueError("cannot create a new binding from a superseded Reference Pack")
 
     reference_pack_id = str(source.manifest.get("reference_pack_id"))
     existing_binding = _existing_reference_binding(graph, reference_pack_id)
@@ -4068,21 +4345,40 @@ def _install_reference_snapshot(
     selected_ids = _selected_reference_ids(source, getattr(args, "select", None))
     selected_asset_ids = _reference_asset_ids(source, selected_ids)
 
-    creative_root = project_root / ".creative-craft"
     suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    snapshot_parent = creative_root / "reference-snapshots"
-    staging = snapshot_parent / f".{reference_pack_id}.staging-{suffix}"
-    snapshot_path = snapshot_parent / reference_pack_id
-    binding_path = (
-        creative_root / "reference-bindings" / f"{reference_pack_id}.json"
+    staging = _require_safe_project_write_path(
+        project_root,
+        f".creative-craft/reference-snapshots/.{reference_pack_id}.staging-{suffix}",
+        label="reference staging path",
+    )
+    snapshot_path = _require_safe_project_write_path(
+        project_root,
+        f".creative-craft/reference-snapshots/{reference_pack_id}",
+        label="reference snapshot path",
+    )
+    binding_path = _require_safe_project_write_path(
+        project_root,
+        f".creative-craft/reference-bindings/{reference_pack_id}.json",
+        label="reference binding path",
     )
     manifest_path = graph.manifest_path
     ledger_record = _project_ledger_record(graph)
     ledger_path = Path(ledger_record["path"])
     old_asset_ids: set[str] = set()
     previous_binding_id: str | None = None
+    history_path: Path | None = None
     if existing_binding is not None:
         previous_binding_id = str(existing_binding["data"].get("binding_id"))
+        history_path = _require_safe_project_write_path(
+            project_root,
+            f".creative-craft/reference-lineage/{reference_pack_id}/"
+            f"{reference_history_filename(previous_binding_id)}",
+            label="reference binding history path",
+        )
+        if history_path.exists():
+            raise ValueError(
+                f"reference binding history already exists: {history_path.relative_to(project_root)}"
+            )
         old_snapshot = validate_reference_pack(snapshot_path)
         if not old_snapshot.result.ok:
             raise ValueError(
@@ -4093,8 +4389,10 @@ def _install_reference_snapshot(
             old_snapshot, existing_binding["data"].get("selected_reference_ids", [])
         )
 
+    staging_owned = False
     try:
         _copy_reference_snapshot_files(source, staging)
+        staging_owned = True
         staged_validation = validate_reference_pack(staging)
         if not staged_validation.result.ok:
             raise ValueError(
@@ -4106,11 +4404,14 @@ def _install_reference_snapshot(
             ledger_record["data"], source, selected_asset_ids, old_asset_ids
         )
         tracked_paths = [snapshot_path, binding_path, ledger_path, manifest_path]
+        if history_path is not None:
+            tracked_paths.append(history_path)
         backup, existed = _backup_reference_state(
             project_root, reference_pack_id, tracked_paths
         )
     except Exception:
-        _remove_path(staging)
+        if staging_owned:
+            _remove_path(staging)
         raise
 
     try:
@@ -4119,6 +4420,17 @@ def _install_reference_snapshot(
         staging.replace(snapshot_path)
         write_atomic(ledger_path, _json_text(merged_ledger))
         imported_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        history: dict[str, Any] | None = None
+        if existing_binding is not None and history_path is not None:
+            archived_binding = copy.deepcopy(existing_binding["data"])
+            history = {
+                "schema_version": "creative-craft.reference-binding-history.v1",
+                "history_id": previous_binding_id,
+                "archived_at": imported_at,
+                "binding_sha256": json_content_sha256(archived_binding),
+                "binding": archived_binding,
+            }
+            write_atomic(history_path, _json_text(history))
         binding = {
             "schema_version": "creative-craft.reference-binding.v1",
             "binding_id": (
@@ -4169,6 +4481,16 @@ def _install_reference_snapshot(
                 str(item.get("path"))
             ) == ledger_path.relative_to(project_root):
                 item["sha256"] = sha256_file(ledger_path)
+        if history is not None and history_path is not None:
+            manifest["artifacts"].append(
+                {
+                    "artifact_type": "reference-binding-history",
+                    "artifact_id": str(history["history_id"]),
+                    "schema_version": "creative-craft.reference-binding-history.v1",
+                    "path": history_path.relative_to(project_root).as_posix(),
+                    "sha256": sha256_file(history_path),
+                }
+            )
         manifest["artifacts"].extend(
             [
                 {
@@ -4199,14 +4521,11 @@ def _install_reference_snapshot(
     except Exception:
         _remove_path(staging)
         _restore_brand_state(project_root, backup, existed)
+        _cleanup_rolled_back_operation(project_root, backup, existed)
         raise
 
     if not retain_backup:
-        _remove_path(backup)
-        parent = backup.parent
-        while parent != creative_root and parent.is_dir() and not any(parent.iterdir()):
-            parent.rmdir()
-            parent = parent.parent
+        _discard_operation_backup(project_root, backup)
     return backup
 
 
@@ -4557,6 +4876,12 @@ def build_parser() -> argparse.ArgumentParser:
         "self-test", help="run repository or installed-runtime validation and compiler smoke tests"
     )
     self_test_parser.add_argument("--root")
+    self_test_parser.add_argument(
+        "--scope",
+        choices=["auto", "repository", "runtime"],
+        default="auto",
+        help="force repository or leaf-runtime validation; default auto-detects the checkout",
+    )
     self_test_parser.add_argument("--json", action="store_true")
     self_test_parser.set_defaults(func=cmd_self_test)
 

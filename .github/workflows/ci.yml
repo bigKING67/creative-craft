@@ -68,6 +68,15 @@ jobs:
         with:
           node-version: "24"
       - run: python3 scripts/check_package.py
+      - name: Exact package runtime smoke
+        shell: bash
+        run: |
+          package_dir="${RUNNER_TEMP}/creative-craft-package"
+          mkdir -p "$package_dir"
+          package_name="$(npm pack --silent --pack-destination "$package_dir")"
+          python3 scripts/package_smoke.py \
+            --package "$package_dir/$package_name" \
+            --json
 
   secrets-scan:
     name: Gitleaks

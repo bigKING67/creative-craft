@@ -2,6 +2,34 @@
 
 All notable changes are documented here.
 
+## 0.2.4 — 2026-08-04
+
+Reference evidence and filesystem hardening release:
+
+- reject symlinks and project-root escapes across Brand and Reference staging,
+  snapshot, binding, lineage, and retained-backup write destinations;
+- remove failed-operation backups and newly created empty directories after a
+  successful rollback, restoring the exact pre-operation project tree;
+- require every source in a `reviewed` Reference Pack to use a non-placeholder
+  URI plus a local, symlink-free source snapshot whose SHA-256 matches;
+- add `creative-craft.reference-binding-history.v1` and register an immutable,
+  content-bound predecessor artifact for every successful Reference update;
+- resolve the complete predecessor chain during project validation and reject
+  fictional, cyclic, cross-project, cross-pack, or orphan lineage records;
+- reject new bindings and updates from `superseded` Reference Packs while
+  preserving already-bound snapshots as historical evidence with a warning;
+- expand installed leaf-runtime smoke through seed, reviewed source validation,
+  bind, update, project validation, and exact-tree rollback;
+- safely unpack the exact generated `.tgz` in CI and release builds, then repeat
+  leaf self-test plus
+  Reference bind, update, validation, and exact-tree rollback against its
+  packaged runtime;
+- normalize public release command receipts so local user and workspace paths
+  are not written into `release-validation.json`.
+
+This release remains GitHub-only, contains no private brand/reference content,
+does not call provider networks, and does not claim real Creative Golden Evals.
+
 ## 0.2.3 — 2026-08-04
 
 Reference intelligence portability release:
@@ -24,7 +52,7 @@ Reference intelligence portability release:
   selection, rights, update-isolation, and rollback regression coverage.
 
 This release intentionally does not implement Partner/co-brand authority,
-contain Groland or other private reference data, publish to npm, call provider
+contain company-specific private reference data, publish to npm, call provider
 networks, or claim real Creative Golden Evals.
 
 ## 0.2.2 — 2026-08-04

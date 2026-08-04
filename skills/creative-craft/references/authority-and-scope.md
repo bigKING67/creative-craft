@@ -34,7 +34,10 @@ their own axis; they never override identity, rights, or a preservation contract
 Every reference entity must remain non-authoritative. It may inform principles,
 but cannot redefine identity, product facts, claims, exact copy, rights, product
 geometry, or primary visual/verbal authority. Public visibility does not grant
-generation-input rights.
+generation-input rights. `reviewed` Reference evidence must use a copied source
+snapshot and verified SHA-256; a URI, citation label, or Pack status alone is not
+evidence content. Already-bound superseded snapshots may remain historical, but
+new bindings and updates must use a current Pack.
 
 ## Canonical project authority
 

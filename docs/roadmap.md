@@ -59,6 +59,20 @@ Implemented without weakening Primary Brand authority:
 Partner/co-brand federation remains intentionally unimplemented until a real
 joint-authority workflow supplies concrete requirements and evidence.
 
+## 0.2.4 — reference evidence and filesystem hardening
+
+Implemented before the `0.3` Golden Eval milestone:
+
+- symlink-safe, project-contained Brand and Reference write destinations;
+- exact-tree rollback cleanup for failed snapshot operations;
+- copied and digest-verified source snapshots for reviewed Reference Packs;
+- registered immutable Reference Binding history with complete chain validation;
+- explicit superseded-pack behavior for new and historical bindings;
+- installed leaf-runtime bind, update, validation, and rollback E2E coverage;
+- safe extraction and the same Reference lifecycle E2E against the exact release
+  `.tgz` rather than only the source checkout;
+- public release receipts with normalized rather than local absolute paths.
+
 ## 0.3 — real creative evals
 
 Planned:

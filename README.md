@@ -22,12 +22,14 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.3` separates portable brand authority from portable creative
-reference intelligence without putting any company's private knowledge into
-this public repository. A project may bind zero or one Primary Brand Pack and
-zero or many Reference Packs as immutable, digest-bound snapshots. Changing
-employer or client means changing the private packs; the Creative Craft method
-and historical projects stay clean.
+Version `0.2.4` hardens portable brand authority and creative reference
+intelligence without putting any company's private knowledge into this public
+repository. A project may bind zero or one Primary Brand Pack and zero or many
+Reference Packs as immutable, digest-bound snapshots. Reviewed reference
+sources require copied, digest-verified evidence, and Reference Binding updates
+preserve a resolvable immutable history. Changing employer or client means
+changing the private packs; the Creative Craft method and historical projects
+stay clean.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -194,12 +196,16 @@ copy, rights, product geometry, or primary visual/verbal authority.
 
 A project can bind multiple Reference Packs. Each binding copies a complete
 snapshot to `.creative-craft/reference-snapshots/<pack-id>/`, records selection
-and source lineage under `.creative-craft/reference-bindings/`, and merges only
-assets used by the selected reference entities. `update-reference-snapshot`
-updates one pack without rewriting the Primary Brand Pack or other Reference
-Packs. Draft references produce an exploratory warning but do not block a Job
-from becoming `ready`; revoked references fail validation. Public visibility is
-never treated as generation-input permission.
+under `.creative-craft/reference-bindings/`, archives immutable predecessors
+under `.creative-craft/reference-lineage/<pack-id>/`, and merges only assets
+used by the selected reference entities. A `reviewed` Pack must copy every
+registered source snapshot and verify its SHA-256; a URI or evidence label alone
+is insufficient. `update-reference-snapshot` updates one pack without rewriting
+the Primary Brand Pack or other Reference Packs. Draft references produce an
+exploratory warning but do not block a Job from becoming `ready`; revoked packs
+fail validation, and superseded packs remain readable in historical projects
+but cannot be used for a new binding or update. Public visibility is never
+treated as generation-input permission.
 
 ## Versioned artifacts
 
@@ -222,6 +228,7 @@ The current contracts are:
 - `creative-craft.brand-binding.v1`
 - `creative-craft.reference-pack.v1`
 - `creative-craft.reference-binding.v1`
+- `creative-craft.reference-binding-history.v1`
 
 The v1 job, evaluation, and delivery contracts remain readable for migration,
 but new projects seed v2 contracts. Job v2 can declare only `draft`, `ready`,
@@ -278,17 +285,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.3
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.3
+pi install git:github.com/bigKING67/creative-craft@v0.2.4
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.4
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.3`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.4`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.3 \
+  --ref v0.2.4 \
   --path skills/creative-craft
 ```
 
@@ -328,7 +335,9 @@ python3 skills/creative-craft/scripts/creative_craft.py self-test
 
 The same command automatically selects installed-runtime scope when invoked
 from a leaf Pi, Codex, or generic Skill installation. Use `--json` to record the
-selected `scope` and separate repository/runtime validity.
+selected `scope` and separate repository/runtime validity. Release verification
+uses `self-test --scope runtime --json` to test the exact leaf inside the `.tgz`
+even though the surrounding archive also contains repository metadata.
 
 Inspect the CLI:
 
@@ -381,7 +390,9 @@ python3 skills/creative-craft/scripts/creative_craft.py update-brand-snapshot \
 ```
 
 Initialize a separate private Reference Skill, add evidence and entities under
-review, then bind any number of Reference Packs to an existing project:
+review, save every reviewed source under the private Skill, set its
+`snapshot_path` and SHA-256 in `source_references`, then bind any number of
+Reference Packs to an existing project:
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py init-reference-pack \
@@ -389,6 +400,26 @@ python3 skills/creative-craft/scripts/creative_craft.py init-reference-pack \
   --pack-id acme-creative-references \
   --name "Acme Creative References" \
   --owner creative-operations
+```
+
+Before setting the Pack to `reviewed`, capture each source inside the private
+Reference Skill and register its real digest:
+
+```json
+{
+  "source_id": "source-example",
+  "authority": "official",
+  "uri": "<original-source-uri>",
+  "captured_at": "2026-08-04T00:00:00Z",
+  "snapshot_path": "sources/source-example.md",
+  "sha256": "<sha256-of-sources/source-example.md>",
+  "notes": "Reviewed source snapshot."
+}
+```
+
+Then validate and bind:
+
+```bash
 
 python3 skills/creative-craft/scripts/creative_craft.py validate-reference-pack \
   --root /path/to/acme-reference-library/skills/acme-creative-references
@@ -485,7 +516,7 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-`0.2.3` proves the planning-to-evidence graph, portable Primary Brand authority,
+`0.2.4` proves the planning-to-evidence graph, portable Primary Brand authority,
 and a multi-pack non-authoritative reference layer through synthetic lifecycle
 fixtures. It still does not claim that unobserved image or video output is
 production quality, that real Golden Evals are complete, or that provider
@@ -498,6 +529,9 @@ Maintainers build one release candidate from a clean commit after installing
 python3 scripts/build_release.py
 ```
 
-The ignored `dist/release/` directory contains the `.tgz`, its SHA-256 file,
-and a command-bound validation summary for the GitHub Release. It is not an npm
+After `npm pack`, the builder validates every archive member before extraction,
+rejects path escapes and links, then runs the leaf self-test plus Reference
+bind/update/validation/rollback E2E against the exact generated `.tgz`. The
+ignored `dist/release/` directory contains that `.tgz`, its SHA-256 file, and a
+command-bound validation summary for the GitHub Release. It is not an npm
 publication workflow.

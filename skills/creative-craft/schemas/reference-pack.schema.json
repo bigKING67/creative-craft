@@ -192,6 +192,7 @@
           },
           "uri": {"type": "string", "minLength": 1},
           "captured_at": {"type": ["string", "null"]},
+          "snapshot_path": {"type": ["string", "null"]},
           "sha256": {
             "type": ["string", "null"],
             "pattern": "^[a-f0-9]{64}$"

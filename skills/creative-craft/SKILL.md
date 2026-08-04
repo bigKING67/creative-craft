@@ -166,7 +166,10 @@ project-manifest.v1
 - Reference Packs contain evidence-classed observations and transferable
   principles only. Keep them separate from the Primary Brand Pack, bind only
   selected entities, copy immutable snapshots, and update one pack without
-  changing any other pack or brand authority.
+  changing any other pack or brand authority. A `reviewed` source must resolve
+  to a copied, symlink-free `snapshot_path` whose actual SHA-256 matches the
+  manifest. Preserve every superseded Binding as registered immutable lineage;
+  do not create a new binding or update from a superseded Pack.
 
 Useful local commands:
 

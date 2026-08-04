@@ -124,18 +124,23 @@ Agency、Creator、Campaign、产品、视觉系统、影片、摄影、包装�
 事实、Claims、Exact Copy、权利、产品结构或主要视觉/语言权威。一个项目可以绑定
 多个 Reference Pack：完整快照分别复制到
 `.creative-craft/reference-snapshots/<pack-id>/`，Binding 分别写入
-`.creative-craft/reference-bindings/`，只有被选 Entity 的素材会合并进项目 Ledger。
-更新其中一个 Pack 不会改写 Primary Brand Pack 或其他 Reference Pack。
+`.creative-craft/reference-bindings/`，旧 Binding 作为不可变历史写入
+`.creative-craft/reference-lineage/<pack-id>/`；只有被选 Entity 的素材会合并进
+项目 Ledger。`reviewed` Pack 的每个 Source 必须保存本地 Source Snapshot，并验证
+SHA-256；只有 URI 或证据标签不算内容绑定。更新其中一个 Pack 不会改写 Primary
+Brand Pack 或其他 Reference Pack。
 
 `draft` Reference Pack 只产生“探索性证据”警告，不阻止 Job 进入 `ready`；
-`revoked` Pack 会使校验失败。公开可见也不等于允许把素材作为生成输入。
+`revoked` Pack 会使校验失败；已经绑定的 `superseded` Snapshot 仍可作为历史证据
+读取，但不能用于新绑定或更新。公开可见也不等于允许把素材作为生成输入。
 
 ## 当前版本
 
-`0.2.3` 在公共仓库不包含任何公司私有知识的前提下，明确拆分可移植的 Primary
+`0.2.4` 在公共仓库不包含任何公司私有知识的前提下，进一步加固可移植的 Primary
 Brand Pack 与多 Reference Pack：前者回答“我们是谁”，后者回答“我们向谁学习
-什么”，Project 回答“我们现在做什么”。换公司或客户时替换私有 Pack；Creative
-Craft 通用方法和历史项目不会被污染。
+什么”，Project 回答“我们现在做什么”。已审阅来源现在绑定本地快照和 SHA-256，
+Reference Binding 更新保留可解析的不可变历史，所有写入目标拒绝 symlink 和项目
+越界。换公司或客户时替换私有 Pack；Creative Craft 通用方法和历史项目不会被污染。
 
 `0.2.0` 已建立：
 
@@ -162,18 +167,18 @@ GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package disco
 Pi 是 Tier 1 Host：
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.3
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.3
+pi install git:github.com/bigKING67/creative-craft@v0.2.4
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.4
 ```
 
 Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
-`bigKING67/creative-craft` 的 `v0.2.3` tag 安装
+`bigKING67/creative-craft` 的 `v0.2.4` tag 安装
 `skills/creative-craft`，也可以执行：
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.3 \
+  --ref v0.2.4 \
   --path skills/creative-craft
 ```
 
@@ -187,6 +192,11 @@ python3 scripts/install_skill.py --target /path/to/host/skills
 `--force` 不会先删除旧版本：installer 会在目标文件系统 staging、自检、记录
 `INSTALL_PROVENANCE.json`，再原子替换并保留旧安装备份。Claude/Cursor 当前仅有
 薄适配说明，不属于 Tier 1 运行态验证结论。
+
+维护者从 clean commit 构建候选包时，Release Builder 会先检查 `.tgz` 的全部成员，
+拒绝路径越界、symlink 和 hardlink，再对这个实际生成的包运行叶子 Skill 自检以及
+Reference bind、update、项目校验和精确树回滚 E2E。该证据只证明包内 runtime，
+不等于已经发布到 npm 或完成所有 Agent Host 的真机验证。
 
 ## 开始使用
 
@@ -209,7 +219,9 @@ python3 skills/creative-craft/scripts/creative_craft.py self-test
 
 同一命令从 Pi、Codex 或通用目录式叶子 Skill 中执行时，会自动切换到 runtime
 scope，不再要求仓库根目录的 README、LICENSE、plugin metadata 和 source lock。
-使用 `--json` 可以记录实际 scope 以及 repository/runtime validity。
+使用 `--json` 可以记录实际 scope 以及 repository/runtime validity。Release 校验
+使用 `self-test --scope runtime --json`，确保即使 `.tgz` 外层含有仓库元数据，
+实际被验证的仍是包内叶子 Skill runtime。
 
 初始化项目：
 
@@ -253,8 +265,9 @@ python3 skills/creative-craft/scripts/creative_craft.py update-brand-snapshot \
   --imported-by <identity>
 ```
 
-在另一个私有仓库中初始化 Reference Skill，录入经过证据分级的 Entity 后，可将
-任意数量的参考库绑定到已有项目：
+在另一个私有仓库中初始化 Reference Skill，录入经过证据分级的 Entity，并把每个
+已审阅来源保存为本地 Source Snapshot，在 `source_references` 中登记
+`snapshot_path` 与 SHA-256 后，可将任意数量的参考库绑定到已有项目：
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py init-reference-pack \
@@ -262,6 +275,25 @@ python3 skills/creative-craft/scripts/creative_craft.py init-reference-pack \
   --pack-id acme-creative-references \
   --name "Acme Creative References" \
   --owner creative-operations
+```
+
+将 Pack 改为 `reviewed` 前，先把每个来源保存到私有 Reference Skill，并登记真实摘要：
+
+```json
+{
+  "source_id": "source-example",
+  "authority": "official",
+  "uri": "<原始来源 URI>",
+  "captured_at": "2026-08-04T00:00:00Z",
+  "snapshot_path": "sources/source-example.md",
+  "sha256": "<sources/source-example.md 的 SHA-256>",
+  "notes": "已审阅的来源快照。"
+}
+```
+
+然后再校验和绑定：
+
+```bash
 
 python3 skills/creative-craft/scripts/creative_craft.py validate-reference-pack \
   --root /path/to/acme-reference-library/skills/acme-creative-references

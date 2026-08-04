@@ -4,13 +4,280 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_json(path: Path, data: dict[str, object]) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def tree_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        kind = "symlink" if path.is_symlink() else "dir" if path.is_dir() else "file"
+        digest.update(f"{kind}\0{relative}\0".encode())
+        if path.is_file() and not path.is_symlink():
+            digest.update(sha256_file(path).encode())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def run_installed_cli(installed: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(installed / "scripts/creative_craft.py"), *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def populate_reviewed_reference_pack(reference_root: Path, version: str) -> None:
+    manifest_path = reference_root / "reference-pack.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source_path = reference_root / "sources/host-smoke.md"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        f"Synthetic installed-runtime evidence for Reference Pack {version}.\n",
+        encoding="utf-8",
+    )
+    manifest.update(
+        {
+            "version": version,
+            "status": "reviewed",
+            "reviewed_at": "2026-08-04T00:00:00Z",
+            "review_after": "2027-08-04T00:00:00Z",
+            "source_references": [
+                {
+                    "source_id": "source-host-smoke",
+                    "authority": "research",
+                    "uri": "urn:creative-craft:host-smoke-source",
+                    "captured_at": "2026-08-04T00:00:00Z",
+                    "snapshot_path": "sources/host-smoke.md",
+                    "sha256": sha256_file(source_path),
+                    "notes": "Synthetic installed-runtime fixture only.",
+                }
+            ],
+            "entities": [
+                {
+                    "reference_id": "reference-host-smoke",
+                    "entity_type": "other",
+                    "name": "Synthetic Host Smoke Reference",
+                    "relationship": "reference",
+                    "summary": "Synthetic installed-runtime fixture only.",
+                    "source_refs": ["source-host-smoke"],
+                    "observations": [
+                        {
+                            "observation_id": "observation-host-smoke",
+                            "dimension": "runtime-contract",
+                            "evidence_state": "OBSERVED",
+                            "statement": f"Installed Reference Pack version {version} is present.",
+                            "evidence_refs": ["source-host-smoke"],
+                        }
+                    ],
+                    "transferable_principles": [
+                        {
+                            "principle_id": "principle-host-smoke",
+                            "derived_from": ["observation-host-smoke"],
+                            "statement": "Use only the abstract runtime contract.",
+                            "application_scope": ["host-smoke"],
+                            "adaptation_required": True,
+                            "must_preserve_primary_brand": ["identity", "claims", "rights"],
+                        }
+                    ],
+                    "non_transferable_elements": ["fixture identity"],
+                    "applicable_to": ["host-smoke"],
+                    "reference_roles": ["principle"],
+                    "rights_policy": "principle_only",
+                    "prohibited_use": ["identity imitation"],
+                    "asset_refs": [],
+                    "may_override_primary_brand": False,
+                }
+            ],
+        }
+    )
+    write_json(manifest_path, manifest)
+
+
+def command_error(completed: subprocess.CompletedProcess[str]) -> str:
+    return completed.stderr.strip() or completed.stdout.strip() or "no command output"
+
+
+def run_reference_runtime_e2e(
+    installed: Path,
+    workspace: Path,
+    *,
+    check_prefix: str = "installed",
+) -> tuple[list[str], list[str]]:
+    """Exercise the portable Reference Pack runtime from one installed skill leaf."""
+    checks: list[str] = []
+    errors: list[str] = []
+    reference_root = workspace / "acme-creative-references"
+    reference_init = run_installed_cli(
+        installed,
+        "init-reference-pack",
+        "--target",
+        str(reference_root),
+        "--pack-id",
+        "acme-creative-references",
+        "--name",
+        "Acme Creative References",
+        "--owner",
+        "host-smoke",
+    )
+    reference_validation = run_installed_cli(
+        installed,
+        "validate-reference-pack",
+        "--root",
+        str(reference_root),
+        "--json",
+    )
+    if reference_init.returncode != 0 or reference_validation.returncode != 0:
+        failure = reference_init if reference_init.returncode != 0 else reference_validation
+        errors.append(
+            f"{check_prefix} runtime Reference Pack smoke failed: "
+            + command_error(failure)
+        )
+        return checks, errors
+
+    checks.append(f"{check_prefix}-reference-pack-runtime")
+    populate_reviewed_reference_pack(reference_root, "0.1.0")
+    reviewed_validation = run_installed_cli(
+        installed,
+        "validate-reference-pack",
+        "--root",
+        str(reference_root),
+        "--json",
+    )
+    project_root = workspace / "reference-project"
+    seed_project = run_installed_cli(
+        installed,
+        "seed",
+        "--target",
+        str(project_root),
+    )
+    bind_reference = run_installed_cli(
+        installed,
+        "bind-reference-pack",
+        "--target",
+        str(project_root),
+        "--reference-pack",
+        str(reference_root),
+        "--reference-source-uri",
+        "https://git.invalid/acme-creative-references.git",
+        "--reference-source-ref",
+        "v0.1.0",
+        "--reference-source-commit",
+        "1" * 40,
+        "--imported-by",
+        "host-smoke",
+        "--reason",
+        "Installed runtime initial binding",
+    )
+    validate_bound = run_installed_cli(
+        installed,
+        "validate-project",
+        "--root",
+        str(project_root),
+        "--json",
+    )
+
+    update_root = workspace / "acme-creative-references-v2"
+    if reference_root.is_dir():
+        shutil.copytree(reference_root, update_root)
+        populate_reviewed_reference_pack(update_root, "0.2.0")
+    update_reference = run_installed_cli(
+        installed,
+        "update-reference-snapshot",
+        "--target",
+        str(project_root),
+        "--reference-pack",
+        str(update_root),
+        "--reference-source-uri",
+        "https://git.invalid/acme-creative-references.git",
+        "--reference-source-ref",
+        "v0.2.0",
+        "--reference-source-commit",
+        "2" * 40,
+        "--imported-by",
+        "host-smoke",
+        "--reason",
+        "Installed runtime snapshot update",
+    )
+    validate_updated = run_installed_cli(
+        installed,
+        "validate-project",
+        "--root",
+        str(project_root),
+        "--json",
+    )
+    e2e_commands = (
+        reviewed_validation,
+        seed_project,
+        bind_reference,
+        validate_bound,
+        update_reference,
+        validate_updated,
+    )
+    if any(command.returncode != 0 for command in e2e_commands):
+        failure = next(command for command in e2e_commands if command.returncode != 0)
+        errors.append(
+            f"{check_prefix} runtime Reference Pack bind/update E2E failed: "
+            + command_error(failure)
+        )
+        return checks, errors
+
+    checks.append(f"{check_prefix}-reference-bind-update-e2e")
+    rollback_root = workspace / "acme-creative-references-v3"
+    shutil.copytree(update_root, rollback_root)
+    populate_reviewed_reference_pack(rollback_root, "0.3.0")
+    manifest_tmp = project_root / ".creative-craft/project-manifest.json.tmp"
+    manifest_tmp.mkdir()
+    before_rollback = tree_fingerprint(project_root)
+    failed_update = run_installed_cli(
+        installed,
+        "update-reference-snapshot",
+        "--target",
+        str(project_root),
+        "--reference-pack",
+        str(rollback_root),
+        "--imported-by",
+        "host-smoke",
+        "--reason",
+        "Synthetic post-write rollback",
+    )
+    after_rollback = tree_fingerprint(project_root)
+    validate_rollback = run_installed_cli(
+        installed,
+        "validate-project",
+        "--root",
+        str(project_root),
+        "--json",
+    )
+    if (
+        failed_update.returncode == 0
+        or before_rollback != after_rollback
+        or validate_rollback.returncode != 0
+    ):
+        errors.append(
+            f"{check_prefix} runtime Reference Pack rollback did not restore "
+            "the exact project tree"
+        )
+    else:
+        checks.append(f"{check_prefix}-reference-rollback-e2e")
+    return checks, errors
 
 
 def main() -> int:
@@ -143,48 +410,12 @@ def main() -> int:
                 )
             else:
                 checks.append("installed-brand-pack-runtime")
-            reference_root = Path(directory) / "acme-creative-references"
-            reference_init = subprocess.run(
-                [
-                    sys.executable,
-                    str(installed / "scripts/creative_craft.py"),
-                    "init-reference-pack",
-                    "--target",
-                    str(reference_root),
-                    "--pack-id",
-                    "acme-creative-references",
-                    "--name",
-                    "Acme Creative References",
-                    "--owner",
-                    "host-smoke",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
+            reference_checks, reference_errors = run_reference_runtime_e2e(
+                installed,
+                Path(directory),
             )
-            reference_validation = subprocess.run(
-                [
-                    sys.executable,
-                    str(installed / "scripts/creative_craft.py"),
-                    "validate-reference-pack",
-                    "--root",
-                    str(reference_root),
-                    "--json",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if reference_init.returncode != 0 or reference_validation.returncode != 0:
-                errors.append(
-                    "installed runtime Reference Pack smoke failed: "
-                    + (
-                        reference_init.stderr.strip()
-                        or reference_validation.stdout.strip()
-                    )
-                )
-            else:
-                checks.append("installed-reference-pack-runtime")
+            checks.extend(reference_checks)
+            errors.extend(reference_errors)
 
     payload = {"valid": not errors, "checks": checks, "errors": errors}
     if args.json:

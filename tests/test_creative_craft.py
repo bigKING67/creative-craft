@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,6 +29,24 @@ installer = importlib.util.module_from_spec(INSTALLER_SPEC)
 sys.modules[INSTALLER_SPEC.name] = installer
 INSTALLER_SPEC.loader.exec_module(installer)
 
+BUILD_RELEASE_PATH = ROOT / "scripts" / "build_release.py"
+BUILD_RELEASE_SPEC = importlib.util.spec_from_file_location(
+    "creative_craft_build_release", BUILD_RELEASE_PATH
+)
+assert BUILD_RELEASE_SPEC and BUILD_RELEASE_SPEC.loader
+build_release = importlib.util.module_from_spec(BUILD_RELEASE_SPEC)
+sys.modules[BUILD_RELEASE_SPEC.name] = build_release
+BUILD_RELEASE_SPEC.loader.exec_module(build_release)
+
+PACKAGE_SMOKE_PATH = ROOT / "scripts" / "package_smoke.py"
+PACKAGE_SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "creative_craft_package_smoke", PACKAGE_SMOKE_PATH
+)
+assert PACKAGE_SMOKE_SPEC and PACKAGE_SMOKE_SPEC.loader
+package_smoke = importlib.util.module_from_spec(PACKAGE_SMOKE_SPEC)
+sys.modules[PACKAGE_SMOKE_SPEC.name] = package_smoke
+PACKAGE_SMOKE_SPEC.loader.exec_module(package_smoke)
+
 
 def load(rel: str) -> dict:
     return json.loads((ROOT / rel).read_text(encoding="utf-8"))
@@ -35,6 +54,19 @@ def load(rel: str) -> dict:
 
 def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def tree_snapshot(root: Path) -> dict[str, tuple[str, bytes | str | None]]:
+    snapshot: dict[str, tuple[str, bytes | str | None]] = {}
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            snapshot[relative] = ("symlink", str(path.readlink()))
+        elif path.is_dir():
+            snapshot[relative] = ("dir", None)
+        else:
+            snapshot[relative] = ("file", path.read_bytes())
+    return snapshot
 
 
 def refresh_manifest(root: Path) -> dict:
@@ -172,6 +204,7 @@ def add_reference_entity(
         "authority": "research",
         "uri": f"https://reference.invalid/{reference_id}",
         "captured_at": "2026-08-04T00:00:00Z",
+        "snapshot_path": None,
         "sha256": None,
         "notes": "Synthetic test source only.",
     })
@@ -216,6 +249,20 @@ def add_reference_entity(
     return manifest
 
 
+def bind_reference_source_snapshot(skill_root: Path, manifest: dict, index: int = 0) -> dict:
+    source = manifest["source_references"][index]
+    source_path = skill_root / "sources" / f"{source['source_id']}.md"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        f"Synthetic content-bound evidence for {source['source_id']}.\n",
+        encoding="utf-8",
+    )
+    source["snapshot_path"] = source_path.relative_to(skill_root).as_posix()
+    source["sha256"] = cc.sha256_file(source_path)
+    write_json(skill_root / "reference-pack.json", manifest)
+    return manifest
+
+
 def bind_reference_pack(
     project: Path,
     skill_root: Path,
@@ -249,6 +296,20 @@ class DoctorTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(0, cc.cmd_self_test(args))
         self.assertIn("PASS package self-test", stdout.getvalue())
+
+    def test_checkout_self_test_can_force_leaf_runtime_scope(self) -> None:
+        args = type("Args", (), {
+            "root": str(ROOT / "skills/creative-craft"),
+            "scope": "runtime",
+            "json": True,
+        })()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, cc.cmd_self_test(args))
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual("runtime", payload["scope"])
+        self.assertIsNone(payload["repository_valid"])
+        self.assertTrue(payload["runtime_valid"])
 
     def test_leaf_install_self_test_uses_runtime_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -291,6 +352,84 @@ class DoctorTests(unittest.TestCase):
             result = cc.doctor(copied)
             self.assertFalse(result.ok)
             self.assertTrue(any(cc.IMAGE_PROFILE_ID in item for item in result.errors))
+
+
+class ReleaseReceiptTests(unittest.TestCase):
+    def test_release_receipt_argv_redacts_local_absolute_paths(self) -> None:
+        outside = Path.home() / "private-workspace" / "artifact.tgz"
+        normalized = build_release.normalize_receipt_argv(
+            [
+                sys.executable,
+                str(ROOT / "scripts/validate.py"),
+                str(outside),
+                "--json",
+            ]
+        )
+        self.assertEqual("<python>", normalized[0])
+        self.assertEqual("<repo>/scripts/validate.py", normalized[1])
+        self.assertEqual("<absolute>/artifact.tgz", normalized[2])
+        self.assertEqual("--json", normalized[3])
+        serialized = json.dumps(normalized)
+        self.assertNotIn(str(Path.home()), serialized)
+        self.assertNotIn(str(ROOT), serialized)
+
+
+class PackageSmokeTests(unittest.TestCase):
+    @staticmethod
+    def write_tar_member(
+        archive: tarfile.TarFile,
+        name: str,
+        payload: bytes = b"fixture\n",
+        *,
+        member_type: bytes = tarfile.REGTYPE,
+        linkname: str = "",
+    ) -> None:
+        member = tarfile.TarInfo(name)
+        member.type = member_type
+        member.linkname = linkname
+        if member_type == tarfile.REGTYPE:
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        else:
+            archive.addfile(member)
+
+    def test_safe_extract_package_accepts_regular_package_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "fixture.tgz"
+            with tarfile.open(package, "w:gz") as archive:
+                self.write_tar_member(
+                    archive,
+                    "package/skills/creative-craft/SKILL.md",
+                )
+            destination = root / "extracted"
+            package_smoke.safe_extract_package(package, destination)
+            self.assertEqual(
+                b"fixture\n",
+                (destination / "package/skills/creative-craft/SKILL.md").read_bytes(),
+            )
+
+    def test_safe_extract_package_rejects_escape_and_link_members(self) -> None:
+        cases = (
+            ("../escape", tarfile.REGTYPE, ""),
+            ("/absolute", tarfile.REGTYPE, ""),
+            ("package/link", tarfile.SYMTYPE, "../../escape"),
+            ("package/hardlink", tarfile.LNKTYPE, "package/target"),
+        )
+        for name, member_type, linkname in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package = root / "unsafe.tgz"
+                with tarfile.open(package, "w:gz") as archive:
+                    self.write_tar_member(
+                        archive,
+                        name,
+                        member_type=member_type,
+                        linkname=linkname,
+                    )
+                with self.assertRaisesRegex(ValueError, "unsafe|links are not allowed"):
+                    package_smoke.safe_extract_package(package, root / "extracted")
+                self.assertFalse((root / "escape").exists())
 
 
 class ImageJobTests(unittest.TestCase):
@@ -740,6 +879,7 @@ class BrandPackTests(unittest.TestCase):
             binding_path = project / ".creative-craft/brand-binding.json"
             before_binding = binding_path.read_bytes()
             before_brand = (project / "BRAND.md").read_bytes()
+            before_tree = tree_snapshot(project)
             original_validate = cc.validate_project
             calls = 0
 
@@ -769,7 +909,41 @@ class BrandPackTests(unittest.TestCase):
                 self.assertEqual(1, cc.cmd_update_brand_snapshot(args))
             self.assertEqual(before_binding, binding_path.read_bytes())
             self.assertEqual(before_brand, (project / "BRAND.md").read_bytes())
+            self.assertEqual(before_tree, tree_snapshot(project))
             self.assertTrue(original_validate(project).result.ok)
+
+    def test_brand_backup_destination_symlink_is_rejected_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = init_brand_pack(root / "first")
+            approve_brand_pack(first)
+            project = self.copy_example(directory)
+            bind_brand_pack(project, first)
+            second = root / "second/acme-brand"
+            shutil.copytree(first, second)
+            manifest_path = second / "brand-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = "0.2.0"
+            write_json(manifest_path, manifest)
+            outside = root / "outside-brand-backups"
+            outside.mkdir()
+            backup_link = project / ".creative-craft/brand-backups"
+            backup_link.symlink_to(outside, target_is_directory=True)
+            args = type("Args", (), {
+                "target": str(project),
+                "brand_pack": str(second),
+                "reason": "Reject destination symlink",
+                "brand_source_uri": None,
+                "brand_source_ref": None,
+                "brand_source_commit": None,
+                "imported_by": "fixture",
+            })()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(1, cc.cmd_update_brand_snapshot(args))
+            self.assertIn("must not use a symlink", stderr.getvalue())
+            self.assertEqual([], list(outside.iterdir()))
+            self.assertTrue(cc.validate_project(project).result.ok)
 
 
 class ReferencePackTests(unittest.TestCase):
@@ -777,6 +951,47 @@ class ReferencePackTests(unittest.TestCase):
         target = Path(directory) / "project"
         shutil.copytree(ROOT / "examples/premium-haircare-launch", target)
         return target
+
+    def test_binding_content_digest_is_key_order_independent(self) -> None:
+        binding = load("skills/creative-craft/templates/reference-binding.json")
+        reordered = dict(reversed(list(binding.items())))
+        self.assertEqual(
+            cc.json_content_sha256(binding),
+            cc.json_content_sha256(reordered),
+        )
+
+    def test_reference_staging_collision_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root / "source")
+            add_reference_entity(skill_root, "reference-a")
+            source = cc.validate_reference_pack(skill_root)
+            staging = root / "existing-staging"
+            staging.mkdir()
+            marker = staging / "owner-data.txt"
+            marker.write_text("preserve\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "staging path already exists"):
+                cc._copy_reference_snapshot_files(source, staging)
+            self.assertEqual("preserve\n", marker.read_text(encoding="utf-8"))
+
+    def test_failed_backup_copy_removes_only_operation_residue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            root.mkdir()
+            tracked = root / "tracked.json"
+            tracked.write_text("{}\n", encoding="utf-8")
+            before = tree_snapshot(root)
+            with (
+                mock.patch.object(cc.shutil, "copy2", side_effect=OSError("copy failed")),
+                self.assertRaisesRegex(OSError, "copy failed"),
+            ):
+                cc._backup_project_state(
+                    root,
+                    ".creative-craft/reference-backups/reference-a/fixed",
+                    [tracked],
+                    label="reference backup path",
+                )
+            self.assertEqual(before, tree_snapshot(root))
 
     def test_init_reference_pack_is_empty_draft_and_non_authoritative(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -858,6 +1073,39 @@ class ReferencePackTests(unittest.TestCase):
             self.assertFalse(graph.result.ok)
             self.assertTrue(any("requires reviewed_at" in item for item in graph.result.errors))
             self.assertTrue(any("cannot contain UNVERIFIED" in item
+                                for item in graph.result.errors))
+
+    def test_reviewed_pack_requires_content_bound_source_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            manifest = add_reference_entity(skill_root, "reference-a")
+            manifest.update({
+                "status": "reviewed",
+                "reviewed_at": "2026-08-04T00:00:00Z",
+                "review_after": "2027-08-04T00:00:00Z",
+            })
+            manifest["source_references"][0]["uri"] = "TBD"
+            write_json(skill_root / "reference-pack.json", manifest)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("must not be a placeholder" in item
+                                for item in graph.result.errors))
+            self.assertTrue(any("requires a content SHA-256" in item
+                                for item in graph.result.errors))
+            self.assertTrue(any("requires snapshot_path" in item
+                                for item in graph.result.errors))
+
+            manifest["source_references"][0]["uri"] = (
+                "urn:creative-craft:reference-a-source"
+            )
+            bind_reference_source_snapshot(skill_root, manifest)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            snapshot_path = skill_root / manifest["source_references"][0]["snapshot_path"]
+            snapshot_path.write_text("drifted source evidence\n", encoding="utf-8")
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("snapshot sha256 mismatch" in item
                                 for item in graph.result.errors))
 
     def test_approved_reference_input_requires_resolved_rights(self) -> None:
@@ -947,11 +1195,65 @@ class ReferencePackTests(unittest.TestCase):
             project = self.copy_example(directory)
             with self.assertRaisesRegex(ValueError, "does not exist"):
                 bind_reference_pack(project, skill_root, ["missing-reference"])
+            bind_reference_pack(project, skill_root)
 
             manifest["status"] = "revoked"
             write_json(skill_root / "reference-pack.json", manifest)
             with self.assertRaisesRegex(ValueError, "revoked"):
                 bind_reference_pack(project, skill_root)
+
+            manifest["status"] = "superseded"
+            write_json(skill_root / "reference-pack.json", manifest)
+            with self.assertRaisesRegex(ValueError, "superseded"):
+                bind_reference_pack(project, skill_root)
+            update_args = type("Args", (), {
+                "target": str(project),
+                "reference_pack": str(skill_root),
+                "reason": "Reject superseded update source",
+                "reference_source_uri": None,
+                "reference_source_ref": None,
+                "reference_source_commit": None,
+                "imported_by": "fixture-operator",
+                "select": ["reference-a"],
+            })()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(1, cc.cmd_update_reference_snapshot(update_args))
+            self.assertIn("superseded", stderr.getvalue())
+            self.assertTrue(cc.validate_project(project).result.ok)
+
+    def test_already_bound_superseded_snapshot_remains_historical_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            add_reference_entity(skill_root, "reference-a")
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root)
+
+            snapshot_root = (
+                project / ".creative-craft/reference-snapshots/reference-fixture"
+            )
+            snapshot_manifest_path = snapshot_root / "reference-pack.json"
+            snapshot_manifest = json.loads(
+                snapshot_manifest_path.read_text(encoding="utf-8")
+            )
+            snapshot_manifest["status"] = "superseded"
+            write_json(snapshot_manifest_path, snapshot_manifest)
+
+            binding_path = (
+                project / ".creative-craft/reference-bindings/reference-fixture.json"
+            )
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["source"]["pack_sha256"] = cc.sha256_file(snapshot_manifest_path)
+            binding["snapshot"]["tree_sha256"] = cc.tree_sha256(snapshot_root)
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+
+            graph = cc.validate_project(project)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            self.assertTrue(
+                any("historical evidence" in warning for warning in graph.result.warnings)
+            )
 
     def test_snapshot_and_binding_digest_drift_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -993,6 +1295,80 @@ class ReferencePackTests(unittest.TestCase):
             self.assertFalse(graph.result.ok)
             self.assertTrue(any("tree_sha256 mismatch" in item
                                 for item in graph.result.errors))
+
+    def test_reference_binding_predecessor_must_resolve_to_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            add_reference_entity(skill_root, "reference-a")
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root)
+            binding_path = (
+                project / ".creative-craft/reference-bindings/reference-fixture.json"
+            )
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["previous_binding_id"] = "reference-binding-does-not-exist"
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("has unresolved predecessor" in item
+                                for item in graph.result.errors))
+
+    def test_multiple_reference_updates_extend_one_resolvable_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = init_reference_pack(root / "v1")
+            add_reference_entity(source, "reference-a")
+            project = self.copy_example(directory)
+            bind_reference_pack(project, source)
+            expected_history_ids: list[str] = []
+
+            for version in ("0.2.0", "0.3.0"):
+                current_binding_path = (
+                    project / ".creative-craft/reference-bindings/reference-fixture.json"
+                )
+                current_binding = json.loads(
+                    current_binding_path.read_text(encoding="utf-8")
+                )
+                expected_history_ids.append(current_binding["binding_id"])
+                updated = root / f"v{version}/reference-fixture"
+                updated.parent.mkdir()
+                shutil.copytree(source, updated)
+                manifest_path = updated / "reference-pack.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["version"] = version
+                write_json(manifest_path, manifest)
+                args = type("Args", (), {
+                    "target": str(project),
+                    "reference_pack": str(updated),
+                    "reason": f"Adopt {version}",
+                    "reference_source_uri": None,
+                    "reference_source_ref": None,
+                    "reference_source_commit": None,
+                    "imported_by": "fixture-operator",
+                    "select": ["reference-a"],
+                })()
+                with (
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    self.assertEqual(0, cc.cmd_update_reference_snapshot(args))
+                source = updated
+
+            graph = cc.validate_project(project)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            histories = {
+                artifact_id
+                for artifact_type, artifact_id in graph.records
+                if artifact_type == "reference-binding-history"
+            }
+            self.assertEqual(set(expected_history_ids), histories)
+            current_binding = json.loads(
+                (project / ".creative-craft/reference-bindings/reference-fixture.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(expected_history_ids[-1], current_binding["previous_binding_id"])
 
     def test_update_one_reference_pack_preserves_other_pack_and_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1037,6 +1413,17 @@ class ReferencePackTests(unittest.TestCase):
                 .read_text(encoding="utf-8")
             )
             self.assertEqual(old_binding["binding_id"], binding["previous_binding_id"])
+            history_path = (
+                project
+                / ".creative-craft/reference-lineage/reference-one"
+                / cc.reference_history_filename(old_binding["binding_id"])
+            )
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual(old_binding["binding_id"], history["history_id"])
+            self.assertEqual(old_binding, history["binding"])
+            self.assertEqual(
+                cc.json_content_sha256(old_binding), history["binding_sha256"]
+            )
             self.assertEqual("0.2.0", binding["pack_version"])
             self.assertEqual(
                 second_snapshot_digest,
@@ -1075,6 +1462,7 @@ class ReferencePackTests(unittest.TestCase):
             before_snapshot = cc.tree_sha256(
                 project / ".creative-craft/reference-snapshots/reference-fixture"
             )
+            before_tree = tree_snapshot(project)
             original_validate = cc.validate_project
             calls = 0
 
@@ -1110,6 +1498,89 @@ class ReferencePackTests(unittest.TestCase):
                     project / ".creative-craft/reference-snapshots/reference-fixture"
                 ),
             )
+            self.assertEqual(before_tree, tree_snapshot(project))
+            self.assertTrue(original_validate(project).result.ok)
+
+    def test_reference_backup_destination_symlink_is_rejected_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root / "first")
+            add_reference_entity(skill_root, "reference-a", with_asset=True)
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root)
+            updated = root / "updated/reference-fixture"
+            updated.parent.mkdir()
+            shutil.copytree(skill_root, updated)
+            manifest_path = updated / "reference-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = "0.2.0"
+            write_json(manifest_path, manifest)
+
+            outside = root / "outside-backups"
+            outside.mkdir()
+            backup_link = project / ".creative-craft/reference-backups"
+            backup_link.symlink_to(outside, target_is_directory=True)
+            before = cc.tree_sha256(
+                project / ".creative-craft/reference-snapshots/reference-fixture"
+            )
+            args = type("Args", (), {
+                "target": str(project),
+                "reference_pack": str(updated),
+                "reason": "Reject destination symlink",
+                "reference_source_uri": None,
+                "reference_source_ref": None,
+                "reference_source_commit": None,
+                "imported_by": "fixture-operator",
+                "select": ["reference-a"],
+            })()
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(1, cc.cmd_update_reference_snapshot(args))
+            self.assertIn("must not use a symlink", stderr.getvalue())
+            self.assertEqual([], list(outside.iterdir()))
+            self.assertEqual(
+                before,
+                cc.tree_sha256(
+                    project / ".creative-craft/reference-snapshots/reference-fixture"
+                ),
+            )
+            self.assertTrue(cc.validate_project(project).result.ok)
+
+    def test_failed_initial_reference_bind_restores_exact_project_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            add_reference_entity(skill_root, "reference-a", with_asset=True)
+            project = self.copy_example(directory)
+            before_tree = tree_snapshot(project)
+            original_validate = cc.validate_project
+            calls = 0
+
+            def fail_final_validation(root_path: Path) -> cc.ProjectGraph:
+                nonlocal calls
+                calls += 1
+                graph = original_validate(root_path)
+                if calls > 1:
+                    graph.result.errors.append("synthetic post-write failure")
+                return graph
+
+            args = type("Args", (), {
+                "target": str(project),
+                "reference_pack": str(skill_root),
+                "reason": "Synthetic failed initial binding",
+                "reference_source_uri": None,
+                "reference_source_ref": None,
+                "reference_source_commit": None,
+                "imported_by": "fixture-operator",
+                "select": ["reference-a"],
+            })()
+            with (
+                mock.patch.object(cc, "validate_project", side_effect=fail_final_validation),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(1, cc.cmd_bind_reference_pack(args))
+            self.assertEqual(before_tree, tree_snapshot(project))
             self.assertTrue(original_validate(project).result.ok)
 
     def test_reference_pack_cannot_replace_primary_brand_authority(self) -> None:
