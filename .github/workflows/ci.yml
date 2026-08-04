@@ -23,6 +23,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
+          cache-dependency-path: requirements-dev.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: ruff check skills/creative-craft/scripts/creative_craft.py scripts tests
       - run: python scripts/validate_schemas.py
