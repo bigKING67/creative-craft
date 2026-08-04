@@ -2071,6 +2071,76 @@ def markdown_local_links(path: Path) -> Iterable[tuple[str, Path]]:
         yield target, (path.parent / target).resolve()
 
 
+def validate_skill_runtime(skill_root: Path) -> Result:
+    """Validate the canonical Skill without requiring repository-only files."""
+    r = Result()
+    context = ValidationContext(skill_root)
+    required = [
+        "SKILL.md",
+        "VERSION",
+        "providers/openai-gpt-image-2.json",
+        "providers/bytedance-seedance-2.5.json",
+        "providers/surfaces/openai-image-api.json",
+        "providers/surfaces/bytedance-jimeng-web.json",
+        "scripts/creative_craft.py",
+    ]
+    for rel in required:
+        r.require((skill_root / rel).is_file(), f"skill runtime missing required file: {rel}")
+
+    for schema_version, entry in ARTIFACT_REGISTRY.items():
+        r.require(
+            (context.schemas_dir / str(entry["schema"])).is_file(),
+            f"missing schema for {schema_version}: {entry['schema']}",
+        )
+        template = entry.get("template")
+        if template:
+            r.require(
+                (skill_root / "templates" / str(template)).is_file(),
+                f"missing template for {schema_version}: {template}",
+            )
+    for schema_version, filename in METADATA_SCHEMAS.items():
+        r.require(
+            (context.schemas_dir / filename).is_file(),
+            f"missing metadata schema for {schema_version}: {filename}",
+        )
+
+    try:
+        profiles = provider_profiles(context.providers_dir)
+        surfaces = surface_profiles(context.surfaces_dir)
+    except ValueError as exc:
+        r.errors.append(str(exc))
+        profiles = {}
+        surfaces = {}
+    r.require(IMAGE_PROFILE_ID in profiles, f"missing provider profile {IMAGE_PROFILE_ID}")
+    r.require(VIDEO_PROFILE_ID in profiles, f"missing provider profile {VIDEO_PROFILE_ID}")
+    for profile_id, profile in profiles.items():
+        metadata_result = validate_against_schema(
+            profile, context.schemas_dir / METADATA_SCHEMAS["creative-craft.provider.v1"]
+        )
+        r.errors.extend(f"provider {profile_id}: {message}" for message in metadata_result.errors)
+    for surface_id, surface in surfaces.items():
+        metadata_result = validate_against_schema(
+            surface, context.schemas_dir / METADATA_SCHEMAS["creative-craft.surface.v1"]
+        )
+        r.errors.extend(f"surface {surface_id}: {message}" for message in metadata_result.errors)
+        for profile_id in surface.get("provider_profiles", []):
+            r.require(
+                profile_id in profiles,
+                f"surface {surface_id} references unknown provider_profile {profile_id}",
+            )
+    return r
+
+
+def is_repository_checkout(root: Path) -> bool:
+    sentinels = [
+        "package.json",
+        ".codex-plugin/plugin.json",
+        "sources.lock.json",
+        "skills/creative-craft/SKILL.md",
+    ]
+    return all((root / rel).is_file() for rel in sentinels)
+
+
 def doctor(root: Path = REPO_ROOT) -> Result:
     r = Result()
     skill_root = root / "skills" / "creative-craft"
@@ -2083,16 +2153,10 @@ def doctor(root: Path = REPO_ROOT) -> Result:
         "package.json",
         ".codex-plugin/plugin.json",
         "sources.lock.json",
-        "skills/creative-craft/SKILL.md",
-        "skills/creative-craft/VERSION",
-        "skills/creative-craft/providers/openai-gpt-image-2.json",
-        "skills/creative-craft/providers/bytedance-seedance-2.5.json",
-        "skills/creative-craft/providers/surfaces/openai-image-api.json",
-        "skills/creative-craft/providers/surfaces/bytedance-jimeng-web.json",
-        "skills/creative-craft/scripts/creative_craft.py",
     ]
     for rel in required:
         r.require((root / rel).is_file(), f"missing required file: {rel}")
+    r.extend(validate_skill_runtime(skill_root))
 
     if (root / "VERSION").is_file():
         version = (root / "VERSION").read_text(encoding="utf-8").strip()
@@ -2124,39 +2188,6 @@ def doctor(root: Path = REPO_ROOT) -> Result:
         except ValueError as exc:
             r.errors.append(str(exc))
 
-    for schema_version, entry in ARTIFACT_REGISTRY.items():
-        r.require((context.schemas_dir / str(entry["schema"])).is_file(),
-                  f"missing schema for {schema_version}: {entry['schema']}")
-        template = entry.get("template")
-        if template:
-            r.require((skill_root / "templates" / str(template)).is_file(),
-                      f"missing template for {schema_version}: {template}")
-    for schema_version, filename in METADATA_SCHEMAS.items():
-        r.require((context.schemas_dir / filename).is_file(),
-                  f"missing metadata schema for {schema_version}: {filename}")
-
-    try:
-        profiles = provider_profiles(context.providers_dir)
-        surfaces = surface_profiles(context.surfaces_dir)
-    except ValueError as exc:
-        r.errors.append(str(exc))
-        profiles = {}
-        surfaces = {}
-    r.require(IMAGE_PROFILE_ID in profiles, f"missing provider profile {IMAGE_PROFILE_ID}")
-    r.require(VIDEO_PROFILE_ID in profiles, f"missing provider profile {VIDEO_PROFILE_ID}")
-    for profile_id, profile in profiles.items():
-        metadata_result = validate_against_schema(
-            profile, context.schemas_dir / METADATA_SCHEMAS["creative-craft.provider.v1"]
-        )
-        r.errors.extend(f"provider {profile_id}: {message}" for message in metadata_result.errors)
-    for surface_id, surface in surfaces.items():
-        metadata_result = validate_against_schema(
-            surface, context.schemas_dir / METADATA_SCHEMAS["creative-craft.surface.v1"]
-        )
-        r.errors.extend(f"surface {surface_id}: {message}" for message in metadata_result.errors)
-        for profile_id in surface.get("provider_profiles", []):
-            r.require(profile_id in profiles,
-                      f"surface {surface_id} references unknown provider_profile {profile_id}")
     source_lock = root / "sources.lock.json"
     if source_lock.is_file():
         source_data = load_json(source_lock)
@@ -2187,15 +2218,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_self_test(args: argparse.Namespace) -> int:
-    """Run package-contained smoke tests without network or dev dependencies."""
-    root = Path(args.root).resolve() if args.root else REPO_ROOT
-    repository = doctor(root)
-    context = ValidationContext(root / "skills" / "creative-craft")
+    """Run repository or installed-runtime smoke tests without network access."""
+    requested_root = Path(args.root).resolve() if args.root else None
+    repository_scope = requested_root is not None or is_repository_checkout(REPO_ROOT)
+    if repository_scope:
+        root = requested_root or REPO_ROOT
+        skill_root = root / "skills" / "creative-craft"
+        preflight = doctor(root)
+        runtime_valid = validate_skill_runtime(skill_root).ok
+        label = "package self-test"
+    else:
+        root = SKILL_ROOT
+        skill_root = SKILL_ROOT
+        preflight = validate_skill_runtime(skill_root)
+        runtime_valid = preflight.ok
+        label = "installed runtime self-test"
+    context = ValidationContext(skill_root)
     checks: list[dict[str, Any]] = []
-    errors = list(repository.errors)
-    warnings = list(repository.warnings)
+    errors = list(preflight.errors)
+    warnings = list(preflight.warnings)
 
-    templates_dir = root / "skills" / "creative-craft" / "templates"
+    templates_dir = skill_root / "templates"
     for path in sorted(templates_dir.glob("*.json")):
         try:
             data = load_json(path)
@@ -2228,12 +2271,15 @@ def cmd_self_test(args: argparse.Namespace) -> int:
         score = score_evaluation(evaluation_data)
         if score.get("status") not in {"scored", "withheld", "blocked"}:
             errors.append("evaluation scorer returned an invalid status")
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, OSError, TypeError, ValueError) as exc:
         errors.append(f"package smoke path failed: {exc}")
 
     payload = {
         "valid": not errors,
-        "repository_valid": repository.ok,
+        "scope": "repository" if repository_scope else "runtime",
+        "root": str(root),
+        "repository_valid": preflight.ok if repository_scope else None,
+        "runtime_valid": runtime_valid,
         "artifact_checks": checks,
         "errors": errors,
         "warnings": warnings,
@@ -2241,7 +2287,7 @@ def cmd_self_test(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print("PASS package self-test" if not errors else "FAIL package self-test")
+        print(f"PASS {label}" if not errors else f"FAIL {label}")
         print(f"  Artifact templates: {len(checks)}")
         for message in errors:
             print(f"  ERROR: {message}")
@@ -2605,7 +2651,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.set_defaults(func=cmd_doctor)
 
     self_test_parser = sub.add_parser(
-        "self-test", help="run package-contained validation and compiler smoke tests"
+        "self-test", help="run repository or installed-runtime validation and compiler smoke tests"
     )
     self_test_parser.add_argument("--root")
     self_test_parser.add_argument("--json", action="store_true")

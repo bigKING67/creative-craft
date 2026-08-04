@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -58,6 +59,32 @@ class DoctorTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(0, cc.cmd_self_test(args))
         self.assertIn("PASS package self-test", stdout.getvalue())
+
+    def test_leaf_install_self_test_uses_runtime_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "skills" / "creative-craft"
+            shutil.copytree(
+                ROOT / "skills/creative-craft",
+                installed,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts/creative_craft.py"),
+                    "self-test",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["valid"])
+            self.assertEqual("runtime", payload["scope"])
+            self.assertIsNone(payload["repository_valid"])
+            self.assertTrue(payload["runtime_valid"])
 
     def test_doctor_uses_profiles_from_requested_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

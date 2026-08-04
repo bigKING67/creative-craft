@@ -60,21 +60,11 @@ def source_dirty() -> bool | None:
 
 def validate_staging(staging: Path) -> None:
     cli = staging / "scripts" / "creative_craft.py"
-    for path in sorted((staging / "templates").glob("*.json")):
-        subprocess.run(
-            [sys.executable, str(cli), "validate", "--file", str(path)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-    for command, filename in (
-        ("compile-image", "image-job.json"),
-        ("compile-video", "video-job.json"),
-    ):
-        subprocess.run(
-            [sys.executable, str(cli), command, "--file", str(staging / "templates" / filename)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+    subprocess.run(
+        [sys.executable, str(cli), "self-test", "--json"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
 
 
 def install(target_root: Path, force: bool) -> tuple[Path, Path | None]:
