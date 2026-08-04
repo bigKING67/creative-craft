@@ -2,6 +2,19 @@
 
 All notable changes are documented here.
 
+## 0.2.1 — 2026-08-04
+
+Installed-runtime verification patch:
+
+- split repository integrity checks from canonical Skill runtime checks;
+- made `self-test` automatically select repository scope in a checkout and
+  runtime scope in a Pi, Codex, or generic leaf Skill installation;
+- added explicit `scope`, `repository_valid`, and `runtime_valid` JSON evidence;
+- made the atomic installer validate its staged leaf copy through the same
+  installed-runtime self-test used after installation;
+- added isolated leaf-install regression coverage and a Host smoke gate for the
+  installed-runtime self-test.
+
 ## 0.2.0 — 2026-08-04
 
 Evidence-bound production-contract release:

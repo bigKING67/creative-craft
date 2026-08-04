@@ -87,7 +87,11 @@
 
 ## 当前版本
 
-`0.2.0` 是“证据绑定的生产协议”版本，已包含：
+`0.2.1` 是安装运行时验证补丁，延续 `0.2.0` 的“证据绑定生产协议”，并把仓库级
+检查与 Pi、Codex、通用目录式安装后的叶子 Skill 检查正式分开。`self-test`
+现在会根据现场自动选择 repository 或 runtime scope。
+
+`0.2.0` 已建立：
 
 - 可被 Agent 安装的 canonical Skill；
 - GPT Image 2、Seedance 2.5 Provider Profile 与执行 Surface Profile；
@@ -112,18 +116,18 @@ GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package disco
 Pi 是 Tier 1 Host：
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.0
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.0
+pi install git:github.com/bigKING67/creative-craft@v0.2.1
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.1
 ```
 
 Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
-`bigKING67/creative-craft` 的 `v0.2.0` tag 安装
+`bigKING67/creative-craft` 的 `v0.2.1` tag 安装
 `skills/creative-craft`，也可以执行：
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.0 \
+  --ref v0.2.1 \
   --path skills/creative-craft
 ```
 
@@ -151,11 +155,15 @@ python3 -m pip install -r requirements-dev.txt
 python3 scripts/validate_schemas.py
 ```
 
-只检查可安装 Skill 运行包：
+在仓库 checkout 中运行 package self-test：
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py self-test
 ```
+
+同一命令从 Pi、Codex 或通用目录式叶子 Skill 中执行时，会自动切换到 runtime
+scope，不再要求仓库根目录的 README、LICENSE、plugin metadata 和 source lock。
+使用 `--json` 可以记录实际 scope 以及 repository/runtime validity。
 
 初始化项目：
 

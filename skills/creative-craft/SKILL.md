@@ -142,11 +142,15 @@ project-manifest.v1
 Useful local commands:
 
 ```bash
+python3 scripts/creative_craft.py self-test --json
 python3 scripts/creative_craft.py validate-project --root <project>
 python3 scripts/creative_craft.py project-status --root <project> --json
 python3 scripts/creative_craft.py score --file <evaluation.json> --root <project>
 python3 scripts/creative_craft.py verify-delivery --root <project> --file <delivery.json>
 ```
+
+`self-test` automatically reports `scope=runtime` in an installed leaf Skill and
+does not require repository-only README, license, plugin, or source-lock files.
 
 ## Core workflow
 

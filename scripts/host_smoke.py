@@ -63,6 +63,31 @@ def main() -> int:
         else:
             checks.append("atomic-skill-install")
         if installed.is_dir():
+            self_test = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts/creative_craft.py"),
+                    "self-test",
+                    "--json",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if self_test.returncode != 0:
+                errors.append(f"installed runtime self-test failed: {self_test.stdout.strip()}")
+            else:
+                try:
+                    payload = json.loads(self_test.stdout)
+                except json.JSONDecodeError as exc:
+                    errors.append(f"installed runtime self-test returned invalid JSON: {exc}")
+                else:
+                    if payload.get("scope") != "runtime" or payload.get("runtime_valid") is not True:
+                        errors.append(
+                            "installed runtime self-test did not report a valid runtime scope"
+                        )
+                    else:
+                        checks.append("installed-runtime-self-test")
             validation = subprocess.run(
                 [
                     sys.executable,
