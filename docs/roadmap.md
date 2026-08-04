@@ -1,70 +1,66 @@
 # Roadmap
 
-The roadmap is staged to protect the core from premature provider coupling.
+The roadmap protects the creative method from premature provider coupling and
+separates contract maturity from claims about creative quality.
 
-## 0.1 — contracts and method
+## 0.1 — foundation
+
+Implemented the canonical skill, authority files, provider profiles, v1 jobs,
+prompt compilation, local validation, scoring, tests, and fictional example.
+
+## 0.2 — evidence-bound production graph
 
 Implemented:
 
-- canonical skill;
-- authority files;
-- provider profiles;
-- brief/image/video/evaluation/delivery schemas;
-- prompt compilation;
-- validation, scoring, hashing, tests, and example.
+- project manifest with safe project-relative paths and SHA-256 binding;
+- formal Creative Direction, Image/Video Job v2, Execution Receipt, Output
+  Inspection, Revision Lineage, Evaluation v2, and Delivery v2;
+- JSON Schema structural truth plus runtime/reference parity checks;
+- cross-artifact reference, Provider, Surface, rights, digest, and state
+  validation;
+- derived job lifecycle rather than generated/approved self-declaration;
+- evidence coverage, strength, distribution, confidence, uncertainty, and gate
+  projection;
+- draft inspection/revision CLI, atomic installer, install provenance, Pi/Codex
+  package discovery contracts, and GitHub CI.
 
-## 0.2 — execution receipts
+This version includes synthetic lifecycle fixtures but no real provider output
+claim.
+
+## 0.3 — real creative evals
 
 Planned:
 
-- optional OpenAI GPT Image 2 adapter;
-- explicit credential and cost consent;
-- input/output checksum receipts;
-- moderation/error capture;
-- multi-turn edit lineage;
-- image-output inspection checklist artifact.
+- high-fidelity product edit case;
+- exact-copy commercial key visual and adaptation case;
+- 15-30 second Seedance product film, extension, and timestamp-edit case;
+- immutable actual outputs, human inspections, failed revisions, comparisons,
+  and model-version regression baselines.
 
-## 0.3 — video execution adapter
+## 0.4 — Seedance guide internalization
 
-Planned after stable official API documentation:
+Planned after the owner-supplied official guides are exported and reviewable:
 
-- Seedance API/platform adapter;
-- upload/reference mapping;
-- extension and timestamp-edit receipts;
-- audiovisual output metadata extraction;
-- platform capability negotiation.
+- Jimeng and Doubao Pro surface-specific rules;
+- prompt grammar, reference, editing, and extension fixtures;
+- official example/source mapping and dated regression tests.
 
 Do not infer an API contract from UI behavior.
 
-## 0.4 — creative eval harness
+## 0.5 — optional provider adapters
 
-- golden briefs and source sets;
-- route-distinctness evaluation;
-- prompt/job regression fixtures;
-- human review protocol;
-- actual-output comparison;
-- model-version migration tests.
+Planned only when credentials, cost consent, moderation, errors, receipts,
+snapshot identity, and rollback behavior can be tested:
 
-## 0.5 — campaign operations
-
-- variant matrix;
-- localization;
-- delivery preset registry;
-- experiment ledger;
-- performance-learning import;
-- DAM handoff adapter.
+- optional GPT Image 2 Image API / Responses Image Tool adapter;
+- Seedance API adapter only after stable official API availability;
+- multi-turn and extension receipt lineage.
 
 ## 1.0 — operational evidence
 
-Requires:
-
-- several real end-to-end image and video projects;
-- current provider profiles;
-- verified host portability;
-- rights/provenance examples;
-- output inspection evidence;
-- controlled creative comparison;
-- stable migrations.
+Requires several real end-to-end projects, current Provider/Surface profiles,
+cross-host verification, output inspection evidence, controlled comparisons,
+stable migrations, and reproducible release artifacts.
 
 Version numbers indicate contract maturity, not a universal creative-quality
 score.

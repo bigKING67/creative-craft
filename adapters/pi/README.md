@@ -1,6 +1,15 @@
 # Pi adapter
 
-Use the npm package metadata or copy the canonical skill into the Pi skills directory configured by the local installation.
+Pi is a Tier 1 host. `package.json.pi.skills` points to the canonical runtime;
+the adapter does not copy or fork core rules.
 
-The adapter is intentionally documentation-only in `0.1.0`. Use
-`../../skills/creative-craft/` as the single source of truth.
+Install the immutable GitHub release globally or for one project:
+
+```bash
+pi install git:github.com/bigKING67/creative-craft@v0.2.0
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.0
+```
+
+Validate discovery with `pi list`, then run the installed
+`skills/creative-craft/scripts/creative_craft.py` self-contained validation
+commands when diagnosing a package copy. No npm registry package is published.

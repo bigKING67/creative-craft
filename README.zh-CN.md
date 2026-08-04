@@ -87,18 +87,56 @@
 
 ## 当前版本
 
-`0.1.0` 已包含：
+`0.2.0` 是“证据绑定的生产协议”版本，已包含：
 
-- 完整 Skill；
-- GPT Image 2 与 Seedance 2.5 Provider Profile；
-- Brief、图片任务、视频任务、资产台账、评分和交付清单的数据协议；
-- JSON Schema；
-- 提示词编译、任务校验、评分、文件哈希和项目初始化 CLI；
-- 虚构高端洗护案例；
-- 测试与 CI。
+- 可被 Agent 安装的 canonical Skill；
+- GPT Image 2、Seedance 2.5 Provider Profile 与执行 Surface Profile；
+- `Project Manifest → Brief → Routes → Creative Direction → Job → Receipt
+  → Inspection → Revision → Evaluation → Delivery` 正式工件链；
+- JSON Schema 结构真源、标准库运行时 Schema 校验和跨工件语义校验；
+- 文件路径、SHA-256、引用、Provider、Surface、版权和生命周期证据绑定；
+- 由 Receipt、真实文件、Inspection 和 Delivery 证据派生的 Job 状态；
+- Coverage、Evidence Strength、Confidence、Uncertainty 分离的 Evaluation v2；
+- 原子安装、安装来源记录、单元测试、Schema parity 和真实 GitHub CI；
+- 明确不冒充真实生成结果的虚构高端洗护案例。
 
 本版本默认不直接调用模型、不产生费用。它先把“创意决策和执行协议”做好。
-后续再分别接入图片和视频 API，避免仓库退化成某个平台的薄封装。
+它不宣称真实 Golden Evals 已完成，也不包含 GPT Image 2 或 Seedance 网络
+Adapter。
+
+## 安装到 Pi、Codex 和其他 Agent
+
+这是标准 Agent Skill，canonical runtime 为 `skills/creative-craft/`。当前只通过
+GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package discovery。
+
+Pi 是 Tier 1 Host：
+
+```bash
+pi install git:github.com/bigKING67/creative-craft@v0.2.0
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.0
+```
+
+Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
+`bigKING67/creative-craft` 的 `v0.2.0` tag 安装
+`skills/creative-craft`，也可以执行：
+
+```bash
+python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo bigKING67/creative-craft \
+  --ref v0.2.0 \
+  --path skills/creative-craft
+```
+
+Codex 会在下一轮或新会话发现该 Skill。其他支持目录式 Skill 的 Agent 可以
+clone 仓库后使用原子 installer：
+
+```bash
+python3 scripts/install_skill.py --target /path/to/host/skills
+```
+
+`--force` 不会先删除旧版本：installer 会在目标文件系统 staging、自检、记录
+`INSTALL_PROVENANCE.json`，再原子替换并保留旧安装备份。Claude/Cursor 当前仅有
+薄适配说明，不属于 Tier 1 运行态验证结论。
 
 ## 开始使用
 
@@ -144,12 +182,24 @@ python3 skills/creative-craft/scripts/creative_craft.py compile-video \
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py score \
-  --file examples/premium-haircare-launch/evaluation.json
+  --file examples/premium-haircare-launch/evaluation.json \
+  --root examples/premium-haircare-launch
+```
+
+校验项目证据图并查看派生状态：
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py validate-project \
+  --root examples/premium-haircare-launch
+
+python3 skills/creative-craft/scripts/creative_craft.py project-status \
+  --root examples/premium-haircare-launch --json
 ```
 
 ## 最重要的一条
 
-最终交付不能只说“提示词已经写好”。必须区分：
+Job v2 只能声明 `draft`、`ready` 或 `superseded`。最终交付不能只说
+“提示词已经写好”，系统必须按证据区分：
 
 - 已计划；
 - 已生成；
