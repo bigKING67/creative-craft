@@ -22,11 +22,11 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.1` is the installed-runtime verification patch for the
-evidence-bound production contract introduced in `0.2.0`. Repository checks and
-leaf Skill checks now have separate scopes, and `self-test` works from Pi,
-Codex, and generic directory installations without requiring repository-only
-metadata.
+Version `0.2.2` adds portable brand authority without putting any company's
+private knowledge into this public repository. A separate Brand Skill can be
+validated, installed for a team, and copied into each creative project as an
+immutable, digest-bound snapshot. Changing employer or client means changing
+the Brand Pack; the Creative Craft method and historical projects stay clean.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -148,6 +148,38 @@ A project may seed:
 These are optional for a small task, but unresolved authority must be named as
 an assumption rather than silently invented.
 
+## Public core, private Brand Packs, immutable projects
+
+Do not add company knowledge, claims, internal links, or proprietary assets to
+this repository. Use three independent lifecycles:
+
+```text
+creative-craft/             public generic method, schemas, and tooling
+acme-brand-pack/            private team Brand Skill and reviewed authority
+campaign-project/           private brief, jobs, outputs, and brand snapshot
+```
+
+A Brand Pack is deliberately thin. It contains only curated authority needed
+for creative execution: brand, products, approved claims, visual and verbal
+systems, channel rules, rights/approvals, and an asset ledger. Large binaries
+stay in the team's DAM, drive, or object store; the ledger keeps stable URIs,
+SHA-256 identity, rights, consent, and allowed use. Small approved assets may be
+stored locally under the private Brand Skill.
+
+When a project binds a Brand Pack, Creative Craft copies only the manifest,
+registered authority files, Brand Pack ledger, and safe local assets into
+`.creative-craft/brand-snapshot/`. It also projects the pack's `brand` authority
+to the project `BRAND.md`, merges brand assets into the project ledger, and
+records source ref/commit plus content digests in `brand-binding.json`. The
+project never uses a live symlink, so later Brand Skill edits cannot rewrite
+historical project authority. `update-brand-snapshot` is explicit, backed up,
+lineage-recorded, validated, and rolled back on failure.
+
+Draft packs remain useful for exploration, but a bound draft pack blocks a Job
+from becoming `ready`. Only reviewed source material should be used to mark a
+pack `approved`; the initializer never invents claims, facts, rights, or an
+approval.
+
 ## Versioned artifacts
 
 The current contracts are:
@@ -165,6 +197,8 @@ The current contracts are:
 - `creative-craft.revision-lineage.v1`
 - `creative-craft.evaluation.v2`
 - `creative-craft.delivery.v2`
+- `creative-craft.brand-pack.v1`
+- `creative-craft.brand-binding.v1`
 
 The v1 job, evaluation, and delivery contracts remain readable for migration,
 but new projects seed v2 contracts. Job v2 can declare only `draft`, `ready`,
@@ -221,17 +255,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.1
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.1
+pi install git:github.com/bigKING67/creative-craft@v0.2.2
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.2
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.1`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.2`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.1 \
+  --ref v0.2.2 \
   --path skills/creative-craft
 ```
 
@@ -284,6 +318,43 @@ Seed creative authority into a project without overwriting existing files:
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py seed \
   --target /path/to/project
+```
+
+Initialize and validate a separate private Brand Skill using placeholder-only
+authority:
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py init-brand-pack \
+  --target /path/to/acme-brand-pack/skills/acme-brand \
+  --brand-id acme \
+  --brand-name "Acme" \
+  --owner brand-operations
+
+python3 skills/creative-craft/scripts/creative_craft.py validate-brand-pack \
+  --root /path/to/acme-brand-pack/skills/acme-brand
+```
+
+After the Brand Pack has been populated and reviewed, bind its current content
+to a new project. Source provenance is optional but strongly recommended for a
+team repository:
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py seed \
+  --target /path/to/campaign-project \
+  --brand-pack /path/to/acme-brand-pack/skills/acme-brand \
+  --brand-source-uri https://git.example/acme-brand-pack.git \
+  --brand-source-ref v1.0.0 \
+  --brand-source-commit <full-commit-sha> \
+  --imported-by <identity>
+
+python3 skills/creative-craft/scripts/creative_craft.py update-brand-snapshot \
+  --target /path/to/campaign-project \
+  --brand-pack /path/to/acme-brand-pack/skills/acme-brand \
+  --reason "Adopt reviewed brand authority v1.1.0" \
+  --brand-source-uri https://git.example/acme-brand-pack.git \
+  --brand-source-ref v1.1.0 \
+  --brand-source-commit <full-commit-sha> \
+  --imported-by <identity>
 ```
 
 Validate and compile an image job:

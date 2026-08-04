@@ -9,6 +9,7 @@ costs.
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -107,6 +108,42 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
         "kind": "delivery", "schema": "delivery-manifest-v2.schema.json",
         "template": "delivery-manifest.json", "legacy": False,
     },
+    "creative-craft.brand-pack.v1": {
+        "kind": "brand-pack", "schema": "brand-pack.schema.json",
+        "template": "brand-pack.json", "legacy": False,
+    },
+    "creative-craft.brand-binding.v1": {
+        "kind": "brand-binding", "schema": "brand-binding.schema.json",
+        "template": "brand-binding.json", "legacy": False,
+    },
+}
+
+# Brand artifacts are opt-in. Keeping an explicit project inventory prevents a
+# generic seed from silently acquiring empty brand authority templates.
+PROJECT_SEED_SCHEMA_VERSIONS = {
+    "creative-craft.brief.v1",
+    "creative-craft.asset-ledger.v1",
+    "creative-craft.concept-routes.v1",
+    "creative-craft.critique.v1",
+    "creative-craft.project-manifest.v1",
+    "creative-craft.creative-direction.v1",
+    "creative-craft.image-job.v2",
+    "creative-craft.video-job.v2",
+    "creative-craft.execution-receipt.v1",
+    "creative-craft.output-inspection.v1",
+    "creative-craft.revision-lineage.v1",
+    "creative-craft.evaluation.v2",
+    "creative-craft.delivery.v2",
+}
+PROJECT_MANIFEST_SEED_SCHEMA_VERSIONS = {
+    "creative-craft.brief.v1",
+    "creative-craft.asset-ledger.v1",
+    "creative-craft.concept-routes.v1",
+    "creative-craft.creative-direction.v1",
+    "creative-craft.image-job.v2",
+    "creative-craft.video-job.v2",
+    "creative-craft.evaluation.v2",
+    "creative-craft.delivery.v2",
 }
 
 METADATA_SCHEMAS = {
@@ -1090,6 +1127,78 @@ def validate_delivery_v2(data: dict[str, Any]) -> Result:
     return r
 
 
+def validate_brand_pack_artifact(data: dict[str, Any]) -> Result:
+    r = Result()
+    roles: set[str] = set()
+    paths: set[str] = set()
+    brand_roles = 0
+    for index, item in enumerate(data.get("authority_files", [])):
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        path = item.get("path")
+        if isinstance(role, str):
+            r.require(role not in roles, f"authority_files[{index}] duplicates role {role!r}")
+            roles.add(role)
+            if role == "brand":
+                brand_roles += 1
+        if isinstance(path, str):
+            r.require(path not in paths, f"authority_files[{index}] duplicates path {path!r}")
+            paths.add(path)
+    r.require(brand_roles == 1, "brand pack requires exactly one authority file with role='brand'")
+    ledger = data.get("asset_ledger", {})
+    if isinstance(ledger, dict):
+        r.require(ledger.get("path") not in paths,
+                  "asset_ledger.path must not duplicate an authority file path")
+    source_ids: set[str] = set()
+    for index, source in enumerate(data.get("source_references", [])):
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("source_id")
+        if isinstance(source_id, str):
+            r.require(source_id not in source_ids,
+                      f"source_references[{index}] duplicates source_id {source_id!r}")
+            source_ids.add(source_id)
+    if data.get("status") == "approved":
+        r.require(nonempty(data.get("approved_at")), "approved brand pack requires approved_at")
+        r.require(bool(data.get("source_references")),
+                  "approved brand pack requires at least one source reference")
+        for index, source in enumerate(data.get("source_references", [])):
+            if isinstance(source, dict):
+                r.require(nonempty(source.get("reviewed_at")),
+                          f"approved brand pack requires source_references[{index}].reviewed_at")
+                if nonempty(source.get("reviewed_at")):
+                    try:
+                        dt.datetime.fromisoformat(
+                            str(source.get("reviewed_at")).replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        r.errors.append(
+                            f"source_references[{index}].reviewed_at must be ISO-8601"
+                        )
+        if nonempty(data.get("approved_at")):
+            try:
+                dt.datetime.fromisoformat(str(data.get("approved_at")).replace("Z", "+00:00"))
+            except ValueError:
+                r.errors.append("approved_at must be ISO-8601")
+        r.warn(nonempty(data.get("review_after")),
+               "approved brand pack has no review_after date")
+    return r
+
+
+def validate_brand_binding(data: dict[str, Any]) -> Result:
+    r = Result()
+    try:
+        dt.datetime.fromisoformat(str(data.get("imported_at")).replace("Z", "+00:00"))
+    except ValueError:
+        r.errors.append("imported_at must be an ISO-8601 timestamp")
+    source = data.get("source", {})
+    if isinstance(source, dict) and source.get("commit") is not None:
+        r.require(nonempty(source.get("repository_or_uri")),
+                  "source.commit requires source.repository_or_uri")
+    return r
+
+
 def _no_semantic_validation(data: dict[str, Any]) -> Result:
     del data
     return Result()
@@ -1111,6 +1220,8 @@ def _call_semantic_validator(
         "creative-craft.revision-lineage.v1": validate_revision_lineage,
         "creative-craft.evaluation.v2": validate_evaluation_v2,
         "creative-craft.delivery.v2": validate_delivery_v2,
+        "creative-craft.brand-pack.v1": validate_brand_pack_artifact,
+        "creative-craft.brand-binding.v1": validate_brand_binding,
     }
     if schema_version in {"creative-craft.image-job.v1", "creative-craft.image-job.v2"}:
         return validate_image_job(data, context)
@@ -1170,6 +1281,8 @@ ARTIFACT_ID_FIELDS = {
     "project-manifest": "manifest_id",
     "critique": "critique_id",
     "asset-ledger": None,
+    "brand-pack": "pack_id",
+    "brand-binding": "binding_id",
 }
 
 
@@ -1194,21 +1307,207 @@ def _project_manifest_path(root: Path) -> Path:
     return direct
 
 
-def _safe_project_path(root: Path, value: Any) -> tuple[Path | None, str | None]:
+def _safe_relative_path(
+    root: Path, value: Any, *, label: str = "path"
+) -> tuple[Path | None, str | None]:
     if not isinstance(value, str) or not value:
-        return None, "path must be a non-empty string"
+        return None, f"{label} must be a non-empty string"
     relative = Path(value)
     if relative.is_absolute() or ".." in relative.parts:
-        return None, f"unsafe project-relative path: {value!r}"
+        return None, f"unsafe root-relative {label}: {value!r}"
     candidate = root / relative
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return None, f"{label} must not use a symlink: {value!r}"
     try:
         resolved = candidate.resolve(strict=False)
         resolved.relative_to(root.resolve())
     except (OSError, ValueError):
-        return None, f"path escapes project root: {value!r}"
-    if candidate.is_symlink():
-        return None, f"artifact path must not be a symlink: {value!r}"
+        return None, f"{label} escapes root: {value!r}"
     return candidate, None
+
+
+def _safe_project_path(root: Path, value: Any) -> tuple[Path | None, str | None]:
+    path, error = _safe_relative_path(root, value, label="project-relative path")
+    if error and error.startswith("unsafe root-relative"):
+        return path, error.replace("unsafe root-relative project-relative path",
+                                   "unsafe project-relative path", 1)
+    return path, error
+
+
+def tree_sha256(root: Path) -> str:
+    if not root.is_dir():
+        raise ValueError(f"tree root is not a directory: {root}")
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"tree contains a symlink: {relative}")
+        if path.is_file():
+            files.append(path)
+    digest = hashlib.sha256()
+    for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sha256_file(path).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _is_external_asset_uri(value: str) -> bool:
+    match = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*)://", value)
+    return bool(match and match.group(1).lower() != "file")
+
+
+@dataclass
+class BrandPackGraph:
+    root: Path
+    manifest_path: Path
+    manifest: dict[str, Any]
+    ledger_path: Path | None = None
+    ledger: dict[str, Any] = field(default_factory=dict)
+    authority_paths: dict[str, Path] = field(default_factory=dict)
+    result: Result = field(default_factory=Result)
+
+
+def validate_brand_pack(
+    root: Path, context: ValidationContext | None = None
+) -> BrandPackGraph:
+    source_root = Path(root).expanduser()
+    root_is_symlink = source_root.is_symlink()
+    resolved_root = source_root.resolve()
+    manifest_path = resolved_root / "brand-pack.json"
+    graph = BrandPackGraph(resolved_root, manifest_path, {})
+    graph.result.require(not root_is_symlink, "brand pack root must not be a symlink")
+    graph.result.require(resolved_root.is_dir(), f"brand pack root is not a directory: {resolved_root}")
+    if not resolved_root.is_dir():
+        return graph
+    if manifest_path.is_symlink():
+        graph.result.errors.append("brand-pack.json must not be a symlink")
+        return graph
+    try:
+        manifest = load_json(manifest_path)
+    except ValueError as exc:
+        graph.result.errors.append(str(exc))
+        return graph
+    graph.manifest = manifest
+    _, manifest_result = validate_data(manifest, "brand-pack", context)
+    graph.result.extend(manifest_result)
+    if not manifest_result.ok:
+        return graph
+
+    for index, item in enumerate(manifest.get("authority_files", [])):
+        if not isinstance(item, dict):
+            continue
+        path, error = _safe_relative_path(
+            resolved_root, item.get("path"), label=f"authority_files[{index}].path"
+        )
+        if error:
+            graph.result.errors.append(error)
+            continue
+        if path is None or not path.is_file():
+            graph.result.errors.append(
+                f"authority_files[{index}] file does not exist: {item.get('path')!r}"
+            )
+            continue
+        graph.result.require(
+            sha256_file(path) == item.get("sha256"),
+            f"authority_files[{index}] sha256 mismatch: {item.get('path')}",
+        )
+        graph.authority_paths[str(item.get("role"))] = path
+        if manifest.get("status") == "approved":
+            try:
+                authority_text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                graph.result.errors.append(
+                    f"approved authority file must be UTF-8 text: {item.get('path')}"
+                )
+            else:
+                graph.result.require(
+                    not re.search(r"\bTBD\b", authority_text),
+                    f"approved authority file still contains TBD: {item.get('path')}",
+                )
+                graph.result.require(
+                    not re.search(
+                        r"(?im)^\s*Status:\s*`?UNVERIFIED`?\s*$", authority_text
+                    ),
+                    f"approved authority file still declares UNVERIFIED: {item.get('path')}",
+                )
+
+    ledger_ref = manifest.get("asset_ledger", {})
+    if isinstance(ledger_ref, dict):
+        ledger_path, error = _safe_relative_path(
+            resolved_root, ledger_ref.get("path"), label="asset_ledger.path"
+        )
+        if error:
+            graph.result.errors.append(error)
+        elif ledger_path is None or not ledger_path.is_file():
+            graph.result.errors.append(
+                f"asset ledger file does not exist: {ledger_ref.get('path')!r}"
+            )
+        else:
+            graph.ledger_path = ledger_path
+            graph.result.require(
+                sha256_file(ledger_path) == ledger_ref.get("sha256"),
+                f"asset ledger sha256 mismatch: {ledger_ref.get('path')}",
+            )
+            try:
+                graph.ledger = load_json(ledger_path)
+            except ValueError as exc:
+                graph.result.errors.append(str(exc))
+            else:
+                _, ledger_result = validate_data(graph.ledger, "asset-ledger", context)
+                graph.result.errors.extend(
+                    f"asset ledger: {message}" for message in ledger_result.errors
+                )
+                graph.result.warnings.extend(
+                    f"asset ledger: {message}" for message in ledger_result.warnings
+                )
+                expected_project_id = f"brand:{manifest.get('brand_id')}"
+                graph.result.require(
+                    graph.ledger.get("project_id") == expected_project_id,
+                    f"asset ledger project_id must be {expected_project_id!r}",
+                )
+                for index, asset in enumerate(graph.ledger.get("assets", [])):
+                    if not isinstance(asset, dict):
+                        continue
+                    path_or_uri = str(asset.get("path_or_uri", ""))
+                    digest = asset.get("sha256")
+                    graph.result.require(
+                        isinstance(digest, str) and bool(re.fullmatch(r"[0-9a-f]{64}", digest)),
+                        f"asset ledger assets[{index}] requires a lowercase SHA-256 digest",
+                    )
+                    if not _is_external_asset_uri(path_or_uri):
+                        asset_path, asset_error = _safe_relative_path(
+                            resolved_root,
+                            path_or_uri,
+                            label=f"asset ledger assets[{index}].path_or_uri",
+                        )
+                        if asset_error:
+                            graph.result.errors.append(asset_error)
+                        elif asset_path is None or not asset_path.is_file():
+                            graph.result.errors.append(
+                                f"asset ledger assets[{index}] local file does not exist: {path_or_uri!r}"
+                            )
+                        elif isinstance(digest, str):
+                            graph.result.require(
+                                sha256_file(asset_path) == digest,
+                                f"asset ledger assets[{index}] sha256 mismatch: {path_or_uri}",
+                            )
+                    if manifest.get("status") == "approved":
+                        graph.result.require(
+                            asset.get("rights_status") in {"CLEARED", "LIMITED"},
+                            f"approved brand pack asset {asset.get('asset_id')!r} has unresolved rights",
+                        )
+                        graph.result.require(
+                            asset.get("consent_status")
+                            in {"CLEARED", "LIMITED", "NOT_APPLICABLE"},
+                            f"approved brand pack asset {asset.get('asset_id')!r} has unresolved consent",
+                        )
+    return graph
 
 
 def _json_pointer(value: Any, pointer: str) -> tuple[bool, Any]:
@@ -1255,7 +1554,97 @@ def _require_record(
     return record
 
 
+def _project_brand_cross_checks(graph: ProjectGraph) -> None:
+    packs = [record for (kind, _), record in graph.records.items() if kind == "brand-pack"]
+    bindings = [record for (kind, _), record in graph.records.items() if kind == "brand-binding"]
+    if not packs and not bindings:
+        return
+    graph.result.require(len(packs) == 1, "project must register exactly one brand-pack artifact")
+    graph.result.require(len(bindings) == 1,
+                         "project must register exactly one brand-binding artifact")
+    if len(packs) != 1 or len(bindings) != 1:
+        return
+    pack_record = packs[0]
+    binding_record = bindings[0]
+    pack = pack_record["data"]
+    binding = binding_record["data"]
+    graph.result.require(
+        binding_record["path"] == graph.root / ".creative-craft" / "brand-binding.json",
+        "brand-binding artifact must use .creative-craft/brand-binding.json",
+    )
+    graph.result.require(binding.get("project_id") == graph.manifest.get("project_id"),
+                         "brand binding project_id differs from project manifest")
+    graph.result.require(binding.get("brand_id") == pack.get("brand_id"),
+                         "brand binding brand_id differs from brand pack")
+    graph.result.require(binding.get("pack_id") == pack.get("pack_id"),
+                         "brand binding pack_id differs from brand pack")
+    graph.result.require(binding.get("pack_version") == pack.get("version"),
+                         "brand binding pack_version differs from brand pack")
+    graph.result.require(pack.get("status") != "revoked",
+                         "project must not bind a revoked brand pack")
+
+    snapshot = binding.get("snapshot", {})
+    snapshot_value = snapshot.get("path") if isinstance(snapshot, dict) else None
+    graph.result.require(snapshot_value == ".creative-craft/brand-snapshot",
+                         "brand binding snapshot.path must be .creative-craft/brand-snapshot")
+    snapshot_path, snapshot_error = _safe_project_path(graph.root, snapshot_value)
+    graph.result.require(snapshot_error is None, f"brand binding snapshot: {snapshot_error}")
+    if snapshot_path is None or not snapshot_path.is_dir():
+        graph.result.errors.append("brand binding snapshot directory does not exist")
+        return
+    expected_pack_path = snapshot_path / "brand-pack.json"
+    graph.result.require(pack_record["path"] == expected_pack_path,
+                         "registered brand-pack artifact is not the bound snapshot manifest")
+    snapshot_graph = validate_brand_pack(snapshot_path)
+    graph.result.errors.extend(
+        f"brand snapshot: {message}" for message in snapshot_graph.result.errors
+    )
+    graph.result.warnings.extend(
+        f"brand snapshot: {message}" for message in snapshot_graph.result.warnings
+    )
+    try:
+        actual_tree_sha = tree_sha256(snapshot_path)
+    except ValueError as exc:
+        graph.result.errors.append(str(exc))
+    else:
+        graph.result.require(
+            actual_tree_sha == snapshot.get("tree_sha256"),
+            "brand binding snapshot tree_sha256 mismatch",
+        )
+    source = binding.get("source", {})
+    graph.result.require(
+        isinstance(source, dict) and source.get("pack_sha256") == pack_record["sha256"],
+        "brand binding source.pack_sha256 differs from snapshot brand-pack.json",
+    )
+
+    project_brand = binding.get("project_brand", {})
+    project_brand_value = project_brand.get("path") if isinstance(project_brand, dict) else None
+    graph.result.require(project_brand_value == "BRAND.md",
+                         "brand binding project_brand.path must be BRAND.md")
+    brand_path, brand_error = _safe_project_path(graph.root, project_brand_value)
+    graph.result.require(brand_error is None, f"brand binding project_brand: {brand_error}")
+    if brand_path is None or not brand_path.is_file():
+        graph.result.errors.append("bound project BRAND.md does not exist")
+        return
+    brand_digest = sha256_file(brand_path)
+    graph.result.require(brand_digest == project_brand.get("sha256"),
+                         "brand binding project_brand.sha256 mismatch")
+    brand_authority = next(
+        (item for item in pack.get("authority_files", [])
+         if isinstance(item, dict) and item.get("role") == "brand"),
+        None,
+    )
+    if isinstance(brand_authority, dict):
+        graph.result.require(brand_digest == brand_authority.get("sha256"),
+                             "project BRAND.md differs from snapshot brand authority")
+
+
 def _project_cross_checks(graph: ProjectGraph) -> None:
+    _project_brand_cross_checks(graph)
+    bound_brand_packs = [
+        record["data"] for (kind, _), record in graph.records.items() if kind == "brand-pack"
+    ]
+    has_brand_binding = any(kind == "brand-binding" for kind, _ in graph.records)
     assets: dict[str, dict[str, Any]] = {}
     for (artifact_type, _), record in graph.records.items():
         if artifact_type == "asset-ledger":
@@ -1333,6 +1722,12 @@ def _project_cross_checks(graph: ProjectGraph) -> None:
                 graph.result.require(asset_id_ref in assets,
                                      f"job {artifact_id} references unknown asset {asset_id_ref!r}")
             if data.get("declared_status") == "ready":
+                if has_brand_binding:
+                    graph.result.require(
+                        len(bound_brand_packs) == 1
+                        and bound_brand_packs[0].get("status") == "approved",
+                        f"ready job {artifact_id} requires an approved bound brand pack",
+                    )
                 graph.result.require(bool(brief and brief["data"].get("status") == "locked"),
                                      f"ready job {artifact_id} requires a locked brief")
                 graph.result.require(
@@ -2180,8 +2575,9 @@ def doctor(root: Path = REPO_ROOT) -> Result:
                 except (ValueError, KeyError) as exc:
                     r.errors.append(str(exc))
 
+    ignored_parts = {".git", ".venv", "__pycache__", "dist", "node_modules"}
     for path in sorted(root.rglob("*.json")):
-        if any(part in {".git", "node_modules"} for part in path.parts):
+        if any(part in ignored_parts for part in path.parts):
             continue
         try:
             load_json(path)
@@ -2203,7 +2599,7 @@ def doctor(root: Path = REPO_ROOT) -> Result:
                 source_ids.add(source["id"])
 
     for path in sorted(root.rglob("*.md")):
-        if any(part in {".git", "node_modules"} for part in path.parts):
+        if any(part in ignored_parts for part in path.parts):
             continue
         for target, resolved in markdown_local_links(path):
             r.require(resolved.exists(), f"broken local link in {path.relative_to(root)}: {target}")
@@ -2399,17 +2795,564 @@ def cmd_hash(args: argparse.Namespace) -> int:
     return 0
 
 
+def _json_text(data: dict[str, Any]) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
+def _brand_authority_documents(brand_name: str) -> list[tuple[str, str, str]]:
+    return [
+        ("brand", "references/brand.md", f"""# {brand_name} Brand Authority
+
+Status: `UNVERIFIED`
+
+This draft contains no approved brand facts. Replace every `TBD` only from a reviewed source.
+
+## Identity
+
+- Working brand name: {brand_name}
+- Legal entity: TBD
+- Purpose: TBD
+- Positioning: TBD
+- Audience: TBD
+
+## Non-negotiables
+
+- TBD
+
+## Source boundary
+
+- Approved source references: none
+"""),
+        ("products", "references/products.md", f"""# {brand_name} Product Authority
+
+Status: `UNVERIFIED`
+
+No product fact, SKU specification, ingredient, performance statement, price, or availability is approved in this draft.
+
+## Approved products
+
+- TBD
+
+## Source boundary
+
+- Approved source references: none
+"""),
+        ("claims", "references/claims.md", f"""# {brand_name} Claims Authority
+
+Status: `UNVERIFIED`
+
+No marketing, efficacy, comparative, sustainability, certification, safety, or compliance claim is approved in this draft.
+
+## Approved claims
+
+- None
+
+## Prohibited until approved
+
+- Any claim without a source, owner, scope, market, and approval record
+"""),
+        ("visual", "references/visual-system.md", f"""# {brand_name} Visual System
+
+Status: `UNVERIFIED`
+
+## Approved marks and lockups
+
+- TBD
+
+## Color, typography, composition, and image rules
+
+- TBD
+
+## Prohibited treatments
+
+- TBD
+"""),
+        ("verbal", "references/verbal-system.md", f"""# {brand_name} Verbal System
+
+Status: `UNVERIFIED`
+
+## Voice and tone
+
+- TBD
+
+## Exact terminology
+
+- TBD
+
+## Prohibited language
+
+- TBD
+"""),
+        ("channels", "references/channels.md", f"""# {brand_name} Channel Rules
+
+Status: `UNVERIFIED`
+
+## Markets and channels
+
+- TBD
+
+## Format and adaptation rules
+
+- TBD
+
+## Required disclosures
+
+- TBD
+"""),
+        ("rights", "references/rights-and-approvals.md", f"""# {brand_name} Rights and Approvals
+
+Status: `UNVERIFIED`
+
+No asset, person, music, font, claim, or market use is approved by this draft.
+
+## Approval owners
+
+- Brand: TBD
+- Legal or compliance: TBD
+- Asset rights: TBD
+
+## Approved exceptions
+
+- None
+"""),
+    ]
+
+
+def _brand_skill_text(brand_id: str, brand_name: str) -> str:
+    description = (
+        f"Private {brand_name} brand authority router. Use only when the user or active project "
+        f"explicitly identifies brand_id '{brand_id}'. Load reviewed brand references and then "
+        "apply the generic creative-craft workflow."
+    )
+    return f"""---
+name: {brand_id}-brand
+description: {json.dumps(description, ensure_ascii=False)}
+---
+
+# {brand_name} Brand Authority Router
+
+Use this skill only when the request or bound project explicitly identifies `{brand_id}`.
+
+1. Read `brand-pack.json` and reject `revoked` authority.
+2. Read only the authority files needed for the task.
+3. Treat `TBD` and `UNVERIFIED` as unknown; never turn them into facts or approvals.
+4. Resolve assets through `asset-ledger.json`; do not infer rights from file possession.
+5. Use the generic `creative-craft` skill for briefs, routes, direction, jobs, inspection, revision, evaluation, and delivery.
+6. For project work, use the project's immutable Brand Pack snapshot instead of this live checkout.
+
+This skill contains brand authority only. It does not replace or duplicate Creative Craft schemas, provider profiles, or production methods.
+"""
+
+
+def cmd_init_brand_pack(args: argparse.Namespace) -> int:
+    requested_target = Path(args.target).expanduser()
+    if requested_target.is_symlink():
+        print("ERROR: Brand Pack target must not be a symlink", file=sys.stderr)
+        return 1
+    target = requested_target.resolve()
+    brand_id = str(args.brand_id).strip()
+    brand_name = str(args.brand_name).strip()
+    owner = str(args.owner).strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", brand_id):
+        print("ERROR: --brand-id must be a lowercase slug", file=sys.stderr)
+        return 1
+    if not brand_name or not owner:
+        print("ERROR: --brand-name and --owner must be non-empty", file=sys.stderr)
+        return 1
+    known_paths = [
+        target / "SKILL.md",
+        target / "VERSION",
+        target / "brand-pack.json",
+        target / "asset-ledger.json",
+        *(target / path for _, path, _ in _brand_authority_documents(brand_name)),
+    ]
+    conflicts = [path for path in known_paths if path.exists()]
+    if conflicts and not args.force:
+        print("ERROR: refusing to overwrite existing Brand Pack files:", file=sys.stderr)
+        for path in conflicts:
+            print(f"  {path}", file=sys.stderr)
+        print("Use --force only after reviewing the existing authority.", file=sys.stderr)
+        return 1
+    if target.exists() and any(target.iterdir()) and args.force:
+        suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup = target.with_name(f"{target.name}.bak.{suffix}")
+        shutil.copytree(target, backup, symlinks=True)
+        print(f"Backup: {backup}")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        documents = _brand_authority_documents(brand_name)
+        for _, relative, content in documents:
+            write_atomic(target / relative, content)
+        ledger = {
+            "schema_version": "creative-craft.asset-ledger.v1",
+            "project_id": f"brand:{brand_id}",
+            "assets": [],
+        }
+        ledger_path = target / "asset-ledger.json"
+        write_atomic(ledger_path, _json_text(ledger))
+        manifest = {
+            "schema_version": "creative-craft.brand-pack.v1",
+            "brand_id": brand_id,
+            "brand_name": brand_name,
+            "pack_id": f"{brand_id}-brand-pack",
+            "version": "0.1.0",
+            "status": "draft",
+            "classification": "internal",
+            "owner": owner,
+            "approved_at": None,
+            "review_after": None,
+            "supersedes": None,
+            "authority_files": [
+                {"role": role, "path": relative, "sha256": sha256_file(target / relative)}
+                for role, relative, _ in documents
+            ],
+            "asset_ledger": {
+                "path": "asset-ledger.json",
+                "sha256": sha256_file(ledger_path),
+            },
+            "source_references": [],
+        }
+        write_atomic(target / "brand-pack.json", _json_text(manifest))
+        write_atomic(target / "SKILL.md", _brand_skill_text(brand_id, brand_name))
+        write_atomic(target / "VERSION", "0.1.0\n")
+        approved_dir = target / "assets" / "approved"
+        approved_dir.mkdir(parents=True, exist_ok=True)
+        write_atomic(approved_dir / ".gitkeep", "")
+        graph = validate_brand_pack(target)
+        if not graph.result.ok:
+            raise ValueError("; ".join(graph.result.errors))
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: failed to initialize Brand Pack: {exc}", file=sys.stderr)
+        return 1
+    print(target)
+    return 0
+
+
+def cmd_validate_brand_pack(args: argparse.Namespace) -> int:
+    graph = validate_brand_pack(Path(args.root))
+    payload = {
+        "root": str(graph.root),
+        "manifest": str(graph.manifest_path),
+        "brand_id": graph.manifest.get("brand_id"),
+        "pack_id": graph.manifest.get("pack_id"),
+        "version": graph.manifest.get("version"),
+        "status": graph.manifest.get("status"),
+        "classification": graph.manifest.get("classification"),
+        "valid": graph.result.ok,
+        "authority_roles": sorted(graph.authority_paths),
+        "asset_count": len(graph.ledger.get("assets", [])),
+        "errors": graph.result.errors,
+        "warnings": graph.result.warnings,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"{'PASS' if graph.result.ok else 'FAIL'} brand pack: {graph.root}")
+        print(f"  Brand: {payload['brand_id']}")
+        print(f"  Pack: {payload['pack_id']}@{payload['version']} ({payload['status']})")
+        print(f"  Authority files: {len(payload['authority_roles'])}")
+        print(f"  Assets: {payload['asset_count']}")
+        for message in graph.result.errors:
+            print(f"  ERROR: {message}")
+        for message in graph.result.warnings:
+            print(f"  WARN:  {message}")
+    return 0 if graph.result.ok else 1
+
+
+def _copy_snapshot_files(source: BrandPackGraph, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=False)
+    relative_files: set[str] = {"brand-pack.json"}
+    relative_files.update(
+        str(item["path"]) for item in source.manifest.get("authority_files", [])
+        if isinstance(item, dict)
+    )
+    ledger_relative = str(source.manifest.get("asset_ledger", {}).get("path"))
+    relative_files.add(ledger_relative)
+    for asset in source.ledger.get("assets", []):
+        if not isinstance(asset, dict):
+            continue
+        value = str(asset.get("path_or_uri", ""))
+        if not _is_external_asset_uri(value):
+            relative_files.add(value)
+    for relative in sorted(relative_files):
+        source_path, error = _safe_relative_path(source.root, relative, label="snapshot source path")
+        if error or source_path is None or not source_path.is_file():
+            raise ValueError(error or f"snapshot source file does not exist: {relative!r}")
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination)
+
+
+def _project_ledger_record(graph: ProjectGraph) -> dict[str, Any]:
+    records = [record for (kind, _), record in graph.records.items() if kind == "asset-ledger"]
+    if len(records) != 1:
+        raise ValueError("project must register exactly one project asset ledger")
+    return records[0]
+
+
+def _snapshot_asset_ids(snapshot_path: Path | None) -> set[str]:
+    if snapshot_path is None or not snapshot_path.is_dir():
+        return set()
+    graph = validate_brand_pack(snapshot_path)
+    if not graph.result.ok:
+        raise ValueError("existing brand snapshot is invalid: " + "; ".join(graph.result.errors))
+    return {
+        str(item.get("asset_id")) for item in graph.ledger.get("assets", [])
+        if isinstance(item, dict)
+    }
+
+
+def _merged_project_ledger(
+    project_ledger: dict[str, Any], source: BrandPackGraph, old_asset_ids: set[str]
+) -> dict[str, Any]:
+    merged = copy.deepcopy(project_ledger)
+    existing = [
+        item for item in merged.get("assets", [])
+        if isinstance(item, dict) and str(item.get("asset_id")) not in old_asset_ids
+    ]
+    ids = {str(item.get("asset_id")) for item in existing}
+    for source_asset in source.ledger.get("assets", []):
+        if not isinstance(source_asset, dict):
+            continue
+        asset = copy.deepcopy(source_asset)
+        asset_id = str(asset.get("asset_id"))
+        if asset_id in ids:
+            raise ValueError(f"brand asset_id collides with a project asset: {asset_id}")
+        ids.add(asset_id)
+        value = str(asset.get("path_or_uri", ""))
+        if not _is_external_asset_uri(value):
+            asset["path_or_uri"] = f".creative-craft/brand-snapshot/{Path(value).as_posix()}"
+        existing.append(asset)
+    merged["assets"] = existing
+    return merged
+
+
+def _backup_brand_state(root: Path, paths: list[Path]) -> tuple[Path, dict[Path, bool]]:
+    suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = root / ".creative-craft" / "brand-backups" / suffix
+    backup.mkdir(parents=True, exist_ok=False)
+    existed: dict[Path, bool] = {}
+    for path in paths:
+        path = path.resolve(strict=False)
+        present = path.exists()
+        existed[path] = present
+        if not present:
+            continue
+        relative = path.relative_to(root)
+        destination = backup / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_dir():
+            shutil.copytree(path, destination)
+        else:
+            shutil.copy2(path, destination)
+    return backup, existed
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def _restore_brand_state(
+    root: Path, backup: Path, existed: dict[Path, bool]
+) -> None:
+    for path, was_present in existed.items():
+        _remove_path(path)
+        if not was_present:
+            continue
+        source = backup / path.relative_to(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, path)
+        else:
+            shutil.copy2(source, path)
+
+
+def _brand_source_value(args: argparse.Namespace, name: str) -> Any:
+    return getattr(args, name, None)
+
+
+def _install_brand_snapshot(
+    project_root: Path,
+    source_root: Path,
+    args: argparse.Namespace,
+    *,
+    require_existing_binding: bool,
+    retain_backup: bool,
+) -> Path:
+    project_root = project_root.resolve()
+    graph = validate_project(project_root)
+    if not graph.result.ok:
+        raise ValueError("project is invalid before Brand Pack update: " + "; ".join(graph.result.errors))
+    existing_binding_records = [
+        record for (kind, _), record in graph.records.items() if kind == "brand-binding"
+    ]
+    if require_existing_binding and len(existing_binding_records) != 1:
+        raise ValueError("update-brand-snapshot requires exactly one existing brand binding")
+    if not require_existing_binding and existing_binding_records:
+        raise ValueError("project already has a brand binding; use update-brand-snapshot")
+
+    source = validate_brand_pack(source_root)
+    if not source.result.ok:
+        raise ValueError("Brand Pack is invalid: " + "; ".join(source.result.errors))
+    if source.manifest.get("status") == "revoked":
+        raise ValueError("cannot bind a revoked Brand Pack")
+    source_uri = _brand_source_value(args, "brand_source_uri")
+    source_commit = _brand_source_value(args, "brand_source_commit")
+    if source_commit and not source_uri:
+        raise ValueError("--brand-source-commit requires --brand-source-uri")
+    reason = str(_brand_source_value(args, "reason") or "Initial Brand Pack import").strip()
+    imported_by = str(_brand_source_value(args, "imported_by") or "TBD").strip()
+    if not reason or not imported_by:
+        raise ValueError("reason and imported_by must be non-empty")
+
+    creative_root = project_root / ".creative-craft"
+    suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    staging = creative_root / f".brand-snapshot.staging-{suffix}"
+    snapshot_path = creative_root / "brand-snapshot"
+    binding_path = creative_root / "brand-binding.json"
+    project_brand_path = project_root / "BRAND.md"
+    manifest_path = graph.manifest_path
+    ledger_record = _project_ledger_record(graph)
+    ledger_path = Path(ledger_record["path"])
+    old_snapshot = snapshot_path if existing_binding_records else None
+    old_asset_ids = _snapshot_asset_ids(old_snapshot)
+    previous_binding_id = (
+        str(existing_binding_records[0]["data"].get("binding_id"))
+        if existing_binding_records else None
+    )
+
+    try:
+        _copy_snapshot_files(source, staging)
+        staged_validation = validate_brand_pack(staging)
+        if not staged_validation.result.ok:
+            raise ValueError(
+                "staged Brand Pack is invalid: "
+                + "; ".join(staged_validation.result.errors)
+            )
+        staged_tree_sha = tree_sha256(staging)
+        merged_ledger = _merged_project_ledger(ledger_record["data"], source, old_asset_ids)
+        brand_authority = source.authority_paths.get("brand")
+        if brand_authority is None:
+            raise ValueError("Brand Pack has no brand authority file")
+        tracked_paths = [
+            snapshot_path, binding_path, project_brand_path, ledger_path, manifest_path
+        ]
+        backup, existed = _backup_brand_state(project_root, tracked_paths)
+    except Exception:
+        _remove_path(staging)
+        raise
+    try:
+        _remove_path(snapshot_path)
+        staging.replace(snapshot_path)
+        shutil.copy2(snapshot_path / brand_authority.relative_to(source.root), project_brand_path)
+        write_atomic(ledger_path, _json_text(merged_ledger))
+        imported_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        binding = {
+            "schema_version": "creative-craft.brand-binding.v1",
+            "binding_id": (
+                f"binding-{graph.manifest.get('project_id')}-{source.manifest.get('brand_id')}-"
+                f"{suffix}"
+            ),
+            "project_id": str(graph.manifest.get("project_id")),
+            "brand_id": str(source.manifest.get("brand_id")),
+            "pack_id": str(source.manifest.get("pack_id")),
+            "pack_version": str(source.manifest.get("version")),
+            "source": {
+                "repository_or_uri": source_uri,
+                "ref": _brand_source_value(args, "brand_source_ref"),
+                "commit": source_commit,
+                "pack_sha256": sha256_file(snapshot_path / "brand-pack.json"),
+            },
+            "snapshot": {
+                "path": ".creative-craft/brand-snapshot",
+                "tree_sha256": staged_tree_sha,
+            },
+            "project_brand": {
+                "path": "BRAND.md",
+                "sha256": sha256_file(project_brand_path),
+            },
+            "imported_at": imported_at,
+            "imported_by": imported_by,
+            "previous_binding_id": previous_binding_id,
+            "reason": reason,
+        }
+        write_atomic(binding_path, _json_text(binding))
+
+        manifest = copy.deepcopy(graph.manifest)
+        manifest["artifacts"] = [
+            item for item in manifest.get("artifacts", [])
+            if isinstance(item, dict)
+            and item.get("artifact_type") not in {"brand-pack", "brand-binding"}
+        ]
+        for item in manifest["artifacts"]:
+            if item.get("artifact_type") == "asset-ledger" and Path(
+                str(item.get("path"))
+            ) == ledger_path.relative_to(project_root):
+                item["sha256"] = sha256_file(ledger_path)
+        manifest["artifacts"].extend([
+            {
+                "artifact_type": "brand-pack",
+                "artifact_id": str(source.manifest.get("pack_id")),
+                "schema_version": "creative-craft.brand-pack.v1",
+                "path": ".creative-craft/brand-snapshot/brand-pack.json",
+                "sha256": sha256_file(snapshot_path / "brand-pack.json"),
+            },
+            {
+                "artifact_type": "brand-binding",
+                "artifact_id": str(binding["binding_id"]),
+                "schema_version": "creative-craft.brand-binding.v1",
+                "path": ".creative-craft/brand-binding.json",
+                "sha256": sha256_file(binding_path),
+            },
+        ])
+        write_atomic(manifest_path, _json_text(manifest))
+        validated = validate_project(project_root)
+        if not validated.result.ok:
+            raise ValueError("updated project is invalid: " + "; ".join(validated.result.errors))
+    except Exception:
+        _remove_path(staging)
+        _restore_brand_state(project_root, backup, existed)
+        raise
+    if not retain_backup:
+        _remove_path(backup)
+        parent = backup.parent
+        if parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+    return backup
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     target = Path(args.target).expanduser().resolve()
+    brand_pack = getattr(args, "brand_pack", None)
+    if brand_pack:
+        source = validate_brand_pack(Path(str(brand_pack)).expanduser())
+        if not source.result.ok:
+            print(
+                "ERROR: Brand Pack is invalid: " + "; ".join(source.result.errors),
+                file=sys.stderr,
+            )
+            return 1
+        if source.manifest.get("status") == "revoked":
+            print("ERROR: cannot bind a revoked Brand Pack", file=sys.stderr)
+            return 1
+        if getattr(args, "brand_source_commit", None) and not getattr(
+            args, "brand_source_uri", None
+        ):
+            print("ERROR: --brand-source-commit requires --brand-source-uri", file=sys.stderr)
+            return 1
     target.mkdir(parents=True, exist_ok=True)
     copies: dict[Path, Path] = {
-        TEMPLATES_DIR / "BRAND.md": target / "BRAND.md",
         TEMPLATES_DIR / "CREATIVE.md": target / "CREATIVE.md",
         TEMPLATES_DIR / "DELIVERABLES.md": target / "DELIVERABLES.md",
     }
-    for entry in ARTIFACT_REGISTRY.values():
+    if not brand_pack:
+        copies[TEMPLATES_DIR / "BRAND.md"] = target / "BRAND.md"
+    for schema_version, entry in ARTIFACT_REGISTRY.items():
         template = entry.get("template")
-        if template and not entry.get("legacy"):
+        if template and schema_version in PROJECT_SEED_SCHEMA_VERSIONS:
             copies[TEMPLATES_DIR / str(template)] = target / ".creative-craft" / str(template)
     conflicts = [dst for dst in copies.values() if dst.exists() and not args.force]
     if conflicts:
@@ -2428,10 +3371,6 @@ def cmd_seed(args: argparse.Namespace) -> int:
         shutil.copy2(src, dst)
         print(dst)
     manifest_entries: list[dict[str, Any]] = []
-    seed_types = {
-        "brief", "asset-ledger", "concept-routes", "creative-direction",
-        "image", "video", "evaluation", "delivery",
-    }
     fallback_ids = {
         "asset-ledger": "asset-ledger-tbd",
         "concept-routes": "routes-tbd",
@@ -2439,7 +3378,7 @@ def cmd_seed(args: argparse.Namespace) -> int:
     for schema_version, entry in ARTIFACT_REGISTRY.items():
         template = entry.get("template")
         artifact_type = str(entry["kind"])
-        if not template or artifact_type not in seed_types or entry.get("legacy"):
+        if not template or schema_version not in PROJECT_MANIFEST_SEED_SCHEMA_VERSIONS:
             continue
         path = target / ".creative-craft" / str(template)
         data = load_json(path)
@@ -2460,6 +3399,35 @@ def cmd_seed(args: argparse.Namespace) -> int:
         "artifacts": manifest_entries,
     }
     write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    if brand_pack:
+        try:
+            _install_brand_snapshot(
+                target,
+                Path(str(brand_pack)).expanduser(),
+                args,
+                require_existing_binding=False,
+                retain_backup=False,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: failed to bind Brand Pack: {exc}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def cmd_update_brand_snapshot(args: argparse.Namespace) -> int:
+    try:
+        backup = _install_brand_snapshot(
+            Path(args.target).expanduser(),
+            Path(args.brand_pack).expanduser(),
+            args,
+            require_existing_binding=True,
+            retain_backup=True,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: failed to update Brand Pack snapshot: {exc}", file=sys.stderr)
+        return 1
+    print(f"Backup: {backup}")
+    print(Path(args.target).expanduser().resolve() / ".creative-craft" / "brand-binding.json")
     return 0
 
 
@@ -2688,10 +3656,45 @@ def build_parser() -> argparse.ArgumentParser:
     hash_parser.add_argument("--json", action="store_true")
     hash_parser.set_defaults(func=cmd_hash)
 
+    init_brand_parser = sub.add_parser(
+        "init-brand-pack", help="initialize a private draft Brand Skill authority pack"
+    )
+    init_brand_parser.add_argument("--target", required=True)
+    init_brand_parser.add_argument("--brand-id", required=True)
+    init_brand_parser.add_argument("--brand-name", required=True)
+    init_brand_parser.add_argument("--owner", required=True)
+    init_brand_parser.add_argument("--force", action="store_true")
+    init_brand_parser.set_defaults(func=cmd_init_brand_pack)
+
+    validate_brand_parser = sub.add_parser(
+        "validate-brand-pack", help="validate Brand Pack authority, files, digests, and rights"
+    )
+    validate_brand_parser.add_argument("--root", required=True)
+    validate_brand_parser.add_argument("--json", action="store_true")
+    validate_brand_parser.set_defaults(func=cmd_validate_brand_pack)
+
     seed_parser = sub.add_parser("seed", help="seed authority and job templates into a project")
     seed_parser.add_argument("--target", required=True)
+    seed_parser.add_argument("--brand-pack")
+    seed_parser.add_argument("--brand-source-uri")
+    seed_parser.add_argument("--brand-source-ref")
+    seed_parser.add_argument("--brand-source-commit")
+    seed_parser.add_argument("--imported-by", default="TBD")
     seed_parser.add_argument("--force", action="store_true")
     seed_parser.set_defaults(func=cmd_seed)
+
+    update_brand_parser = sub.add_parser(
+        "update-brand-snapshot",
+        help="replace a project Brand Pack snapshot with backup, lineage, and rollback",
+    )
+    update_brand_parser.add_argument("--target", required=True)
+    update_brand_parser.add_argument("--brand-pack", required=True)
+    update_brand_parser.add_argument("--reason", required=True)
+    update_brand_parser.add_argument("--brand-source-uri")
+    update_brand_parser.add_argument("--brand-source-ref")
+    update_brand_parser.add_argument("--brand-source-commit")
+    update_brand_parser.add_argument("--imported-by", default="TBD")
+    update_brand_parser.set_defaults(func=cmd_update_brand_snapshot)
 
     project_parser = sub.add_parser(
         "validate-project", help="validate a project manifest, digests, and cross-artifact graph"

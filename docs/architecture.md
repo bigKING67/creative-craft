@@ -1,7 +1,21 @@
 # Architecture
 
 Creative Craft separates timeless creative method from changing provider
-capabilities.
+capabilities and from organization-specific authority.
+
+## Repository boundary
+
+Creative Craft is the public protocol. Company or client authority belongs in
+a separate private Brand Skill; campaign evidence belongs in a separate project.
+
+```text
+public Creative Craft -> private Brand Skill -> immutable project snapshot
+```
+
+The public core must not contain proprietary claims, internal links, brand
+assets, or organization-specific rules. A thin Brand Skill calls the generic
+method instead of copying it. This lets any team install the same Creative Craft
+runtime while supplying its own governed authority.
 
 ## Layers
 
@@ -58,6 +72,20 @@ Execution surfaces live under `providers/surfaces/` and distinguish the model
 from the UI/API used to execute it. A surface declares availability, compatible
 provider profiles, supported modes, and surface-specific limitations.
 
+### Private Brand Skills (external)
+
+A Brand Skill is not a directory inside this repository. It owns only curated
+brand, product, claims, visual, verbal, channel, rights, source, and Asset Ledger
+authority. Large media stays in DAM/object storage; the ledger binds stable URIs
+to SHA-256, rights, consent, and allowed use.
+
+`creative-craft.brand-pack.v1` registers the exact authority files and digests.
+`creative-craft.brand-binding.v1` records which pack/version/source was copied
+into a project. Binding copies registered files and safe local assets into
+`.creative-craft/brand-snapshot/`; no live symlink or implicit refresh is
+allowed. Updating a snapshot creates a backup and lineage record, then validates
+the complete project or rolls back.
+
 ### 4. Versioned artifacts and schemas
 
 `skills/creative-craft/templates/`
@@ -74,6 +102,8 @@ Standard-library CLI:
 
 - checks repository integrity;
 - seeds project authority;
+- initializes and validates private Brand Skills;
+- binds and explicitly updates immutable project Brand Pack snapshots;
 - validates JSON Schema structure and cross-field semantics;
 - validates a content-bound project graph and derives lifecycle status;
 - compiles provider-aware prompts;
@@ -94,6 +124,12 @@ promoting historical results to current model guarantees.
 ## Data flow
 
 ```text
+private Brand Skill -- source ref/commit and reviewed authority
+        |
+        v
+immutable Brand Pack snapshot -> project BRAND.md / project asset ledger
+        |
+        v
 user / project authority
         |
         v
@@ -123,7 +159,7 @@ The declared state inside image/video Job v2 is intentionally limited to
 corresponding receipt, output file, digest, inspection, approval, and delivery
 evidence exists.
 
-## Why no direct model adapter in v0.2.0
+## Why no direct model adapter in v0.2
 
 The first failure mode of a creative system is usually not API syntax. It is a
 missing brief, collapsed concept/execution thinking, vague reference use,

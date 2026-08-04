@@ -2,6 +2,30 @@
 
 All notable changes are documented here.
 
+## 0.2.2 — 2026-08-04
+
+Brand authority portability release:
+
+- added generic `creative-craft.brand-pack.v1` and
+  `creative-craft.brand-binding.v1` contracts without adding any private brand
+  content to the public package;
+- added `init-brand-pack` and `validate-brand-pack` for thin private Brand
+  Skills with placeholder-only authority, content digests, safe paths, source
+  review, asset rights, and consent checks;
+- extended `seed` with opt-in Brand Pack binding that copies an immutable
+  project snapshot, projects `BRAND.md`, merges Asset Ledger entries, and binds
+  source/ref/commit plus SHA-256 identity;
+- added `update-brand-snapshot` with previous-binding lineage, retained backup,
+  complete project validation, and rollback on failure;
+- blocked `ready` Jobs when a bound Brand Pack is not approved while preserving
+  backward compatibility for unbound projects;
+- added installed-runtime Brand Pack smoke coverage and regression tests for
+  traversal, symlinks, digest drift, unresolved rights, snapshot drift,
+  binding mismatches, updates, and rollback.
+
+This release does not contain company-specific knowledge, real brand assets,
+approved claims, provider network adapters, or real Creative Golden Evals.
+
 ## 0.2.1 — 2026-08-04
 
 Installed-runtime verification patch:
