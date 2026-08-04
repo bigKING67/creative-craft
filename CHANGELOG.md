@@ -2,6 +2,31 @@
 
 All notable changes are documented here.
 
+## 0.2.3 — 2026-08-04
+
+Reference intelligence portability release:
+
+- added non-authoritative `creative-craft.reference-pack.v1` and
+  `creative-craft.reference-binding.v1` contracts without adding any private
+  brand, competitor, team, source, or asset data to the public package;
+- added `init-reference-pack` and `validate-reference-pack` for thin private
+  Reference Skills with evidence classes, source links, transferable
+  principles, non-transferable elements, content digests, safe paths, and
+  input-rights checks;
+- added `bind-reference-pack` with `0..N` immutable project snapshots,
+  selected-entity bindings, selected-asset ledger merge, and source lineage;
+- added `update-reference-snapshot` with per-pack previous-binding lineage,
+  scoped retained backup, complete project validation, and rollback on failure;
+- enforced `may_override_primary_brand: false`, kept the existing `0..1`
+  Primary Brand Pack invariant, rejected revoked references, and made draft
+  references warning-only so they cannot block an otherwise Ready Job;
+- added installed-runtime, package-boundary, multiple-pack, snapshot-drift,
+  selection, rights, update-isolation, and rollback regression coverage.
+
+This release intentionally does not implement Partner/co-brand authority,
+contain Groland or other private reference data, publish to npm, call provider
+networks, or claim real Creative Golden Evals.
+
 ## 0.2.2 — 2026-08-04
 
 Brand authority portability release:

@@ -41,6 +41,24 @@ Implemented without changing the `0.3` Golden Eval milestone:
 
 No company-specific knowledge or asset is included in the public package.
 
+## 0.2.3 — portable reference intelligence
+
+Implemented without weakening Primary Brand authority:
+
+- generic non-authoritative Reference Pack and multi-binding contracts;
+- separate private Reference Skill initialization with empty draft content;
+- evidence-classed observations, transferable principles, explicit
+  non-transferable elements, source identity, and asset-use policy;
+- `0..N` immutable project snapshots with selected-entity asset merge;
+- scoped snapshot update, previous-binding lineage, backup, full validation,
+  and rollback without changing other packs;
+- hard `may_override_primary_brand: false`, revoked-pack rejection, and draft
+  warnings that do not block Ready Jobs;
+- installed-runtime and package-boundary coverage for the new contracts.
+
+Partner/co-brand federation remains intentionally unimplemented until a real
+joint-authority workflow supplies concrete requirements and evidence.
+
 ## 0.3 — real creative evals
 
 Planned:

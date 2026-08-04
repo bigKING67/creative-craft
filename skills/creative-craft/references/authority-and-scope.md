@@ -9,16 +9,32 @@ Resolve conflicts in this order:
 
 1. current user objective, constraints, approvals, and rights;
 2. actual source assets and observed outputs;
-3. scoped project instructions;
-4. `BRAND.md`, `CREATIVE.md`, `DELIVERABLES.md`, and the asset ledger;
-5. verified product facts, claims evidence, channel specifications, and
-   distribution requirements;
-6. dated official provider documentation and the matching provider profile;
-7. Creative Craft references and templates;
-8. generic conventions, trends, and taste.
+3. approved Primary Brand Pack snapshot and `BRAND.md`;
+4. locked Brief, Creative Direction, `CREATIVE.md`, `DELIVERABLES.md`, verified
+   product facts, claims evidence, channel requirements, and asset ledger;
+5. `OBSERVED` evidence from selected Reference Pack entities;
+6. `INFERRED` reference principles with their scope and uncertainty;
+7. `HYPOTHESIZED` reference implications that still require a test;
+8. Creative Craft methods, generic conventions, trends, and taste.
 
 A current explicit instruction may change a previous project decision, but it
 does not manufacture missing rights, product evidence, or output validation.
+Dated official Provider and Surface Profiles constrain execution feasibility on
+their own axis; they never override identity, rights, or a preservation contract.
+
+## Primary Brand and reference boundary
+
+- The Primary Brand Pack is optional but singular (`0..1`) and defines who the
+  project represents.
+- Reference Packs are optional and plural (`0..N`) and record who or what the
+  project learns from.
+- A project holds the current Brief, Direction, Jobs, evidence, outputs, and
+  delivery state: what is being made now.
+
+Every reference entity must remain non-authoritative. It may inform principles,
+but cannot redefine identity, product facts, claims, exact copy, rights, product
+geometry, or primary visual/verbal authority. Public visibility does not grant
+generation-input rights.
 
 ## Canonical project authority
 

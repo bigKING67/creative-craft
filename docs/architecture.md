@@ -6,16 +6,21 @@ capabilities and from organization-specific authority.
 ## Repository boundary
 
 Creative Craft is the public protocol. Company or client authority belongs in
-a separate private Brand Skill; campaign evidence belongs in a separate project.
+a separate private Primary Brand Skill, creative research belongs in one or
+more private Reference Skills, and campaign evidence belongs in a project.
 
 ```text
-public Creative Craft -> private Brand Skill -> immutable project snapshot
+public Creative Craft
+  -> 0..1 private Primary Brand Skill -> immutable brand snapshot
+  -> 0..N private Reference Skills    -> immutable reference snapshots
+  -> project evidence and outputs
 ```
 
 The public core must not contain proprietary claims, internal links, brand
 assets, or organization-specific rules. A thin Brand Skill calls the generic
 method instead of copying it. This lets any team install the same Creative Craft
-runtime while supplying its own governed authority.
+runtime while supplying its own governed authority and non-authoritative
+reference intelligence.
 
 ## Layers
 
@@ -86,6 +91,27 @@ into a project. Binding copies registered files and safe local assets into
 allowed. Updating a snapshot creates a backup and lineage record, then validates
 the complete project or rolls back.
 
+### Private Reference Skills (external)
+
+A Reference Skill is not a subdirectory of the public repository or the
+Primary Brand Skill. It stores research entities such as brands, companies,
+teams, agencies, creators, campaigns, products, visual systems, films,
+photography, packaging, editorial systems, or social accounts.
+
+`creative-craft.reference-pack.v1` separates `OBSERVED`, `INFERRED`,
+`HYPOTHESIZED`, and `UNVERIFIED` evidence; records transferable principles and
+non-transferable expression; binds sources and optional assets; and permanently
+sets `may_override_primary_brand` to false. `creative-craft.reference-binding.v1`
+records the selected entities, source identity, snapshot tree digest, and update
+lineage.
+
+A project may bind many Reference Packs. Each complete pack snapshot lives at
+`.creative-craft/reference-snapshots/<pack-id>/`, each binding lives under
+`.creative-craft/reference-bindings/`, and only assets from selected entities
+are merged into the project ledger. Updating one reference creates a scoped
+backup and cannot replace the Primary Brand Pack or another Reference Pack.
+Draft packs warn but do not block Ready Jobs; revoked packs fail closed.
+
 ### 4. Versioned artifacts and schemas
 
 `skills/creative-craft/templates/`
@@ -104,6 +130,8 @@ Standard-library CLI:
 - seeds project authority;
 - initializes and validates private Brand Skills;
 - binds and explicitly updates immutable project Brand Pack snapshots;
+- initializes and validates private Reference Skills;
+- binds multiple Reference Packs and updates one immutable snapshot at a time;
 - validates JSON Schema structure and cross-field semantics;
 - validates a content-bound project graph and derives lifecycle status;
 - compiles provider-aware prompts;
@@ -127,10 +155,12 @@ promoting historical results to current model guarantees.
 private Brand Skill -- source ref/commit and reviewed authority
         |
         v
-immutable Brand Pack snapshot -> project BRAND.md / project asset ledger
-        |
-        v
-user / project authority
+immutable Brand Pack snapshot -> project BRAND.md / project asset ledger ----+
+                                                                             |
+private Reference Skills -- evidence states / selected entities / source lineage
+        |                                                                    |
+        v                                                                    v
+immutable Reference Pack snapshots -> selected evidence and assets ------> user / project authority
         |
         v
 project manifest -- content hashes and artifact registry

@@ -22,11 +22,12 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.2` adds portable brand authority without putting any company's
-private knowledge into this public repository. A separate Brand Skill can be
-validated, installed for a team, and copied into each creative project as an
-immutable, digest-bound snapshot. Changing employer or client means changing
-the Brand Pack; the Creative Craft method and historical projects stay clean.
+Version `0.2.3` separates portable brand authority from portable creative
+reference intelligence without putting any company's private knowledge into
+this public repository. A project may bind zero or one Primary Brand Pack and
+zero or many Reference Packs as immutable, digest-bound snapshots. Changing
+employer or client means changing the private packs; the Creative Craft method
+and historical projects stay clean.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -148,15 +149,16 @@ A project may seed:
 These are optional for a small task, but unresolved authority must be named as
 an assumption rather than silently invented.
 
-## Public core, private Brand Packs, immutable projects
+## Public core, private packs, immutable projects
 
 Do not add company knowledge, claims, internal links, or proprietary assets to
 this repository. Use three independent lifecycles:
 
 ```text
 creative-craft/             public generic method, schemas, and tooling
-acme-brand-pack/            private team Brand Skill and reviewed authority
-campaign-project/           private brief, jobs, outputs, and brand snapshot
+acme-brand-pack/            private Primary Brand authority: who we are
+acme-reference-library/     private reference intelligence: who we learn from
+campaign-project/           private work: what we make now
 ```
 
 A Brand Pack is deliberately thin. It contains only curated authority needed
@@ -180,6 +182,25 @@ from becoming `ready`. Only reviewed source material should be used to mark a
 pack `approved`; the initializer never invents claims, facts, rights, or an
 approval.
 
+A Reference Pack is a separate, non-authoritative research layer for brands,
+companies, teams, agencies, creators, campaigns, products, visual systems,
+films, photography, packaging, editorial systems, social accounts, or other
+useful entities. It records evidence-classed observations, transferable
+principles, non-transferable expression, applicable contexts, source identity,
+and asset-use policy. It must declare
+`may_override_primary_brand: false`; reference intelligence can inform a route
+or direction but can never redefine identity, product facts, claims, exact
+copy, rights, product geometry, or primary visual/verbal authority.
+
+A project can bind multiple Reference Packs. Each binding copies a complete
+snapshot to `.creative-craft/reference-snapshots/<pack-id>/`, records selection
+and source lineage under `.creative-craft/reference-bindings/`, and merges only
+assets used by the selected reference entities. `update-reference-snapshot`
+updates one pack without rewriting the Primary Brand Pack or other Reference
+Packs. Draft references produce an exploratory warning but do not block a Job
+from becoming `ready`; revoked references fail validation. Public visibility is
+never treated as generation-input permission.
+
 ## Versioned artifacts
 
 The current contracts are:
@@ -199,6 +220,8 @@ The current contracts are:
 - `creative-craft.delivery.v2`
 - `creative-craft.brand-pack.v1`
 - `creative-craft.brand-binding.v1`
+- `creative-craft.reference-pack.v1`
+- `creative-craft.reference-binding.v1`
 
 The v1 job, evaluation, and delivery contracts remain readable for migration,
 but new projects seed v2 contracts. Job v2 can declare only `draft`, `ready`,
@@ -255,17 +278,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.2
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.2
+pi install git:github.com/bigKING67/creative-craft@v0.2.3
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.3
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.2`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.3`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.2 \
+  --ref v0.2.3 \
   --path skills/creative-craft
 ```
 
@@ -357,6 +380,40 @@ python3 skills/creative-craft/scripts/creative_craft.py update-brand-snapshot \
   --imported-by <identity>
 ```
 
+Initialize a separate private Reference Skill, add evidence and entities under
+review, then bind any number of Reference Packs to an existing project:
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py init-reference-pack \
+  --target /path/to/acme-reference-library/skills/acme-creative-references \
+  --pack-id acme-creative-references \
+  --name "Acme Creative References" \
+  --owner creative-operations
+
+python3 skills/creative-craft/scripts/creative_craft.py validate-reference-pack \
+  --root /path/to/acme-reference-library/skills/acme-creative-references
+
+python3 skills/creative-craft/scripts/creative_craft.py bind-reference-pack \
+  --target /path/to/campaign-project \
+  --reference-pack /path/to/acme-reference-library/skills/acme-creative-references \
+  --select reference-entity-a \
+  --reference-source-uri https://git.example/acme-reference-library.git \
+  --reference-source-ref v0.1.0 \
+  --reference-source-commit <full-commit-sha> \
+  --imported-by <identity>
+
+python3 skills/creative-craft/scripts/creative_craft.py update-reference-snapshot \
+  --target /path/to/campaign-project \
+  --reference-pack /path/to/acme-reference-library/skills/acme-creative-references \
+  --select reference-entity-a \
+  --select reference-entity-b \
+  --reason "Adopt reviewed reference revision"
+```
+
+Omit `--select` to select all entities in a non-empty pack. A newly initialized
+empty draft library validates but cannot be bound until at least one reference
+entity exists.
+
 Validate and compile an image job:
 
 ```bash
@@ -428,10 +485,11 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-`0.2.0` proves the planning-to-evidence graph and synthetic lifecycle fixtures.
-It still does not claim that unobserved image or video output is production
-quality, that real Golden Evals are complete, or that provider network adapters
-exist.
+`0.2.3` proves the planning-to-evidence graph, portable Primary Brand authority,
+and a multi-pack non-authoritative reference layer through synthetic lifecycle
+fixtures. It still does not claim that unobserved image or video output is
+production quality, that real Golden Evals are complete, or that provider
+network adapters exist.
 
 Maintainers build one release candidate from a clean commit after installing
 `requirements-dev.txt`:
