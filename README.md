@@ -22,11 +22,11 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.0` is the evidence-bound production-contract release. It adds a
-content-bound project manifest, formal creative direction, v2 image/video jobs,
-execution receipts, output inspections, revision lineage, derived lifecycle
-status, cross-artifact validation, evidence-strength scoring, execution-surface
-profiles, atomic installation, and real CI.
+Version `0.2.1` is the installed-runtime verification patch for the
+evidence-bound production contract introduced in `0.2.0`. Repository checks and
+leaf Skill checks now have separate scopes, and `self-test` works from Pi,
+Codex, and generic directory installations without requiring repository-only
+metadata.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -221,17 +221,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.0
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.0
+pi install git:github.com/bigKING67/creative-craft@v0.2.1
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.1
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.0`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.1`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.0 \
+  --ref v0.2.1 \
   --path skills/creative-craft
 ```
 
@@ -263,11 +263,15 @@ python3 -m pip install -r requirements-dev.txt
 python3 scripts/validate_schemas.py
 ```
 
-Validate only the installable package runtime:
+Run the repository package self-test from a checkout:
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py self-test
 ```
+
+The same command automatically selects installed-runtime scope when invoked
+from a leaf Pi, Codex, or generic Skill installation. Use `--json` to record the
+selected `scope` and separate repository/runtime validity.
 
 Inspect the CLI:
 
