@@ -1,95 +1,49 @@
 {
-  "schema_version": "creative-craft.evaluation.v1",
+  "schema_version": "creative-craft.evaluation.v2",
   "evaluation_id": "evaluation-tbd",
-  "target_id": "route-or-asset-tbd",
-  "stage": "route",
+  "target_ref": "cc://creative-direction/direction-tbd#",
+  "stage": "direction",
   "brief_id": "brief-tbd",
-  "gates": {
-    "rights_clear": false,
-    "brief_locked": false,
-    "deliverable_specified": false,
-    "actual_output_observed": null
-  },
   "dimensions": [
     {
       "id": "strategic_fit",
-      "weight": 15,
+      "weight": 25,
       "score": 0,
       "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
+      "evidence_refs": [],
+      "rationale": "TBD"
     },
     {
       "id": "audience_relevance",
-      "weight": 10,
+      "weight": 20,
       "score": 0,
       "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
-    },
-    {
-      "id": "message_clarity",
-      "weight": 10,
-      "score": 0,
-      "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
+      "evidence_refs": [],
+      "rationale": "TBD"
     },
     {
       "id": "concept_distinctiveness",
-      "weight": 15,
+      "weight": 20,
       "score": 0,
       "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
-    },
-    {
-      "id": "attention_architecture",
-      "weight": 10,
-      "score": 0,
-      "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
+      "evidence_refs": [],
+      "rationale": "TBD"
     },
     {
       "id": "creative_coherence",
-      "weight": 10,
+      "weight": 20,
       "score": 0,
       "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
+      "evidence_refs": [],
+      "rationale": "TBD"
     },
     {
       "id": "production_feasibility",
-      "weight": 10,
+      "weight": 15,
       "score": 0,
       "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
-    },
-    {
-      "id": "platform_fit",
-      "weight": 10,
-      "score": 0,
-      "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
-    },
-    {
-      "id": "rights_provenance",
-      "weight": 5,
-      "score": 0,
-      "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
-    },
-    {
-      "id": "testability",
-      "weight": 5,
-      "score": 0,
-      "evidence_state": "UNVERIFIED",
-      "evidence": "TBD",
-      "confidence": "low"
+      "evidence_refs": [],
+      "rationale": "TBD"
     }
   ],
   "recommendation": "TBD",

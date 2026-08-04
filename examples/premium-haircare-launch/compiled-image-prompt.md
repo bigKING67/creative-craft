@@ -1,9 +1,10 @@
 # Image execution pack — northstar-motion-proof-hero-image-v1
 
 - Provider profile: `openai.gpt-image-2.2026-04-21`
+- Execution surface: `openai.image_api`
 - Task: `generate`
 - Execution mode: `single_turn`
-- Status: `ready`
+- Declared status: `ready`
 - Size: `1024x1536`
 - Quality: `medium`
 - Format: `png`
@@ -77,4 +78,4 @@ Photorealistic premium beauty still life with real-camera texture, natural hair 
 
 Rights status: `CLEARED`
 
-This pack is `prompt_ready`; it is not evidence that an image was generated or approved.
+This pack was compiled from declared status `ready`; compilation is not evidence that an image was generated or approved.

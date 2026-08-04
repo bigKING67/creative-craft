@@ -1,12 +1,16 @@
 {
-  "schema_version": "creative-craft.image-job.v1",
+  "schema_version": "creative-craft.image-job.v2",
   "job_id": "northstar-motion-proof-hero-image-v1",
   "brief_id": "northstar-airlift-launch-v1",
-  "status": "ready",
+  "direction_id": "northstar-motion-proof-direction-v1",
+  "selected_route_id": "motion-is-proof",
+  "declared_status": "ready",
   "provider_profile": "openai.gpt-image-2.2026-04-21",
+  "execution_surface": "openai.image_api",
   "task_type": "generate",
   "execution_mode": "single_turn",
   "intended_use": "Premium launch hero image for a vertical social feed and landing-page crop.",
+  "asset_refs": ["product-pack-001", "light-ref-001"],
   "canvas": {
     "size": "1024x1536",
     "quality": "medium",
