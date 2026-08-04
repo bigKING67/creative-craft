@@ -85,15 +85,16 @@
 
 小任务不强制全部创建，但缺失内容必须标为假设，不能被 Agent 偷偷补成事实。
 
-## 公共内核、私有 Brand Pack、不可变项目快照
+## 公共内核、私有 Pack、不可变项目快照
 
 不要把任何公司的私有知识、Claims、内部链接或专有素材放进这个公共仓库。正确的
 边界是三套独立生命周期：
 
 ```text
 creative-craft/             公共、通用的方法、Schema 和工具
-acme-brand-pack/            私有、团队共用的品牌 Skill 与审核权威
-campaign-project/           私有、单个项目的 Brief、Job、输出和品牌快照
+acme-brand-pack/            私有 Primary Brand 权威：我们是谁
+acme-reference-library/     私有参考情报：我们向谁学习什么
+campaign-project/           私有项目：我们现在做什么
 ```
 
 Brand Pack 是一层很薄的品牌权威，不复制 Creative Craft 的方法论、Provider
@@ -114,11 +115,27 @@ symlink，因此私有 Brand Skill 后续变化不能偷偷改写历史项目。
 只有经过审阅的来源才能把 Pack 改为 `approved`；初始化命令只生成
 `TBD/UNVERIFIED` 骨架，绝不编造产品事实、Claims、权利或批准状态。
 
+Reference Pack 是完全独立的**非权威研究层**，可记录多个品牌、公司、团队、
+Agency、Creator、Campaign、产品、视觉系统、影片、摄影、包装、编辑系统或社交
+账号。它保存分级证据、可迁移原则、不可迁移表达、适用场景、来源身份和素材用途
+政策；每个 Entity 都必须声明 `may_override_primary_brand: false`。
+
+因此参考库可以影响创意路线和导演方案，但永远不能重写主品牌的 Identity、产品
+事实、Claims、Exact Copy、权利、产品结构或主要视觉/语言权威。一个项目可以绑定
+多个 Reference Pack：完整快照分别复制到
+`.creative-craft/reference-snapshots/<pack-id>/`，Binding 分别写入
+`.creative-craft/reference-bindings/`，只有被选 Entity 的素材会合并进项目 Ledger。
+更新其中一个 Pack 不会改写 Primary Brand Pack 或其他 Reference Pack。
+
+`draft` Reference Pack 只产生“探索性证据”警告，不阻止 Job 进入 `ready`；
+`revoked` Pack 会使校验失败。公开可见也不等于允许把素材作为生成输入。
+
 ## 当前版本
 
-`0.2.2` 在公共仓库不包含任何公司私有知识的前提下，增加了可移植 Brand Pack、
-私有品牌 Skill、项目不可变快照、内容摘要绑定和显式更新回滚。换公司或客户时只
-替换 Brand Pack；Creative Craft 通用方法和历史项目不会被污染。
+`0.2.3` 在公共仓库不包含任何公司私有知识的前提下，明确拆分可移植的 Primary
+Brand Pack 与多 Reference Pack：前者回答“我们是谁”，后者回答“我们向谁学习
+什么”，Project 回答“我们现在做什么”。换公司或客户时替换私有 Pack；Creative
+Craft 通用方法和历史项目不会被污染。
 
 `0.2.0` 已建立：
 
@@ -145,18 +162,18 @@ GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package disco
 Pi 是 Tier 1 Host：
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.2
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.2
+pi install git:github.com/bigKING67/creative-craft@v0.2.3
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.3
 ```
 
 Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
-`bigKING67/creative-craft` 的 `v0.2.2` tag 安装
+`bigKING67/creative-craft` 的 `v0.2.3` tag 安装
 `skills/creative-craft`，也可以执行：
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.2 \
+  --ref v0.2.3 \
   --path skills/creative-craft
 ```
 
@@ -235,6 +252,39 @@ python3 skills/creative-craft/scripts/creative_craft.py update-brand-snapshot \
   --brand-source-commit <full-commit-sha> \
   --imported-by <identity>
 ```
+
+在另一个私有仓库中初始化 Reference Skill，录入经过证据分级的 Entity 后，可将
+任意数量的参考库绑定到已有项目：
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py init-reference-pack \
+  --target /path/to/acme-reference-library/skills/acme-creative-references \
+  --pack-id acme-creative-references \
+  --name "Acme Creative References" \
+  --owner creative-operations
+
+python3 skills/creative-craft/scripts/creative_craft.py validate-reference-pack \
+  --root /path/to/acme-reference-library/skills/acme-creative-references
+
+python3 skills/creative-craft/scripts/creative_craft.py bind-reference-pack \
+  --target /path/to/campaign-project \
+  --reference-pack /path/to/acme-reference-library/skills/acme-creative-references \
+  --select reference-entity-a \
+  --reference-source-uri https://git.example/acme-reference-library.git \
+  --reference-source-ref v0.1.0 \
+  --reference-source-commit <full-commit-sha> \
+  --imported-by <identity>
+
+python3 skills/creative-craft/scripts/creative_craft.py update-reference-snapshot \
+  --target /path/to/campaign-project \
+  --reference-pack /path/to/acme-reference-library/skills/acme-creative-references \
+  --select reference-entity-a \
+  --select reference-entity-b \
+  --reason "采用新一版已审阅参考证据"
+```
+
+不传 `--select` 时默认选中非空 Pack 的全部 Entity。空的 `draft` Reference Pack
+可以先校验和安装，但至少录入一个 Entity 后才能绑定项目。
 
 编译 GPT Image 2 图片任务：
 

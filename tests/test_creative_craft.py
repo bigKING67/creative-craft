@@ -113,6 +113,131 @@ def bind_brand_pack(project: Path, skill_root: Path) -> None:
     )
 
 
+def init_reference_pack(
+    root: Path,
+    pack_id: str = "reference-fixture",
+    name: str = "Reference Fixture",
+) -> Path:
+    skill_root = root / pack_id
+    args = type("Args", (), {
+        "target": str(skill_root),
+        "pack_id": pack_id,
+        "name": name,
+        "owner": "fixture-owner",
+        "force": False,
+    })()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        if cc.cmd_init_reference_pack(args) != 0:
+            raise AssertionError("Reference Pack fixture initialization failed")
+    return skill_root
+
+
+def add_reference_entity(
+    skill_root: Path,
+    reference_id: str,
+    *,
+    with_asset: bool = False,
+    rights_status: str = "CLEARED",
+    rights_policy: str | None = None,
+) -> dict:
+    manifest_path = skill_root / "reference-pack.json"
+    ledger_path = skill_root / "asset-ledger.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    source_id = f"source-{reference_id}"
+    asset_refs: list[str] = []
+    if with_asset:
+        asset_id = f"asset-{reference_id}"
+        asset_path = skill_root / "assets" / "approved" / f"{reference_id}.bin"
+        asset_path.parent.mkdir(parents=True, exist_ok=True)
+        asset_path.write_bytes(f"synthetic-{reference_id}".encode())
+        asset_refs.append(asset_id)
+        ledger["assets"].append({
+            "asset_id": asset_id,
+            "path_or_uri": asset_path.relative_to(skill_root).as_posix(),
+            "mime_type": "application/octet-stream",
+            "sha256": cc.sha256_file(asset_path),
+            "creator": "fixture",
+            "owner": "fixture",
+            "rights_status": rights_status,
+            "consent_status": "NOT_APPLICABLE",
+            "allowed_use": ["synthetic-tests"],
+            "expires_at": None,
+            "reference_roles": ["research"],
+            "parent_assets": [],
+            "notes": "Synthetic test asset only.",
+        })
+    manifest["source_references"].append({
+        "source_id": source_id,
+        "authority": "research",
+        "uri": f"https://reference.invalid/{reference_id}",
+        "captured_at": "2026-08-04T00:00:00Z",
+        "sha256": None,
+        "notes": "Synthetic test source only.",
+    })
+    manifest["entities"].append({
+        "reference_id": reference_id,
+        "entity_type": "other",
+        "name": f"Synthetic {reference_id}",
+        "relationship": "reference",
+        "summary": "Synthetic test reference only.",
+        "source_refs": [source_id],
+        "observations": [{
+            "observation_id": f"observation-{reference_id}",
+            "dimension": "synthetic-test",
+            "evidence_state": "OBSERVED",
+            "statement": "Synthetic observation for contract testing.",
+            "evidence_refs": [source_id],
+        }],
+        "transferable_principles": [{
+            "principle_id": f"principle-{reference_id}",
+            "derived_from": [f"observation-{reference_id}"],
+            "statement": "Adapt the abstract principle; do not copy expression.",
+            "application_scope": ["synthetic-tests"],
+            "adaptation_required": True,
+            "must_preserve_primary_brand": ["identity", "claims", "rights"],
+        }],
+        "non_transferable_elements": ["identity", "distinctive expression"],
+        "applicable_to": ["synthetic-tests"],
+        "reference_roles": ["principle"],
+        "rights_policy": rights_policy or (
+            "approved_reference_input" if with_asset else "principle_only"
+        ),
+        "prohibited_use": ["identity imitation"],
+        "asset_refs": asset_refs,
+        "may_override_primary_brand": False,
+    })
+    write_json(ledger_path, ledger)
+    manifest["asset_ledger"]["sha256"] = cc.sha256_file(ledger_path)
+    write_json(manifest_path, manifest)
+    graph = cc.validate_reference_pack(skill_root)
+    if not graph.result.ok:
+        raise AssertionError(graph.result.errors)
+    return manifest
+
+
+def bind_reference_pack(
+    project: Path,
+    skill_root: Path,
+    selected: list[str] | None = None,
+) -> None:
+    args = type("Args", (), {
+        "reference_source_uri": "https://git.invalid/reference-pack.git",
+        "reference_source_ref": "main",
+        "reference_source_commit": "3" * 40,
+        "imported_by": "fixture-operator",
+        "reason": "Initial synthetic reference binding",
+        "select": selected,
+    })()
+    cc._install_reference_snapshot(
+        project,
+        skill_root,
+        args,
+        require_existing_binding=False,
+        retain_backup=False,
+    )
+
+
 class DoctorTests(unittest.TestCase):
     def test_doctor_passes(self) -> None:
         result = cc.doctor(ROOT)
@@ -318,6 +443,12 @@ class SeedTests(unittest.TestCase):
                 self.assertTrue((Path(directory) / ".creative-craft/critique.json").is_file())
                 self.assertFalse((Path(directory) / ".creative-craft/brand-pack.json").exists())
                 self.assertFalse((Path(directory) / ".creative-craft/brand-binding.json").exists())
+                self.assertFalse(
+                    (Path(directory) / ".creative-craft/reference-bindings").exists()
+                )
+                self.assertFalse(
+                    (Path(directory) / ".creative-craft/reference-snapshots").exists()
+                )
                 self.assertTrue(cc.validate_project(Path(directory)).result.ok)
                 self.assertEqual(1, cc.cmd_seed(args))
             self.assertIn("refusing to overwrite", stderr.getvalue())
@@ -639,6 +770,366 @@ class BrandPackTests(unittest.TestCase):
             self.assertEqual(before_binding, binding_path.read_bytes())
             self.assertEqual(before_brand, (project / "BRAND.md").read_bytes())
             self.assertTrue(original_validate(project).result.ok)
+
+
+class ReferencePackTests(unittest.TestCase):
+    def copy_example(self, directory: str) -> Path:
+        target = Path(directory) / "project"
+        shutil.copytree(ROOT / "examples/premium-haircare-launch", target)
+        return target
+
+    def test_init_reference_pack_is_empty_draft_and_non_authoritative(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            self.assertEqual("draft", graph.manifest["status"])
+            self.assertEqual("internal", graph.manifest["classification"])
+            self.assertEqual([], graph.manifest["entities"])
+            self.assertEqual([], graph.ledger["assets"])
+            skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("non-authoritative", skill_text)
+            self.assertIn("Never override", skill_text)
+
+    def test_reference_pack_path_traversal_and_digest_drift_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            add_reference_entity(skill_root, "reference-a", with_asset=True)
+            ledger_path = skill_root / "asset-ledger.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["assets"][0]["path_or_uri"] = "../outside.bin"
+            write_json(ledger_path, ledger)
+            manifest_path = skill_root / "reference-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["asset_ledger"]["sha256"] = cc.sha256_file(ledger_path)
+            write_json(manifest_path, manifest)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("unsafe root-relative" in item for item in graph.result.errors))
+
+            ledger["assets"][0]["path_or_uri"] = "assets/approved/reference-a.bin"
+            ledger["assets"][0]["sha256"] = "f" * 64
+            write_json(ledger_path, ledger)
+            manifest["asset_ledger"]["sha256"] = cc.sha256_file(ledger_path)
+            write_json(manifest_path, manifest)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("sha256 mismatch" in item for item in graph.result.errors))
+
+    def test_reference_pack_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            add_reference_entity(skill_root, "reference-a", with_asset=True)
+            asset_path = skill_root / "assets/approved/reference-a.bin"
+            real_path = skill_root / "assets/approved/reference-a-real.bin"
+            real_path.write_bytes(asset_path.read_bytes())
+            asset_path.unlink()
+            asset_path.symlink_to(real_path.name)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("must not use a symlink" in item for item in graph.result.errors))
+
+    def test_reference_evidence_and_authority_semantics_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            manifest = add_reference_entity(skill_root, "reference-a")
+            manifest["entities"][0]["observations"][0]["evidence_refs"] = []
+            _, result = cc.validate_data(manifest, "reference-pack")
+            self.assertFalse(result.ok)
+            self.assertTrue(any("requires evidence_refs" in item for item in result.errors))
+
+            manifest = add_reference_entity(skill_root, "reference-b")
+            manifest["entities"][0]["may_override_primary_brand"] = True
+            _, result = cc.validate_data(manifest, "reference-pack")
+            self.assertFalse(result.ok)
+            self.assertTrue(any("must equal False" in item for item in result.errors))
+
+    def test_reviewed_pack_requires_review_evidence_and_no_unverified_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            manifest = add_reference_entity(skill_root, "reference-a")
+            manifest["status"] = "reviewed"
+            manifest["reviewed_at"] = None
+            observation = manifest["entities"][0]["observations"][0]
+            observation["evidence_state"] = "UNVERIFIED"
+            observation["evidence_refs"] = []
+            write_json(skill_root / "reference-pack.json", manifest)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("requires reviewed_at" in item for item in graph.result.errors))
+            self.assertTrue(any("cannot contain UNVERIFIED" in item
+                                for item in graph.result.errors))
+
+    def test_approved_reference_input_requires_resolved_rights(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skill_root = init_reference_pack(Path(directory))
+            manifest = add_reference_entity(
+                skill_root,
+                "reference-a",
+                with_asset=True,
+                rights_status="UNVERIFIED",
+                rights_policy="research_only",
+            )
+            manifest["entities"][0]["rights_policy"] = "approved_reference_input"
+            write_json(skill_root / "reference-pack.json", manifest)
+            graph = cc.validate_reference_pack(skill_root)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("unresolved rights" in item for item in graph.result.errors))
+
+    def test_draft_reference_pack_does_not_block_ready_job_and_snapshot_does_not_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            add_reference_entity(skill_root, "reference-a")
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root)
+            snapshot_path = (
+                project
+                / ".creative-craft/reference-snapshots/reference-fixture/reference-pack.json"
+            )
+            before = snapshot_path.read_bytes()
+            source_path = skill_root / "reference-pack.json"
+            source_path.write_text(source_path.read_text(encoding="utf-8") + "\n",
+                                   encoding="utf-8")
+            self.assertEqual(before, snapshot_path.read_bytes())
+            self.assertFalse(snapshot_path.is_symlink())
+            graph = cc.validate_project(project)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            self.assertEqual("ready", graph.job_statuses["northstar-motion-proof-hero-image-v1"])
+            self.assertTrue(any("exploratory evidence" in item
+                                for item in graph.result.warnings))
+
+    def test_multiple_reference_packs_can_coexist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = init_reference_pack(root / "first", "reference-one", "Reference One")
+            second = init_reference_pack(root / "second", "reference-two", "Reference Two")
+            add_reference_entity(first, "reference-a")
+            add_reference_entity(second, "reference-b")
+            project = self.copy_example(directory)
+            bind_reference_pack(project, first)
+            bind_reference_pack(project, second)
+            graph = cc.validate_project(project)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            self.assertEqual(
+                2,
+                sum(1 for kind, _ in graph.records if kind == "reference-pack"),
+            )
+            self.assertEqual(
+                2,
+                sum(1 for kind, _ in graph.records if kind == "reference-binding"),
+            )
+
+    def test_binding_merges_only_selected_entity_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            add_reference_entity(skill_root, "reference-a", with_asset=True)
+            add_reference_entity(skill_root, "reference-b", with_asset=True)
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root, ["reference-a"])
+            ledger = json.loads((project / "asset-ledger.json").read_text(encoding="utf-8"))
+            assets = {asset["asset_id"]: asset for asset in ledger["assets"]}
+            self.assertIn("asset-reference-a", assets)
+            self.assertNotIn("asset-reference-b", assets)
+            self.assertEqual(
+                ".creative-craft/reference-snapshots/reference-fixture/"
+                "assets/approved/reference-a.bin",
+                assets["asset-reference-a"]["path_or_uri"],
+            )
+            self.assertTrue(cc.validate_project(project).result.ok)
+
+    def test_unknown_selection_and_revoked_pack_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            manifest = add_reference_entity(skill_root, "reference-a")
+            project = self.copy_example(directory)
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                bind_reference_pack(project, skill_root, ["missing-reference"])
+
+            manifest["status"] = "revoked"
+            write_json(skill_root / "reference-pack.json", manifest)
+            with self.assertRaisesRegex(ValueError, "revoked"):
+                bind_reference_pack(project, skill_root)
+
+    def test_snapshot_and_binding_digest_drift_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root)
+            add_reference_entity(skill_root, "reference-a")
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root)
+            binding_path = (
+                project / ".creative-craft/reference-bindings/reference-fixture.json"
+            )
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            original_selection = binding["selected_reference_ids"]
+            binding["selected_reference_ids"] = ["missing-reference"]
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("selects unknown reference" in item
+                                for item in graph.result.errors))
+
+            binding["selected_reference_ids"] = original_selection
+            binding["source"]["pack_sha256"] = "f" * 64
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("source.pack_sha256 differs" in item
+                                for item in graph.result.errors))
+
+            binding["source"]["pack_sha256"] = cc.sha256_file(
+                project
+                / ".creative-craft/reference-snapshots/reference-fixture/reference-pack.json"
+            )
+            binding["snapshot"]["tree_sha256"] = "e" * 64
+            write_json(binding_path, binding)
+            refresh_manifest(project)
+            graph = cc.validate_project(project)
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("tree_sha256 mismatch" in item
+                                for item in graph.result.errors))
+
+    def test_update_one_reference_pack_preserves_other_pack_and_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = init_reference_pack(root / "first", "reference-one", "Reference One")
+            second = init_reference_pack(root / "second", "reference-two", "Reference Two")
+            add_reference_entity(first, "reference-a", with_asset=True)
+            add_reference_entity(second, "reference-b", with_asset=True)
+            project = self.copy_example(directory)
+            bind_reference_pack(project, first)
+            bind_reference_pack(project, second)
+            old_binding = json.loads(
+                (project / ".creative-craft/reference-bindings/reference-one.json")
+                .read_text(encoding="utf-8")
+            )
+            second_snapshot_digest = cc.tree_sha256(
+                project / ".creative-craft/reference-snapshots/reference-two"
+            )
+
+            updated = root / "updated/reference-one"
+            updated.parent.mkdir()
+            shutil.copytree(first, updated)
+            add_reference_entity(updated, "reference-c", with_asset=True)
+            updated_manifest_path = updated / "reference-pack.json"
+            updated_manifest = json.loads(updated_manifest_path.read_text(encoding="utf-8"))
+            updated_manifest["version"] = "0.2.0"
+            write_json(updated_manifest_path, updated_manifest)
+            args = type("Args", (), {
+                "target": str(project),
+                "reference_pack": str(updated),
+                "reason": "Adopt synthetic reference revision",
+                "reference_source_uri": "https://git.invalid/reference-one.git",
+                "reference_source_ref": "v0.2.0",
+                "reference_source_commit": "4" * 40,
+                "imported_by": "fixture-operator",
+                "select": ["reference-c"],
+            })()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_update_reference_snapshot(args))
+            binding = json.loads(
+                (project / ".creative-craft/reference-bindings/reference-one.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(old_binding["binding_id"], binding["previous_binding_id"])
+            self.assertEqual("0.2.0", binding["pack_version"])
+            self.assertEqual(
+                second_snapshot_digest,
+                cc.tree_sha256(project / ".creative-craft/reference-snapshots/reference-two"),
+            )
+            ledger = json.loads((project / "asset-ledger.json").read_text(encoding="utf-8"))
+            asset_ids = {asset["asset_id"] for asset in ledger["assets"]}
+            self.assertNotIn("asset-reference-a", asset_ids)
+            self.assertIn("asset-reference-b", asset_ids)
+            self.assertIn("asset-reference-c", asset_ids)
+            backups = list(
+                (project / ".creative-craft/reference-backups/reference-one").iterdir()
+            )
+            self.assertEqual(1, len(backups))
+            self.assertTrue(cc.validate_project(project).result.ok)
+
+    def test_update_failure_rolls_back_only_target_reference_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_root = init_reference_pack(root / "first")
+            add_reference_entity(skill_root, "reference-a", with_asset=True)
+            project = self.copy_example(directory)
+            bind_reference_pack(project, skill_root)
+            updated = root / "updated/reference-fixture"
+            updated.parent.mkdir()
+            shutil.copytree(skill_root, updated)
+            manifest_path = updated / "reference-pack.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = "0.2.0"
+            write_json(manifest_path, manifest)
+            binding_path = (
+                project / ".creative-craft/reference-bindings/reference-fixture.json"
+            )
+            before_binding = binding_path.read_bytes()
+            before_ledger = (project / "asset-ledger.json").read_bytes()
+            before_snapshot = cc.tree_sha256(
+                project / ".creative-craft/reference-snapshots/reference-fixture"
+            )
+            original_validate = cc.validate_project
+            calls = 0
+
+            def fail_final_validation(root_path: Path) -> cc.ProjectGraph:
+                nonlocal calls
+                calls += 1
+                graph = original_validate(root_path)
+                if calls > 1:
+                    graph.result.errors.append("synthetic post-write failure")
+                return graph
+
+            args = type("Args", (), {
+                "target": str(project),
+                "reference_pack": str(updated),
+                "reason": "Synthetic rollback test",
+                "reference_source_uri": None,
+                "reference_source_ref": None,
+                "reference_source_commit": None,
+                "imported_by": "fixture-operator",
+                "select": ["reference-a"],
+            })()
+            with (
+                mock.patch.object(cc, "validate_project", side_effect=fail_final_validation),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(1, cc.cmd_update_reference_snapshot(args))
+            self.assertEqual(before_binding, binding_path.read_bytes())
+            self.assertEqual(before_ledger, (project / "asset-ledger.json").read_bytes())
+            self.assertEqual(
+                before_snapshot,
+                cc.tree_sha256(
+                    project / ".creative-craft/reference-snapshots/reference-fixture"
+                ),
+            )
+            self.assertTrue(original_validate(project).result.ok)
+
+    def test_reference_pack_cannot_replace_primary_brand_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            brand = init_brand_pack(root / "brand")
+            approve_brand_pack(brand)
+            reference = init_reference_pack(root / "reference")
+            add_reference_entity(reference, "reference-a")
+            project = self.copy_example(directory)
+            bind_brand_pack(project, brand)
+            before_brand = (project / "BRAND.md").read_bytes()
+            bind_reference_pack(project, reference)
+            self.assertEqual(before_brand, (project / "BRAND.md").read_bytes())
+            graph = cc.validate_project(project)
+            self.assertTrue(graph.result.ok, graph.result.errors)
+            self.assertEqual(
+                1,
+                sum(1 for kind, _ in graph.records if kind == "brand-pack"),
+            )
 
 
 class ArtifactSemanticTests(unittest.TestCase):
