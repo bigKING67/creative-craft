@@ -27,6 +27,20 @@ Implemented:
 This version includes synthetic lifecycle fixtures but no real provider output
 claim.
 
+## 0.2.2 — portable brand authority
+
+Implemented without changing the `0.3` Golden Eval milestone:
+
+- generic Brand Pack and project Brand Binding contracts;
+- separate private Brand Skill initialization with placeholder-only authority;
+- content, digest, path, symlink, rights, consent, source, and approval checks;
+- immutable project snapshots with `BRAND.md` projection and Asset Ledger merge;
+- explicit snapshot update, previous-binding lineage, backup, full validation,
+  and rollback;
+- backward compatibility for projects that do not bind a Brand Pack.
+
+No company-specific knowledge or asset is included in the public package.
+
 ## 0.3 — real creative evals
 
 Planned:

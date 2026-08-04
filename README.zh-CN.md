@@ -85,11 +85,40 @@
 
 小任务不强制全部创建，但缺失内容必须标为假设，不能被 Agent 偷偷补成事实。
 
+## 公共内核、私有 Brand Pack、不可变项目快照
+
+不要把任何公司的私有知识、Claims、内部链接或专有素材放进这个公共仓库。正确的
+边界是三套独立生命周期：
+
+```text
+creative-craft/             公共、通用的方法、Schema 和工具
+acme-brand-pack/            私有、团队共用的品牌 Skill 与审核权威
+campaign-project/           私有、单个项目的 Brief、Job、输出和品牌快照
+```
+
+Brand Pack 是一层很薄的品牌权威，不复制 Creative Craft 的方法论、Provider
+Profile 或 Schema。它只保存创意执行真正需要的精选内容：品牌、产品、已批准
+Claims、视觉系统、语言系统、渠道规则、权利与审批，以及 Asset Ledger。大型素材
+继续留在 DAM、团队云盘或对象存储；Ledger 只记录稳定 URI、SHA-256、权利、
+授权和允许用途。少量获准且适合 Git 管理的素材可以留在私有 Brand Skill 中。
+
+项目绑定 Brand Pack 时，只会把 manifest、已登记权威文件、Brand Pack Ledger
+和安全的本地小素材复制到 `.creative-craft/brand-snapshot/`，把 role=`brand`
+的权威文件投影为项目根 `BRAND.md`，将品牌素材合并进项目 Asset Ledger，并在
+`brand-binding.json` 中记录来源 ref/commit 和内容摘要。项目不会创建 live
+symlink，因此私有 Brand Skill 后续变化不能偷偷改写历史项目。
+`update-brand-snapshot` 必须显式执行；它会先备份，写入前后 Binding lineage，
+完成全项目校验，失败则回滚。
+
+`draft` Brand Pack 可以用于探索，但会阻止绑定项目中的 Job 进入 `ready`。
+只有经过审阅的来源才能把 Pack 改为 `approved`；初始化命令只生成
+`TBD/UNVERIFIED` 骨架，绝不编造产品事实、Claims、权利或批准状态。
+
 ## 当前版本
 
-`0.2.1` 是安装运行时验证补丁，延续 `0.2.0` 的“证据绑定生产协议”，并把仓库级
-检查与 Pi、Codex、通用目录式安装后的叶子 Skill 检查正式分开。`self-test`
-现在会根据现场自动选择 repository 或 runtime scope。
+`0.2.2` 在公共仓库不包含任何公司私有知识的前提下，增加了可移植 Brand Pack、
+私有品牌 Skill、项目不可变快照、内容摘要绑定和显式更新回滚。换公司或客户时只
+替换 Brand Pack；Creative Craft 通用方法和历史项目不会被污染。
 
 `0.2.0` 已建立：
 
@@ -116,18 +145,18 @@ GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package disco
 Pi 是 Tier 1 Host：
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.1
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.1
+pi install git:github.com/bigKING67/creative-craft@v0.2.2
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.2
 ```
 
 Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
-`bigKING67/creative-craft` 的 `v0.2.1` tag 安装
+`bigKING67/creative-craft` 的 `v0.2.2` tag 安装
 `skills/creative-craft`，也可以执行：
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.1 \
+  --ref v0.2.2 \
   --path skills/creative-craft
 ```
 
@@ -170,6 +199,41 @@ scope，不再要求仓库根目录的 README、LICENSE、plugin metadata 和 so
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py seed \
   --target /path/to/project
+```
+
+在独立私有仓库中初始化和校验一个只含占位内容的 Brand Skill：
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py init-brand-pack \
+  --target /path/to/acme-brand-pack/skills/acme-brand \
+  --brand-id acme \
+  --brand-name "Acme" \
+  --owner brand-operations
+
+python3 skills/creative-craft/scripts/creative_craft.py validate-brand-pack \
+  --root /path/to/acme-brand-pack/skills/acme-brand
+```
+
+真实品牌内容完成审阅后，将当前 Pack 以不可变快照绑定到新项目。团队仓库建议
+同时记录来源 ref 和完整 Commit SHA：
+
+```bash
+python3 skills/creative-craft/scripts/creative_craft.py seed \
+  --target /path/to/campaign-project \
+  --brand-pack /path/to/acme-brand-pack/skills/acme-brand \
+  --brand-source-uri https://git.example/acme-brand-pack.git \
+  --brand-source-ref v1.0.0 \
+  --brand-source-commit <full-commit-sha> \
+  --imported-by <identity>
+
+python3 skills/creative-craft/scripts/creative_craft.py update-brand-snapshot \
+  --target /path/to/campaign-project \
+  --brand-pack /path/to/acme-brand-pack/skills/acme-brand \
+  --reason "Adopt reviewed brand authority v1.1.0" \
+  --brand-source-uri https://git.example/acme-brand-pack.git \
+  --brand-source-ref v1.1.0 \
+  --brand-source-commit <full-commit-sha> \
+  --imported-by <identity>
 ```
 
 编译 GPT Image 2 图片任务：
