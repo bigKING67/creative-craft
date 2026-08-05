@@ -73,6 +73,18 @@ Implemented before the `0.3` Golden Eval milestone:
   `.tgz` rather than only the source checkout;
 - public release receipts with normalized rather than local absolute paths.
 
+## 0.2.5 — evidence-safe seed and project diagnostics
+
+Implemented without claiming new provider or creative-quality evidence:
+
+- descriptive versus normative authority separation for current and historical
+  assets;
+- planning-only seed behavior that cannot pre-create lifecycle evidence;
+- manifest-registered, Asset Ledger-bound Critique;
+- read-only diagnosis of invalid graphs and unregistered known artifacts;
+- deterministic `seed_template_residue` classification by SHA-256 identity;
+- source, installed-runtime, package-boundary, macOS, Windows, and CI coverage.
+
 ## 0.3 — real creative evals
 
 Planned:

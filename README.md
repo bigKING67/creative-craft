@@ -22,14 +22,12 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.4` hardens portable brand authority and creative reference
-intelligence without putting any company's private knowledge into this public
-repository. A project may bind zero or one Primary Brand Pack and zero or many
-Reference Packs as immutable, digest-bound snapshots. Reviewed reference
-sources require copied, digest-verified evidence, and Reference Binding updates
-preserve a resolvable immutable history. Changing employer or client means
-changing the private packs; the Creative Craft method and historical projects
-stay clean.
+Version `0.2.5` prevents planning scaffolds and current assets from silently
+becoming normative or lifecycle evidence. Seeded Critique is registered and
+Asset Ledger-bound, while `doctor-project` reports known unregistered artifacts
+and byte-identical seed residue without modifying the project. Company-specific
+Brand Packs and non-authoritative Reference Packs remain private, portable, and
+separate from this public method.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -285,17 +283,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.4
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.4
+pi install git:github.com/bigKING67/creative-craft@v0.2.5
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.5
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.4`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.5`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.4 \
+  --ref v0.2.5 \
   --path skills/creative-craft
 ```
 
@@ -532,11 +530,12 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-`0.2.4` proves the planning-to-evidence graph, portable Primary Brand authority,
-and a multi-pack non-authoritative reference layer through synthetic lifecycle
-fixtures. It still does not claim that unobserved image or video output is
-production quality, that real Golden Evals are complete, or that provider
-network adapters exist.
+`0.2.5` proves the planning-to-evidence graph, portable Primary Brand authority,
+multi-pack non-authoritative references, evidence-safe seed behavior, and
+read-only diagnosis of unregistered project artifacts through synthetic
+lifecycle fixtures. It still does not claim that unobserved image or video
+output is production quality, that real Golden Evals are complete, or that
+provider network adapters exist.
 
 Maintainers build one release candidate from a clean commit after installing
 `requirements-dev.txt`:

@@ -136,11 +136,11 @@ Brand Pack 或其他 Reference Pack。
 
 ## 当前版本
 
-`0.2.4` 在公共仓库不包含任何公司私有知识的前提下，进一步加固可移植的 Primary
-Brand Pack 与多 Reference Pack：前者回答“我们是谁”，后者回答“我们向谁学习
-什么”，Project 回答“我们现在做什么”。已审阅来源现在绑定本地快照和 SHA-256，
-Reference Binding 更新保留可解析的不可变历史，所有写入目标拒绝 symlink 和项目
-越界。换公司或客户时替换私有 Pack；Creative Craft 通用方法和历史项目不会被污染。
+`0.2.5` 防止规划骨架和当前素材被静默提升为规范性权威或生命周期证据。Seeded
+Critique 现在正式注册进 Project Manifest 并绑定 Asset Ledger；只读的
+`doctor-project` 会报告未注册的已知工件，并通过 SHA-256 识别与内置模板完全一致的
+Seed 残留，但不会修改项目。公司私有 Brand Pack 与非权威 Reference Pack 继续与
+公共 Creative Craft 方法分离，并保持可移植。
 
 `0.2.0` 已建立：
 
@@ -167,18 +167,18 @@ GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package disco
 Pi 是 Tier 1 Host：
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.4
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.4
+pi install git:github.com/bigKING67/creative-craft@v0.2.5
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.5
 ```
 
 Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
-`bigKING67/creative-craft` 的 `v0.2.4` tag 安装
+`bigKING67/creative-craft` 的 `v0.2.5` tag 安装
 `skills/creative-craft`，也可以执行：
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.4 \
+  --ref v0.2.5 \
   --path skills/creative-craft
 ```
 

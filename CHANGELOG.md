@@ -2,6 +2,29 @@
 
 All notable changes are documented here.
 
+## 0.2.5 — 2026-08-05
+
+Evidence-safe seed and project diagnostics release:
+
+- separate descriptive evidence about current or historical assets from the
+  approved Brand Pack and locked project authority that govern future work;
+- prevent `seed` from creating placeholder Execution Receipt, Output
+  Inspection, or Revision Lineage files before the corresponding real event;
+- register seeded Critique in the Project Manifest and require its target
+  `asset_id` to resolve to the project Asset Ledger;
+- add the read-only `doctor-project` command, distinguishing a valid manifest
+  graph from a healthy project directory and reporting known unregistered
+  Creative Craft artifacts;
+- classify byte-identical unregistered templates as `seed_template_residue`
+  without automatically registering or deleting them;
+- verify that project diagnosis leaves the complete project tree unchanged and
+  exercise `doctor-project` through the installed leaf runtime;
+- synchronize the new lifecycle boundary across English and Chinese install and
+  operating documentation.
+
+This release remains GitHub-only, contains no private company content, does not
+call provider networks, and does not claim real Creative Golden Evals.
+
 ## 0.2.4 — 2026-08-04
 
 Reference evidence and filesystem hardening release:
