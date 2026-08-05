@@ -17,6 +17,7 @@ import math
 import re
 import shutil
 import sys
+import tempfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -307,6 +308,31 @@ def _resolve_local_ref(root_schema: dict[str, Any], reference: str) -> dict[str,
     return current
 
 
+def _json_values_equal(left: Any, right: Any) -> bool:
+    """Compare values with JSON Schema equality, keeping booleans distinct from numbers."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if (
+        isinstance(left, (int, float))
+        and not isinstance(left, bool)
+        and isinstance(right, (int, float))
+        and not isinstance(right, bool)
+    ):
+        return left == right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _json_values_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _json_values_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return bool(left == right)
+
+
 def _validate_schema_node(
     value: Any,
     schema: dict[str, Any],
@@ -372,6 +398,20 @@ def _validate_schema_node(
             result.errors.append(
                 f"{_json_path(path)} must contain at most {maximum} items"
             )
+        if schema.get("uniqueItems") is True:
+            duplicate: tuple[int, int] | None = None
+            for right_index, right_value in enumerate(value):
+                for left_index, left_value in enumerate(value[:right_index]):
+                    if _json_values_equal(left_value, right_value):
+                        duplicate = (left_index, right_index)
+                        break
+                if duplicate is not None:
+                    break
+            if duplicate is not None:
+                result.errors.append(
+                    f"{_json_path(path)} must contain unique items; "
+                    f"indexes {duplicate[0]} and {duplicate[1]} are equal"
+                )
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, child_value in enumerate(value):
@@ -1035,6 +1075,24 @@ def validate_creative_direction(data: dict[str, Any]) -> Result:
     return r
 
 
+def _parse_utc_timestamp(value: Any, label: str, result: Result) -> dt.datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        result.errors.append(f"{label} must be an ISO-8601 timestamp with timezone")
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except (ValueError, OverflowError):
+        result.errors.append(f"{label} must be an ISO-8601 timestamp with timezone")
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        result.errors.append(f"{label} must include a timezone offset or Z")
+        return None
+    return parsed.astimezone(dt.timezone.utc)
+
+
 def validate_execution_receipt(
     data: dict[str, Any], context: ValidationContext | None = None
 ) -> Result:
@@ -1067,12 +1125,10 @@ def validate_execution_receipt(
     if data.get("outcome") in {"failed", "cancelled"}:
         r.require(not data.get("outputs"),
                   f"{data.get('outcome')} receipt must not claim outputs; use partial")
-    try:
-        started = dt.datetime.fromisoformat(str(data.get("started_at")).replace("Z", "+00:00"))
-        completed = dt.datetime.fromisoformat(str(data.get("completed_at")).replace("Z", "+00:00"))
+    started = _parse_utc_timestamp(data.get("started_at"), "started_at", r)
+    completed = _parse_utc_timestamp(data.get("completed_at"), "completed_at", r)
+    if started is not None and completed is not None:
         r.require(completed >= started, "completed_at must be at or after started_at")
-    except ValueError:
-        r.errors.append("started_at and completed_at must be ISO-8601 timestamps")
     seen: set[str] = set()
     seen_paths: set[str] = set()
     for index, output in enumerate(data.get("outputs", [])):
@@ -1109,17 +1165,13 @@ def validate_output_inspection(data: dict[str, Any]) -> Result:
             failed = [item for item in data.get(group, [])
                       if isinstance(item, dict) and item.get("status") in {"fail", "unknown"}]
             r.require(not failed, f"approved inspection has unresolved {group}")
-        try:
-            inspected_at = dt.datetime.fromisoformat(
-                str(data.get("inspected_at")).replace("Z", "+00:00")
-            )
-            approved_at = dt.datetime.fromisoformat(
-                str(approval.get("approved_at")).replace("Z", "+00:00")
-            )
+        inspected_at = _parse_utc_timestamp(data.get("inspected_at"), "inspected_at", r)
+        approved_at = _parse_utc_timestamp(
+            approval.get("approved_at"), "approval.approved_at", r
+        )
+        if inspected_at is not None and approved_at is not None:
             r.require(approved_at >= inspected_at,
                       "approval.approved_at must be at or after inspected_at")
-        except ValueError:
-            r.errors.append("inspected_at and approval.approved_at must be ISO-8601 timestamps")
     return r
 
 
@@ -1492,7 +1544,7 @@ class ProjectGraph:
 def _project_manifest_path(root: Path) -> Path:
     nested = root / ".creative-craft" / "project-manifest.json"
     direct = root / "project-manifest.json"
-    if nested.is_file():
+    if nested.exists() or nested.is_symlink() or nested.parent.is_symlink():
         return nested
     return direct
 
@@ -2547,9 +2599,38 @@ def _project_job_statuses(graph: ProjectGraph) -> None:
 
 
 def validate_project(root: Path, context: ValidationContext | None = None) -> ProjectGraph:
-    root = root.resolve()
+    requested_root = root.expanduser().absolute()
+    if requested_root.is_symlink():
+        manifest_path = _project_manifest_path(requested_root)
+        return ProjectGraph(
+            requested_root,
+            manifest_path,
+            {},
+            result=Result(errors=[f"project root must not be a symlink: {requested_root}"]),
+        )
+    root = requested_root.resolve()
     context = context or ValidationContext()
     manifest_path = _project_manifest_path(root)
+    try:
+        manifest_relative = manifest_path.relative_to(root).as_posix()
+    except ValueError:
+        return ProjectGraph(
+            root,
+            manifest_path,
+            {},
+            result=Result(errors=[f"project manifest escapes project root: {manifest_path}"]),
+        )
+    safe_manifest_path, manifest_error = _safe_relative_path(
+        root, manifest_relative, label="project manifest path"
+    )
+    if manifest_error or safe_manifest_path is None:
+        return ProjectGraph(
+            root,
+            manifest_path,
+            {},
+            result=Result(errors=[manifest_error or "project manifest path is invalid"]),
+        )
+    manifest_path = safe_manifest_path
     try:
         manifest = load_json(manifest_path)
     except ValueError as exc:
@@ -2908,6 +2989,97 @@ EVIDENCE_STRENGTH = {
 }
 
 
+EVALUATION_TARGET_SCHEMAS = {
+    "route": {"creative-craft.concept-routes.v1"},
+    "direction": {"creative-craft.creative-direction.v1"},
+    "output": {
+        "creative-craft.image-job.v2",
+        "creative-craft.video-job.v2",
+        "creative-craft.execution-receipt.v1",
+        "creative-craft.output-inspection.v1",
+    },
+    "delivery": {"creative-craft.delivery.v2"},
+}
+
+
+def _inspection_matches_receipt_output(
+    inspection: dict[str, Any], receipt: dict[str, Any]
+) -> bool:
+    if inspection.get("job_id") != receipt.get("job_id"):
+        return False
+    if inspection.get("receipt_id") != receipt.get("receipt_id"):
+        return False
+    return any(
+        isinstance(output, dict)
+        and output.get("asset_id") == inspection.get("output_asset_id")
+        and output.get("sha256") == inspection.get("output_sha256")
+        for output in receipt.get("outputs", [])
+    )
+
+
+def _receipt_output_observed(graph: ProjectGraph, receipt: dict[str, Any]) -> bool:
+    if receipt.get("outcome") not in {"succeeded", "partial"} or not receipt.get("outputs"):
+        return False
+    return any(
+        artifact_type == "output-inspection"
+        and _inspection_matches_receipt_output(record["data"], receipt)
+        for (artifact_type, _), record in graph.records.items()
+    )
+
+
+def _job_output_observed(graph: ProjectGraph, job: dict[str, Any]) -> bool:
+    job_id = job.get("job_id")
+    return any(
+        artifact_type == "execution-receipt"
+        and record["data"].get("job_id") == job_id
+        and _receipt_output_observed(graph, record["data"])
+        for (artifact_type, _), record in graph.records.items()
+    )
+
+
+def _delivery_output_observed(graph: ProjectGraph, delivery: dict[str, Any]) -> bool:
+    files = delivery.get("files", [])
+    if not files:
+        return False
+    for item in files:
+        if not isinstance(item, dict):
+            return False
+        receipt_record = graph.record("execution-receipt", str(item.get("receipt_id")))
+        inspection_record = graph.record("output-inspection", str(item.get("inspection_id")))
+        if receipt_record is None or inspection_record is None:
+            return False
+        receipt = receipt_record["data"]
+        inspection = inspection_record["data"]
+        if (
+            receipt.get("job_id") != item.get("job_id")
+            or inspection.get("job_id") != item.get("job_id")
+            or inspection.get("output_asset_id") != item.get("asset_id")
+            or inspection.get("output_sha256") != item.get("sha256")
+            or not _inspection_matches_receipt_output(inspection, receipt)
+        ):
+            return False
+    return True
+
+
+def _target_output_observed(
+    graph: ProjectGraph, target: dict[str, Any], schema_version: str
+) -> bool:
+    if schema_version in {"creative-craft.image-job.v2", "creative-craft.video-job.v2"}:
+        return _job_output_observed(graph, target)
+    if schema_version == "creative-craft.execution-receipt.v1":
+        return _receipt_output_observed(graph, target)
+    if schema_version == "creative-craft.output-inspection.v1":
+        receipt = graph.record("execution-receipt", str(target.get("receipt_id")))
+        return bool(
+            receipt
+            and receipt["data"].get("outcome") in {"succeeded", "partial"}
+            and _inspection_matches_receipt_output(target, receipt["data"])
+        )
+    if schema_version == "creative-craft.delivery.v2":
+        return _delivery_output_observed(graph, target)
+    return False
+
+
 def _evaluation_gates(data: dict[str, Any], graph: ProjectGraph) -> dict[str, bool]:
     brief = graph.record("brief", str(data.get("brief_id")))
     brief_locked = bool(brief and brief["data"].get("status") == "locked")
@@ -2945,22 +3117,26 @@ def _evaluation_gates(data: dict[str, Any], graph: ProjectGraph) -> dict[str, bo
     ) and all(value in {"CLEARED", "LIMITED", "NOT_APPLICABLE"}
               for value in consent_values)
 
-    actual_output_observed = False
+    stage = str(data.get("stage"))
+    target_schema = ""
     if target_ok and isinstance(target, dict):
-        schema_version = target.get("schema_version")
-        if schema_version == "creative-craft.output-inspection.v1":
-            actual_output_observed = True
-        elif schema_version == "creative-craft.delivery.v2":
-            actual_output_observed = bool(target.get("inspection_refs"))
-    if data.get("stage") in {"output", "delivery"} and not actual_output_observed:
-        actual_output_observed = any(
-            artifact_type == "output-inspection"
-            for artifact_type, _ in graph.records
+        target_schema = str(target.get("schema_version"))
+    target_compatible = bool(
+        target_ok and target_schema in EVALUATION_TARGET_SCHEMAS.get(stage, set())
+    )
+    actual_output_observed = bool(
+        stage not in {"output", "delivery"}
+        or (
+            target_compatible
+            and isinstance(target, dict)
+            and _target_output_observed(graph, target, target_schema)
         )
+    )
     return {
         "rights_clear": rights_clear,
         "brief_locked": brief_locked,
         "deliverable_specified": deliverable_specified,
+        "target_compatible": target_compatible,
         "actual_output_observed": actual_output_observed,
     }
 
@@ -2997,7 +3173,7 @@ def _score_evaluation_v2(data: dict[str, Any], graph: ProjectGraph | None) -> di
     gates = _evaluation_gates(data, graph)
     required_gates = ["rights_clear", "brief_locked", "deliverable_specified"]
     if data["stage"] in {"output", "delivery"}:
-        required_gates.append("actual_output_observed")
+        required_gates.extend(("target_compatible", "actual_output_observed"))
     failed_gates = [name for name in required_gates if not gates[name]]
     dimensions = data["dimensions"]
     total_weight = sum(float(item["weight"]) for item in dimensions)
@@ -3184,6 +3360,20 @@ def doctor(root: Path = REPO_ROOT) -> Result:
                     r.require(actual == version, f"{rel} version {actual!r} does not match {version!r}")
                 except (ValueError, KeyError) as exc:
                     r.errors.append(str(exc))
+
+        expected_tag = f"v{version}"
+        for rel in ("adapters/pi/README.md", "adapters/codex/README.md"):
+            path = root / rel
+            if not path.is_file():
+                r.errors.append(f"missing Tier 1 adapter documentation: {rel}")
+                continue
+            tags = re.findall(r"(?<![A-Za-z0-9])v[0-9]+\.[0-9]+\.[0-9]+", path.read_text(encoding="utf-8"))
+            r.require(bool(tags), f"{rel} must contain an immutable release tag")
+            for tag in sorted(set(tags)):
+                r.require(
+                    tag == expected_tag,
+                    f"{rel} install tag {tag!r} does not match {expected_tag!r}",
+                )
 
     ignored_parts = {".git", ".venv", "__pycache__", "dist", "node_modules"}
     for path in sorted(root.rglob("*.json")):
@@ -4582,52 +4772,59 @@ def cmd_update_reference_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_seed(args: argparse.Namespace) -> int:
-    target = Path(args.target).expanduser().resolve()
-    brand_pack = getattr(args, "brand_pack", None)
-    if brand_pack:
-        source = validate_brand_pack(Path(str(brand_pack)).expanduser())
-        if not source.result.ok:
-            print(
-                "ERROR: Brand Pack is invalid: " + "; ".join(source.result.errors),
-                file=sys.stderr,
-            )
-            return 1
-        if source.manifest.get("status") == "revoked":
-            print("ERROR: cannot bind a revoked Brand Pack", file=sys.stderr)
-            return 1
-        if getattr(args, "brand_source_commit", None) and not getattr(
-            args, "brand_source_uri", None
-        ):
-            print("ERROR: --brand-source-commit requires --brand-source-uri", file=sys.stderr)
-            return 1
-    target.mkdir(parents=True, exist_ok=True)
-    copies: dict[Path, Path] = {
-        TEMPLATES_DIR / "CREATIVE.md": target / "CREATIVE.md",
-        TEMPLATES_DIR / "DELIVERABLES.md": target / "DELIVERABLES.md",
+def _seed_copy_sources(bind_brand_pack: bool) -> dict[str, Path]:
+    copies = {
+        "CREATIVE.md": TEMPLATES_DIR / "CREATIVE.md",
+        "DELIVERABLES.md": TEMPLATES_DIR / "DELIVERABLES.md",
     }
-    if not brand_pack:
-        copies[TEMPLATES_DIR / "BRAND.md"] = target / "BRAND.md"
+    if not bind_brand_pack:
+        copies["BRAND.md"] = TEMPLATES_DIR / "BRAND.md"
     for schema_version, entry in ARTIFACT_REGISTRY.items():
         template = entry.get("template")
         if template and schema_version in PROJECT_SEED_SCHEMA_VERSIONS:
-            copies[TEMPLATES_DIR / str(template)] = target / ".creative-craft" / str(template)
-    conflicts = [dst for dst in copies.values() if dst.exists() and not args.force]
-    if conflicts:
-        print("ERROR: refusing to overwrite existing files:", file=sys.stderr)
-        for path in conflicts:
-            print(f"  {path}", file=sys.stderr)
-        print("Use --force only after reviewing the existing authority.", file=sys.stderr)
-        return 1
-    backup_suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    for src, dst in copies.items():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists() and args.force:
-            backup = dst.with_name(f"{dst.name}.bak.{backup_suffix}")
-            shutil.copy2(dst, backup)
-            print(backup)
-        shutil.copy2(src, dst)
-        print(dst)
+            copies[f".creative-craft/{template}"] = TEMPLATES_DIR / str(template)
+    return copies
+
+
+def _seed_parent_directory(parent: Path) -> list[Path]:
+    missing: list[Path] = []
+    current = parent
+    while not current.exists() and not current.is_symlink():
+        missing.append(current)
+        if current == current.parent:
+            break
+        current = current.parent
+    if current.is_symlink():
+        raise ValueError(f"seed target parent must not be a symlink: {current}")
+    if not current.is_dir():
+        raise ValueError(f"seed target parent is not a directory: {current}")
+    created: list[Path] = []
+    try:
+        for path in reversed(missing):
+            path.mkdir()
+            created.append(path)
+    except Exception:
+        for path in reversed(created):
+            path.rmdir()
+        raise
+    return created
+
+
+def _validate_seed_destination(root: Path, relative: str) -> Path:
+    path, error = _safe_relative_path(root, relative, label="seed destination")
+    if error or path is None:
+        raise ValueError(error or f"invalid seed destination: {relative!r}")
+    current = root
+    for part in Path(relative).parts[:-1]:
+        current = current / part
+        if current.exists() and not current.is_dir():
+            raise ValueError(f"seed destination parent is not a directory: {current}")
+    if path.exists() and not path.is_file():
+        raise ValueError(f"seed destination is not a regular file: {path}")
+    return path
+
+
+def _write_seed_manifest(target: Path) -> None:
     manifest_entries: list[dict[str, Any]] = []
     fallback_ids = {
         "asset-ledger": "asset-ledger-tbd",
@@ -4646,29 +4843,143 @@ def cmd_seed(args: argparse.Namespace) -> int:
             "artifact_type": artifact_type,
             "artifact_id": artifact_id,
             "schema_version": schema_version,
-            "path": str(path.relative_to(target)),
+            "path": path.relative_to(target).as_posix(),
             "sha256": sha256_file(path),
         })
-    manifest_path = target / ".creative-craft" / "project-manifest.json"
     manifest = {
         "schema_version": "creative-craft.project-manifest.v1",
         "project_id": "project-tbd",
         "manifest_id": "manifest-tbd",
         "artifacts": manifest_entries,
     }
-    write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-    if brand_pack:
-        try:
+    write_atomic(
+        target / ".creative-craft" / "project-manifest.json",
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+def _seed_project(args: argparse.Namespace) -> tuple[Path, list[str], list[str]]:
+    requested_target = Path(args.target).expanduser().absolute()
+    if requested_target.is_symlink():
+        raise ValueError(f"seed target must not be a symlink: {requested_target}")
+    if requested_target.exists() and not requested_target.is_dir():
+        raise ValueError(f"seed target is not a directory: {requested_target}")
+
+    brand_pack_value = getattr(args, "brand_pack", None)
+    brand_pack = Path(str(brand_pack_value)).expanduser() if brand_pack_value else None
+    if brand_pack is not None:
+        source = validate_brand_pack(brand_pack)
+        if not source.result.ok:
+            raise ValueError("Brand Pack is invalid: " + "; ".join(source.result.errors))
+        if source.manifest.get("status") == "revoked":
+            raise ValueError("cannot bind a revoked Brand Pack")
+        if getattr(args, "brand_source_commit", None) and not getattr(
+            args, "brand_source_uri", None
+        ):
+            raise ValueError("--brand-source-commit requires --brand-source-uri")
+
+    created_parents = _seed_parent_directory(requested_target.parent)
+    transaction: Path | None = None
+    committed = False
+    try:
+        target = requested_target.resolve()
+        copies = _seed_copy_sources(brand_pack is not None)
+        destinations = {
+            relative: _validate_seed_destination(target, relative)
+            for relative in copies
+        }
+        if brand_pack is not None:
+            for relative in (
+                "BRAND.md",
+                ".creative-craft/asset-ledger.json",
+                ".creative-craft/project-manifest.json",
+                ".creative-craft/brand-binding.json",
+                ".creative-craft/brand-snapshot",
+            ):
+                _validate_seed_destination(target, relative)
+        conflicts = [
+            path for path in destinations.values()
+            if path.exists() and not bool(args.force)
+        ]
+        if conflicts:
+            formatted = "; ".join(str(path) for path in conflicts)
+            raise ValueError(
+                "refusing to overwrite existing files: "
+                f"{formatted}; use --force only after reviewing the existing authority"
+            )
+
+        transaction = Path(tempfile.mkdtemp(
+            prefix=f".{requested_target.name}.seed-", dir=requested_target.parent
+        ))
+        staged = transaction / "staged"
+        target_existed = target.is_dir()
+        if target_existed:
+            shutil.copytree(
+                target, staged, symlinks=True, copy_function=shutil.copy2
+            )
+        else:
+            staged.mkdir()
+
+        backup_suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_relatives: list[str] = []
+        for relative, source_path in copies.items():
+            destination = staged / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists() and bool(args.force):
+                backup = destination.with_name(
+                    f"{destination.name}.bak.{backup_suffix}"
+                )
+                if backup.exists() or backup.is_symlink():
+                    raise ValueError(f"seed backup destination already exists: {backup}")
+                shutil.copy2(destination, backup)
+                backup_relatives.append(backup.relative_to(staged).as_posix())
+            shutil.copy2(source_path, destination)
+
+        _write_seed_manifest(staged)
+        if brand_pack is not None:
             _install_brand_snapshot(
-                target,
-                Path(str(brand_pack)).expanduser(),
+                staged,
+                brand_pack,
                 args,
                 require_existing_binding=False,
                 retain_backup=False,
             )
-        except (OSError, ValueError) as exc:
-            print(f"ERROR: failed to bind Brand Pack: {exc}", file=sys.stderr)
-            return 1
+        validated = validate_project(staged)
+        if not validated.result.ok:
+            raise ValueError(
+                "staged seed project is invalid: " + "; ".join(validated.result.errors)
+            )
+
+        original = transaction / "original"
+        if target_existed:
+            target.rename(original)
+        try:
+            staged.rename(target)
+        except Exception:
+            if target_existed and original.exists() and not target.exists():
+                original.rename(target)
+            raise
+        committed = True
+        return target, list(copies), backup_relatives
+    finally:
+        if transaction is not None:
+            shutil.rmtree(transaction, ignore_errors=True)
+        if not committed:
+            for path in reversed(created_parents):
+                if path.is_dir() and not any(path.iterdir()):
+                    path.rmdir()
+
+
+def cmd_seed(args: argparse.Namespace) -> int:
+    try:
+        target, copied_relatives, backup_relatives = _seed_project(args)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: failed to seed project: {exc}", file=sys.stderr)
+        return 1
+    for relative in backup_relatives:
+        print(target / relative)
+    for relative in copied_relatives:
+        print(target / relative)
     return 0
 
 
@@ -4718,48 +5029,85 @@ def _project_payload(graph: ProjectGraph) -> dict[str, Any]:
 
 def _unregistered_project_artifacts(graph: ProjectGraph) -> list[dict[str, Any]]:
     registered_paths = {
-        Path(record["path"]).resolve() for record in graph.records.values()
+        Path(record["path"]).absolute() for record in graph.records.values()
     }
-    scan_root = graph.manifest_path.parent
-    if not scan_root.is_dir():
-        return []
-
     findings: list[dict[str, Any]] = []
-    for path in sorted(scan_root.glob("*.json"), key=lambda item: item.name):
-        if path.is_symlink() or not path.is_file() or path.resolve() in registered_paths:
-            continue
-        try:
-            data = load_json(path)
-        except ValueError:
-            continue
-        schema_version = str(data.get("schema_version"))
-        entry = ARTIFACT_REGISTRY.get(schema_version)
-        if entry is None or entry["kind"] == "project-manifest":
-            continue
+    seen_paths: set[Path] = set()
 
-        artifact_type = str(entry["kind"])
-        id_field = ARTIFACT_ID_FIELDS.get(artifact_type)
-        _, result = validate_data(data, artifact_type)
-        template_name = entry.get("template")
-        template_path = TEMPLATES_DIR / str(template_name) if template_name else None
-        digest = sha256_file(path)
-        matches_template = bool(
-            template_path
-            and template_path.is_file()
-            and sha256_file(template_path) == digest
-        )
-        findings.append({
+    def unsafe_symlink_finding(path: Path, artifact_type: str) -> dict[str, Any]:
+        return {
             "path": path.relative_to(graph.root).as_posix(),
-            "schema_version": schema_version,
+            "schema_version": None,
             "artifact_type": artifact_type,
-            "artifact_id": data.get(id_field) if id_field else None,
-            "sha256": digest,
-            "structurally_valid": result.ok,
-            "matches_bundled_template": matches_template,
-            "classification": (
-                "seed_template_residue" if matches_template else "unregistered_artifact"
-            ),
-        })
+            "artifact_id": None,
+            "sha256": None,
+            "structurally_valid": False,
+            "matches_bundled_template": False,
+            "classification": "unsafe_symlink",
+        }
+
+    template_types = {
+        str(entry["template"]): str(entry["kind"])
+        for entry in ARTIFACT_REGISTRY.values()
+        if entry.get("template")
+    }
+    scan_roots = (graph.root, graph.root / ".creative-craft")
+    for scan_root in scan_roots:
+        if scan_root in seen_paths:
+            continue
+        seen_paths.add(scan_root)
+        if scan_root.is_symlink():
+            findings.append(unsafe_symlink_finding(scan_root, "project-directory"))
+            continue
+        if not scan_root.is_dir():
+            continue
+        for path in sorted(scan_root.glob("*.json"), key=lambda item: item.name):
+            absolute_path = path.absolute()
+            if absolute_path in seen_paths:
+                continue
+            seen_paths.add(absolute_path)
+            if path.is_symlink():
+                artifact_type = (
+                    "project-manifest"
+                    if path.name == "project-manifest.json"
+                    else template_types.get(path.name, "unknown")
+                )
+                findings.append(unsafe_symlink_finding(path, artifact_type))
+                continue
+            if not path.is_file() or absolute_path in registered_paths:
+                continue
+            try:
+                data = load_json(path)
+            except ValueError:
+                continue
+            schema_version = str(data.get("schema_version"))
+            entry = ARTIFACT_REGISTRY.get(schema_version)
+            if entry is None or entry["kind"] == "project-manifest":
+                continue
+
+            artifact_type = str(entry["kind"])
+            id_field = ARTIFACT_ID_FIELDS.get(artifact_type)
+            _, result = validate_data(data, artifact_type)
+            template_name = entry.get("template")
+            template_path = TEMPLATES_DIR / str(template_name) if template_name else None
+            digest = sha256_file(path)
+            matches_template = bool(
+                template_path
+                and template_path.is_file()
+                and sha256_file(template_path) == digest
+            )
+            findings.append({
+                "path": path.relative_to(graph.root).as_posix(),
+                "schema_version": schema_version,
+                "artifact_type": artifact_type,
+                "artifact_id": data.get(id_field) if id_field else None,
+                "sha256": digest,
+                "structurally_valid": result.ok,
+                "matches_bundled_template": matches_template,
+                "classification": (
+                    "seed_template_residue" if matches_template else "unregistered_artifact"
+                ),
+            })
     return findings
 
 

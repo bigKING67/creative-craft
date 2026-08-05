@@ -49,6 +49,113 @@ def load_object(path: Path) -> dict[str, Any]:
     return value
 
 
+def resolve_local_ref(root_schema: dict[str, Any], reference: str) -> dict[str, Any]:
+    if not reference.startswith("#/"):
+        raise ValueError(f"unsupported parity reference: {reference}")
+    current: Any = root_schema
+    for raw_part in reference[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"unresolved parity reference: {reference}")
+        current = current[part]
+    if not isinstance(current, dict):
+        raise ValueError(  # noqa: TRY004
+            f"parity reference is not an object: {reference}"
+        )
+    return current
+
+
+def unique_keyword_count(value: Any) -> int:
+    if isinstance(value, dict):
+        return int(value.get("uniqueItems") is True) + sum(
+            unique_keyword_count(child) for child in value.values()
+        )
+    if isinstance(value, list):
+        return sum(unique_keyword_count(child) for child in value)
+    return 0
+
+
+def iter_unique_instance_paths(
+    schema: dict[str, Any],
+    root_schema: dict[str, Any],
+    value: Any,
+    path: tuple[Any, ...] = (),
+) -> list[tuple[Any, ...]]:
+    if "$ref" in schema:
+        return iter_unique_instance_paths(
+            resolve_local_ref(root_schema, str(schema["$ref"])), root_schema, value, path
+        )
+    paths: list[tuple[Any, ...]] = []
+    if schema.get("uniqueItems") is True and isinstance(value, list) and value:
+        paths.append(path)
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            for key, child_schema in properties.items():
+                if key in value and isinstance(child_schema, dict):
+                    paths.extend(
+                        iter_unique_instance_paths(
+                            child_schema, root_schema, value[key], path + (key,)
+                        )
+                    )
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, child in enumerate(value):
+                paths.extend(
+                    iter_unique_instance_paths(
+                        item_schema, root_schema, child, path + (index,)
+                    )
+                )
+    return paths
+
+
+def value_at_path(value: Any, path: tuple[Any, ...]) -> Any:
+    current = value
+    for part in path:
+        current = current[part]
+    return current
+
+
+def populate_unique_item_specimen(
+    schema_version: str, artifact: dict[str, Any]
+) -> dict[str, Any]:
+    specimen = copy.deepcopy(artifact)
+    if schema_version != "creative-craft.reference-pack.v1":
+        return specimen
+    specimen["entities"] = [{
+        "reference_id": "reference-parity",
+        "entity_type": "brand",
+        "name": "Parity reference",
+        "relationship": "reference",
+        "summary": "Schema parity specimen.",
+        "source_refs": ["source-parity"],
+        "observations": [{
+            "observation_id": "observation-parity",
+            "dimension": "composition",
+            "evidence_state": "OBSERVED",
+            "statement": "Synthetic schema specimen.",
+            "evidence_refs": ["source-parity"],
+        }],
+        "transferable_principles": [{
+            "principle_id": "principle-parity",
+            "derived_from": ["observation-parity"],
+            "statement": "Synthetic schema specimen.",
+            "application_scope": ["image"],
+            "adaptation_required": True,
+            "must_preserve_primary_brand": ["identity"],
+        }],
+        "non_transferable_elements": ["exact expression"],
+        "applicable_to": ["campaign"],
+        "reference_roles": ["composition"],
+        "rights_policy": "research_only",
+        "prohibited_use": ["imitation"],
+        "asset_refs": ["asset-parity"],
+        "may_override_primary_brand": False,
+    }]
+    return specimen
+
+
 def main() -> int:
     validators: dict[str, tuple[Path, Draft202012Validator]] = {}
     errors: list[str] = []
@@ -141,6 +248,11 @@ def main() -> int:
         missing_specimens = sorted(set(validators).difference(specimens))
         for schema_version in missing_specimens:
             errors.append(f"no parity specimen for schema_version {schema_version}")
+        expected_unique_cases = sum(
+            unique_keyword_count(load_object(schema_path))
+            for schema_path, _ in validators.values()
+        )
+        generated_unique_cases = 0
         for schema_version, path in sorted(specimens.items()):
             artifact = load_object(path)
             schema_path, reference = validators[schema_version]
@@ -157,6 +269,14 @@ def main() -> int:
             wrong_version = copy.deepcopy(artifact)
             wrong_version["schema_version"] = "creative-craft.invalid.v0"
             mutations.append(wrong_version)
+            unique_specimen = populate_unique_item_specimen(schema_version, artifact)
+            unique_paths = iter_unique_instance_paths(schema, schema, unique_specimen)
+            for unique_path in unique_paths:
+                duplicate = copy.deepcopy(unique_specimen)
+                values = value_at_path(duplicate, unique_path)
+                values.append(copy.deepcopy(values[0]))
+                mutations.append(duplicate)
+                generated_unique_cases += 1
             for index, mutation in enumerate(mutations):
                 reference_valid = not list(reference.iter_errors(mutation))
                 runtime_valid = runtime.validate_against_schema(mutation, schema_path).ok
@@ -166,6 +286,12 @@ def main() -> int:
                         f"jsonschema={reference_valid}, runtime={runtime_valid}"
                     )
                 parity_cases += 1
+        if generated_unique_cases != expected_unique_cases:
+            errors.append(
+                "uniqueItems parity coverage mismatch: "
+                f"generated {generated_unique_cases} cases for "
+                f"{expected_unique_cases} schema keywords"
+            )
 
     if errors:
         print("JSON Schema validation failed:")

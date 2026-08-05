@@ -353,6 +353,25 @@ class DoctorTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(any(cc.IMAGE_PROFILE_ID in item for item in result.errors))
 
+    def test_doctor_rejects_stale_tier_one_adapter_install_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            copied = Path(directory) / "repo"
+            shutil.copytree(
+                ROOT,
+                copied,
+                ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.pyc"),
+            )
+            adapter = copied / "adapters/pi/README.md"
+            adapter.write_text(
+                adapter.read_text(encoding="utf-8").replace("v0.2.5", "v0.2.1"),
+                encoding="utf-8",
+            )
+
+            result = cc.doctor(copied)
+
+            self.assertFalse(result.ok)
+            self.assertTrue(any("adapters/pi/README.md" in item for item in result.errors))
+
 
 class ReleaseReceiptTests(unittest.TestCase):
     def test_release_receipt_argv_redacts_local_absolute_paths(self) -> None:
@@ -569,8 +588,105 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual("blocked", result["status"])
         self.assertIn("brief_locked", result["failed_gates"])
 
+    @staticmethod
+    def add_output_chain(
+        graph: cc.ProjectGraph,
+        *,
+        job_id: str,
+        receipt_id: str,
+        inspection_id: str,
+        asset_id: str,
+    ) -> None:
+        output_sha = "a" * 64
+        graph.records[("execution-receipt", receipt_id)] = {
+            "data": {
+                "schema_version": "creative-craft.execution-receipt.v1",
+                "receipt_id": receipt_id,
+                "job_id": job_id,
+                "outcome": "succeeded",
+                "outputs": [{"asset_id": asset_id, "sha256": output_sha}],
+            }
+        }
+        graph.records[("output-inspection", inspection_id)] = {
+            "data": {
+                "schema_version": "creative-craft.output-inspection.v1",
+                "inspection_id": inspection_id,
+                "job_id": job_id,
+                "receipt_id": receipt_id,
+                "output_asset_id": asset_id,
+                "output_sha256": output_sha,
+                "decision": "approved",
+            }
+        }
+
+    def test_output_gate_does_not_borrow_another_jobs_inspection(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["stage"] = "output"
+        data["target_ref"] = "cc://video/northstar-motion-proof-vertical-15s-v1#"
+        self.add_output_chain(
+            self.graph,
+            job_id="northstar-motion-proof-hero-image-v1",
+            receipt_id="receipt-unrelated-image",
+            inspection_id="inspection-unrelated-image",
+            asset_id="output-unrelated-image",
+        )
+
+        result = cc.score_evaluation(data, self.graph)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertFalse(result["gate_status"]["actual_output_observed"])
+        self.assertIn("actual_output_observed", result["failed_gates"])
+
+    def test_output_gate_accepts_only_matching_job_receipt_output_inspection_chain(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["stage"] = "output"
+        data["target_ref"] = "cc://video/northstar-motion-proof-vertical-15s-v1#"
+        self.add_output_chain(
+            self.graph,
+            job_id="northstar-motion-proof-vertical-15s-v1",
+            receipt_id="receipt-target-video",
+            inspection_id="inspection-target-video",
+            asset_id="output-target-video",
+        )
+
+        result = cc.score_evaluation(data, self.graph)
+
+        self.assertEqual("scored", result["status"])
+        self.assertTrue(result["gate_status"]["target_compatible"])
+        self.assertTrue(result["gate_status"]["actual_output_observed"])
+
+    def test_delivery_gate_rejects_job_target_as_incompatible(self) -> None:
+        data = copy.deepcopy(self.data)
+        data["stage"] = "delivery"
+        data["target_ref"] = "cc://video/northstar-motion-proof-vertical-15s-v1#"
+        self.add_output_chain(
+            self.graph,
+            job_id="northstar-motion-proof-vertical-15s-v1",
+            receipt_id="receipt-target-video",
+            inspection_id="inspection-target-video",
+            asset_id="output-target-video",
+        )
+
+        result = cc.score_evaluation(data, self.graph)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertIn("target_compatible", result["failed_gates"])
+
 
 class SeedTests(unittest.TestCase):
+    @staticmethod
+    def args(target: Path, *, force: bool = False, brand_pack: Path | None = None) -> object:
+        return type("Args", (), {
+            "target": str(target),
+            "force": force,
+            "brand_pack": str(brand_pack) if brand_pack else None,
+            "brand_source_uri": "https://git.invalid/acme-brand-pack.git" if brand_pack else None,
+            "brand_source_ref": "main" if brand_pack else None,
+            "brand_source_commit": "1" * 40 if brand_pack else None,
+            "imported_by": "fixture-operator",
+            "reason": "Seed fixture",
+        })()
+
     def test_seed_and_refuse_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             args = type("Args", (), {"target": directory, "force": False})()
@@ -602,6 +718,116 @@ class SeedTests(unittest.TestCase):
                 self.assertIsNotNone(graph.record("critique", "critique-tbd"))
                 self.assertEqual(1, cc.cmd_seed(args))
             self.assertIn("refusing to overwrite", stderr.getvalue())
+
+    def test_seed_rejects_dangling_destination_symlink_without_external_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            outside = root / "outside-brand.md"
+            (project / "BRAND.md").symlink_to(outside)
+            before = tree_snapshot(project)
+
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(1, cc.cmd_seed(self.args(project)))
+
+            self.assertEqual(before, tree_snapshot(project))
+            self.assertFalse(outside.exists())
+
+    def test_seed_rejects_symlink_or_file_parent_without_partial_writes(self) -> None:
+        for unsafe_parent in ("symlink", "file"):
+            with self.subTest(unsafe_parent=unsafe_parent), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                project = root / "project"
+                project.mkdir()
+                if unsafe_parent == "symlink":
+                    outside = root / "outside"
+                    outside.mkdir()
+                    (project / ".creative-craft").symlink_to(outside, target_is_directory=True)
+                else:
+                    (project / ".creative-craft").write_text("collision", encoding="utf-8")
+                before = tree_snapshot(project)
+
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                    io.StringIO()
+                ):
+                    self.assertEqual(1, cc.cmd_seed(self.args(project)))
+
+                self.assertEqual(before, tree_snapshot(project))
+
+    def test_seed_copy_failure_restores_exact_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            (project / "keep.txt").write_text("unchanged", encoding="utf-8")
+            before = tree_snapshot(project)
+            real_copy2 = shutil.copy2
+            calls = 0
+
+            def fail_second_copy(source: Path, target: Path, *args: object, **kwargs: object) -> Path:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("injected seed copy failure")
+                return real_copy2(source, target, *args, **kwargs)
+
+            with mock.patch.object(cc.shutil, "copy2", side_effect=fail_second_copy), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(1, cc.cmd_seed(self.args(project)))
+
+            self.assertEqual(before, tree_snapshot(project))
+
+    def test_seed_brand_binding_failure_restores_exact_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            (project / "keep.txt").write_text("unchanged", encoding="utf-8")
+            brand_pack = init_brand_pack(root)
+            approve_brand_pack(brand_pack)
+            before = tree_snapshot(project)
+
+            with mock.patch.object(
+                cc, "_install_brand_snapshot", side_effect=OSError("injected brand bind failure")
+            ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(1, cc.cmd_seed(self.args(project, brand_pack=brand_pack)))
+
+            self.assertEqual(before, tree_snapshot(project))
+
+    def test_seed_force_preserves_replaced_files_as_transactional_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_seed(self.args(project)))
+            old_brand = "# User authority\n"
+            (project / "BRAND.md").write_text(old_brand, encoding="utf-8")
+
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_seed(self.args(project, force=True)))
+
+            backups = list(project.glob("BRAND.md.bak.*"))
+            self.assertEqual(1, len(backups))
+            self.assertEqual(old_brand, backups[0].read_text(encoding="utf-8"))
+
+    def test_seed_cli_path_error_is_stable_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            (project / ".creative-craft").write_text("collision", encoding="utf-8")
+
+            completed = subprocess.run(
+                [sys.executable, str(CLI_PATH), "seed", "--target", str(project)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(1, completed.returncode)
+            self.assertIn("ERROR:", completed.stderr)
+            self.assertNotIn("Traceback", completed.stderr)
 
     def test_project_rejects_critique_with_unknown_asset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1728,6 +1954,86 @@ class ArtifactSemanticTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any("requires invariant_checks" in item for item in result.errors))
 
+    def test_unique_items_uses_json_deep_equality(self) -> None:
+        schema = {
+            "type": "array",
+            "uniqueItems": True,
+        }
+        result = cc.Result()
+        cc._validate_schema_node(
+            [{"nested": [1]}, {"nested": [1.0]}], schema, schema, (), result
+        )
+        self.assertFalse(result.ok)
+        self.assertTrue(any("unique items" in item for item in result.errors))
+
+        distinct = cc.Result()
+        cc._validate_schema_node([True, 1], schema, schema, (), distinct)
+        self.assertTrue(distinct.ok, distinct.errors)
+
+    def test_reference_binding_duplicate_selection_is_structurally_rejected(self) -> None:
+        binding = load("skills/creative-craft/templates/reference-binding.json")
+        binding["selected_reference_ids"] = ["reference-tbd", "reference-tbd"]
+
+        _, result = cc.validate_data(binding)
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("unique items" in item for item in result.errors))
+
+    def test_receipt_timestamps_require_timezone_and_never_raise_for_mixed_values(self) -> None:
+        receipt = load("skills/creative-craft/templates/execution-receipt.json")
+        cases = (
+            ("2026-08-05T00:00:00Z", "2026-08-05T00:00:01"),
+            ("2026-08-05T00:00:00", "2026-08-05T00:00:01Z"),
+            ("not-a-time", "2026-08-05T00:00:01Z"),
+            ("2026-08-05T00:00:02Z", "2026-08-05T00:00:01Z"),
+        )
+        for started_at, completed_at in cases:
+            with self.subTest(started_at=started_at, completed_at=completed_at):
+                specimen = copy.deepcopy(receipt)
+                specimen["started_at"] = started_at
+                specimen["completed_at"] = completed_at
+                _, result = cc.validate_data(specimen)
+                self.assertFalse(result.ok)
+
+    def test_timestamp_offsets_are_normalized_to_utc_before_ordering(self) -> None:
+        receipt = load("skills/creative-craft/templates/execution-receipt.json")
+        receipt["started_at"] = "2026-08-05T08:00:00+08:00"
+        receipt["completed_at"] = "2026-08-05T00:00:01Z"
+
+        _, result = cc.validate_data(receipt)
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_approved_inspection_rejects_naive_or_reverse_approval_timestamp(self) -> None:
+        check = {
+            "id": "check-1",
+            "status": "pass",
+            "observation": "Synthetic observation.",
+            "interpretation": "Synthetic interpretation.",
+        }
+        inspection = load("skills/creative-craft/templates/output-inspection.json")
+        inspection.update({
+            "decision": "approved",
+            "inspector": "reviewer",
+            "inspected_at": "2026-08-05T00:00:02Z",
+            "invariant_checks": [check],
+            "technical_checks": [{**check, "id": "check-2"}],
+            "rights_checks": [{**check, "id": "check-3"}],
+            "approval": {
+                "approved_by": "owner",
+                "approved_at": "2026-08-05T00:00:01",
+                "approval_basis": "Synthetic review.",
+            },
+        })
+
+        _, naive = cc.validate_data(inspection)
+        self.assertFalse(naive.ok)
+
+        inspection["approval"]["approved_at"] = "2026-08-05T00:00:01Z"
+        _, reverse = cc.validate_data(inspection)
+        self.assertFalse(reverse.ok)
+        self.assertTrue(any("at or after" in item for item in reverse.errors))
+
 
 class ProjectGraphTests(unittest.TestCase):
     def copy_example(self, directory: str) -> Path:
@@ -1772,6 +2078,80 @@ class ProjectGraphTests(unittest.TestCase):
             self.assertFalse(graph.result.ok)
             self.assertTrue(any("unsafe project-relative path" in item
                                 for item in graph.result.errors))
+
+    def test_manifest_symlink_outside_project_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = self.copy_example(directory)
+            manifest_path = project / "project-manifest.json"
+            outside_manifest = root / "outside-manifest.json"
+            manifest_path.replace(outside_manifest)
+            manifest_path.symlink_to(outside_manifest)
+
+            graph = cc.validate_project(project)
+
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("manifest" in item and "symlink" in item
+                                for item in graph.result.errors))
+
+    def test_nested_manifest_symlink_outside_project_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_seed(SeedTests.args(project)))
+            manifest_path = project / ".creative-craft/project-manifest.json"
+            outside_manifest = root / "outside-manifest.json"
+            manifest_path.replace(outside_manifest)
+            manifest_path.symlink_to(outside_manifest)
+
+            graph = cc.validate_project(project)
+
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("manifest" in item and "symlink" in item
+                                for item in graph.result.errors))
+
+    def test_symlink_project_root_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = self.copy_example(directory)
+            project_link = root / "project-link"
+            project_link.symlink_to(project, target_is_directory=True)
+
+            graph = cc.validate_project(project_link)
+
+            self.assertFalse(graph.result.ok)
+            self.assertTrue(any("project root must not be a symlink" in item
+                                for item in graph.result.errors))
+
+    def test_project_doctor_reports_unregistered_symlink_without_following_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, cc.cmd_seed(SeedTests.args(project)))
+            unsafe = project / ".creative-craft/execution-receipt.json"
+            unsafe.symlink_to(cc.TEMPLATES_DIR / "execution-receipt.json")
+            nested_snapshot = project / ".creative-craft/reference-snapshots/example"
+            nested_snapshot.mkdir(parents=True)
+            (nested_snapshot / "ignored.json").symlink_to(
+                cc.TEMPLATES_DIR / "execution-receipt.json"
+            )
+            before = tree_snapshot(project)
+            args = type("Args", (), {"root": str(project), "json": True})()
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(1, cc.cmd_doctor_project(args))
+
+            payload = json.loads(stdout.getvalue())
+            self.assertFalse(payload["healthy"])
+            unsafe_findings = [
+                item for item in payload["unregistered_artifacts"]
+                if item["classification"] == "unsafe_symlink"
+            ]
+            self.assertEqual([".creative-craft/execution-receipt.json"],
+                             [item["path"] for item in unsafe_findings])
+            self.assertEqual(before, tree_snapshot(project))
 
     def test_ready_job_requires_cleared_referenced_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

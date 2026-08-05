@@ -195,6 +195,22 @@ The declared state inside image/video Job v2 is intentionally limited to
 corresponding receipt, output file, digest, inspection, approval, and delivery
 evidence exists.
 
+Output-stage Evaluation follows the same causal boundary. A Job target is
+observed only through a matching Job -> successful Receipt -> declared Output
+-> digest-bound Inspection chain. An Inspection from another Job cannot satisfy
+the gate. Delivery-stage Evaluation accepts a Delivery v2 target only and
+requires every delivered file to resolve through its matching causal chain.
+
+Project seeding uses a same-filesystem staged copy of the complete target tree.
+All seed destinations and parents are checked for symlinks and non-directory
+collisions before the staged copy is changed. Templates, force backups, the
+generated Manifest, and an optional Brand binding are validated together; only
+then is the staged directory exchanged with the target. A failed operation
+leaves the pre-operation project tree unchanged. Project Manifest authority and
+registered artifacts use the same symlink-free containment rule, while
+`doctor-project` reports top-level unsafe JSON symlinks without following them
+or recursively scanning immutable snapshot contents.
+
 ## Why no direct model adapter in v0.2
 
 The first failure mode of a creative system is usually not API syntax. It is a
@@ -216,6 +232,10 @@ runtime interprets the schema keyword subset used by this repository; CI compare
 that result with the `jsonschema` Draft 2020-12 reference implementation. Python
 semantic validators are limited to Provider/Surface capability rules,
 cross-field constraints, digests, references, rights, and lifecycle evidence.
+The leaf evaluator implements JSON deep-equality for `uniqueItems`, and the
+parity gate generates an invalid duplicate mutation for every `uniqueItems`
+keyword in the public schemas. Receipt and approved-Inspection timestamps must
+carry a timezone and are normalized to UTC before ordering.
 
 ## Release package evidence
 

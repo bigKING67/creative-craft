@@ -2,6 +2,26 @@
 
 All notable changes are documented here.
 
+## Unreleased
+
+Review hardening after 0.2.5:
+
+- bind output and delivery Evaluation gates to a stage-compatible target and a
+  matching Job, Receipt, Output, and Inspection chain instead of accepting an
+  unrelated project-global Inspection;
+- make `seed` a symlink-safe, same-filesystem staged-tree transaction covering
+  force backups, generated Manifest content, optional Brand binding, full
+  validation, commit, and exact-tree failure recovery;
+- reject symlink Project roots and Manifests, and make `doctor-project` report
+  unsafe top-level JSON symlinks without following snapshot trees;
+- implement JSON Schema `uniqueItems` with JSON deep-equality in the portable
+  runtime and add keyword-complete parity mutations for all 12 public uses;
+- require timezone-bearing Receipt and approved-Inspection timestamps and
+  compare their UTC-normalized values without leaking mixed-datetime errors;
+- synchronize immutable Pi and Codex install snippets with `v0.2.5`, gate future
+  adapter tag drift, and add repository-local Review Craft E3 commands for the
+  exact packaged runtime.
+
 ## 0.2.5 — 2026-08-05
 
 Evidence-safe seed and project diagnostics release:
