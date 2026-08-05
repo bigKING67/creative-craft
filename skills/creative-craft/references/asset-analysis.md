@@ -3,12 +3,40 @@
 Creative analysis must distinguish what is present from what the reviewer
 believes it means.
 
+## Current does not mean correct
+
+A current, published, company-owned, stakeholder-supplied, or high-performing
+asset has observational authority for what exists. It does not automatically
+have normative authority over the next creative decision.
+
+Before analysis, classify the asset as one or more of:
+
+- `PRIMARY_AUTHORITY`: separately approved identity, product, claim, rights, or
+  source truth;
+- `APPROVED_EXECUTION`: approved for a specific version, market, channel, and
+  period, but not automatically evergreen authority;
+- `CURRENT_EXECUTION`: in current use, quality and approval scope still to be
+  audited;
+- `HISTORICAL_EXECUTION`: evidence of past practice, not a default template;
+- `PERFORMANCE_EVIDENCE`: content bound to a real placement, period, audience,
+  metric, and result;
+- `REFERENCE_CANDIDATE`: potentially transferable principle, not yet selected;
+- `ANTI_PATTERN_CANDIDATE`: a failure, risk, or pattern that may need an explicit
+  do-not-repeat rule.
+
+Do not promote an asset into a Primary Brand Pack or positive Reference Pack
+because it is available, recent, branded, polished, or already shipped. Complete
+the observation, evidence, rights, critique, and decision steps first. A valid
+outcome may be to preserve the file only as audit evidence, extract one bounded
+principle, or record an anti-pattern.
+
 ## Analysis order
 
 ### 1. Inventory
 
 Record:
 
+- authority classification and intended role;
 - file, type, dimensions, ratio, duration, frame rate, codec, audio, language;
 - source, version, owner, date;
 - placement and intended use;
@@ -132,4 +160,6 @@ When comparing variants:
 
 `KEEP` is correct when the asset already satisfies the brief, production
 quality, rights, and delivery requirements. Novelty is not an automatic
-improvement.
+improvement. Current use, executive preference, company ownership, or historical
+performance without content-bound evidence is not an automatic reason to
+`KEEP` either.

@@ -8,7 +8,8 @@ overrides the actual brand, product, asset, channel, or legal context.
 Resolve conflicts in this order:
 
 1. current user objective, constraints, approvals, and rights;
-2. actual source assets and observed outputs;
+2. actual source assets and observed outputs, for observational truth about what
+   exists or happened rather than automatic normative authority;
 3. approved Primary Brand Pack snapshot and `BRAND.md`;
 4. locked Brief, Creative Direction, `CREATIVE.md`, `DELIVERABLES.md`, verified
    product facts, claims evidence, channel requirements, and asset ledger;
@@ -21,6 +22,22 @@ A current explicit instruction may change a previous project decision, but it
 does not manufacture missing rights, product evidence, or output validation.
 Dated official Provider and Surface Profiles constrain execution feasibility on
 their own axis; they never override identity, rights, or a preservation contract.
+
+This order resolves evidence conflicts; it does not turn current execution into
+the desired standard. Use two separate questions:
+
+- **Descriptive:** what is actually in the asset, what ran, and what result was
+  observed? Current source and output evidence controls this answer.
+- **Normative:** what should the next asset preserve, change, or prohibit? The
+  approved Primary Brand Pack, locked project authority, evidence, rights, and
+  explicit review decisions control this answer.
+
+Company ownership, publication, recency, market presence, stakeholder approval,
+or a location in the official drive does not automatically make an asset a
+positive reference. First classify and critique it. Only validated principles
+may move into a Reference Pack; only approved identity, product, claim, rights,
+and source truth may move into a Primary Brand Pack. Preserve failures as audit
+evidence or explicit anti-patterns rather than silently teaching them as style.
 
 ## Primary Brand and reference boundary
 

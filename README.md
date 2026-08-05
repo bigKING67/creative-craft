@@ -345,12 +345,18 @@ Inspect the CLI:
 python3 skills/creative-craft/scripts/creative_craft.py --help
 ```
 
-Seed creative authority into a project without overwriting existing files:
+Seed project planning scaffolds without overwriting existing files:
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py seed \
   --target /path/to/project
 ```
+
+A seed contains planning-authority scaffolds, Critique, draft Jobs, Evaluation,
+and a planned Delivery manifest. Placeholder scaffolds are not approved or
+locked authority. The seed does not create an Execution Receipt, Output
+Inspection, or Revision Lineage: those lifecycle artifacts must be created only
+after the corresponding real attempt, output inspection, or revision exists.
 
 Initialize and validate a separate private Brand Skill using placeholder-only
 authority:
@@ -475,12 +481,22 @@ python3 skills/creative-craft/scripts/creative_craft.py score \
 Validate the content-bound project graph and inspect derived state:
 
 ```bash
+python3 skills/creative-craft/scripts/creative_craft.py doctor-project \
+  --root examples/premium-haircare-launch --json
+
 python3 skills/creative-craft/scripts/creative_craft.py validate-project \
   --root examples/premium-haircare-launch
 
 python3 skills/creative-craft/scripts/creative_craft.py project-status \
   --root examples/premium-haircare-launch --json
 ```
+
+`doctor-project` is read-only. It reports invalid project graphs and known
+Creative Craft JSON artifacts that exist beside the manifest but are not
+registered in it. A byte-identical bundled template is classified as
+`seed_template_residue`; the command never registers or deletes a file because
+file presence alone does not prove that the corresponding lifecycle event
+happened.
 
 Hash a source or output for the asset ledger:
 

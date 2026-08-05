@@ -46,7 +46,8 @@ Route elsewhere when:
 Use this order when guidance conflicts:
 
 1. The user's current explicit objective, constraints, approvals, and rights.
-2. Actual source assets and directly observed output evidence.
+2. Actual source assets and directly observed output evidence, but only as
+   observational authority for what currently exists or happened.
 3. The approved Primary Brand Pack snapshot and current `BRAND.md`.
 4. Locked project Brief, Creative Direction, `CREATIVE.md`, `DELIVERABLES.md`,
    verified product facts, claim evidence, channel requirements, and ledger.
@@ -59,6 +60,16 @@ Project authority wins over generic taste. Provider capability never overrides
 brand truth, legal rights, channel rules, or an explicit preservation contract.
 Dated official Provider and Surface Profiles govern only execution feasibility;
 they do not acquire brand or creative authority through this hierarchy.
+
+Keep descriptive and normative authority separate. A current, published,
+high-performing, stakeholder-supplied, or company-owned asset proves what was
+made or used; it does not by itself prove that its strategy, copy, claims,
+visual system, rights, or craft should be repeated. The approved Primary Brand
+Pack and locked project authority define what should be preserved. Critique
+current and historical execution before extracting any reusable principle.
+Never promote an asset into a Brand Pack or positive Reference Pack merely
+because it is current, official-looking, available in a company drive, or
+already in market.
 
 Company authority does not belong in this generic Skill. Keep it in a separate
 private Brand Skill. When a project has `creative-craft.brand-binding.v1`, use
@@ -178,6 +189,7 @@ python3 scripts/creative_craft.py self-test --json
 python3 scripts/creative_craft.py validate-brand-pack --root <brand-skill>
 python3 scripts/creative_craft.py validate-reference-pack --root <reference-skill>
 python3 scripts/creative_craft.py bind-reference-pack --target <project> --reference-pack <reference-skill>
+python3 scripts/creative_craft.py doctor-project --root <project> --json
 python3 scripts/creative_craft.py validate-project --root <project>
 python3 scripts/creative_craft.py project-status --root <project> --json
 python3 scripts/creative_craft.py score --file <evaluation.json> --root <project>
@@ -201,6 +213,9 @@ does not require repository-only README, license, plugin, or source-lock files.
    - Inventory briefs, brand rules, source assets, existing outputs, references,
      channel requirements, performance data, rights, and approvals.
    - Separate specified facts from observations and interpretations.
+   - Classify each supplied asset as Primary Authority, approved execution,
+     current execution, historical execution, performance evidence, reference
+     candidate, or anti-pattern candidate. `current` is not a quality verdict.
    - Build or update the asset ledger when references matter.
 
 3. **Research**
@@ -354,19 +369,24 @@ only style words, color, location, talent, or camera, the routes are not distinc
 
 Analyze in this order:
 
-1. inventory and technical facts;
-2. objective description of what is present;
-3. message hierarchy and attention path;
-4. hook, narrative, image, motion, sound, copy, brand cues, CTA, and channel fit;
-5. fidelity to source/brand/brief;
-6. observable craft defects;
-7. interpretation and likely audience meaning;
-8. performance hypotheses linked to a metric and test;
-9. decisions and proportional actions;
-10. unknowns, rights gaps, and remaining risks.
+1. classify the asset's authority and role; do not equate current use with a
+   positive reference;
+2. inventory and technical facts;
+3. objective description of what is present;
+4. message hierarchy and attention path;
+5. hook, narrative, image, motion, sound, copy, brand cues, CTA, and channel fit;
+6. fidelity to source/brand/brief;
+7. observable craft defects;
+8. interpretation and likely audience meaning;
+9. performance hypotheses linked to a metric and test;
+10. decisions and proportional actions;
+11. unknowns, rights gaps, and remaining risks;
+12. decide whether the result remains audit evidence, becomes an anti-pattern,
+    contributes a bounded reusable principle, or qualifies for approved
+    authority after separate owner review.
 
 Use the decision vocabulary from `asset-analysis.md`. Aesthetic discomfort alone
-is not a reason to rebuild.
+is not a reason to rebuild. Existing use alone is not a reason to `KEEP`.
 
 ## Image production
 

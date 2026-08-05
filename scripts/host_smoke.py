@@ -168,6 +168,13 @@ def run_reference_runtime_e2e(
         "--target",
         str(project_root),
     )
+    doctor_seed = run_installed_cli(
+        installed,
+        "doctor-project",
+        "--root",
+        str(project_root),
+        "--json",
+    )
     bind_reference = run_installed_cli(
         installed,
         "bind-reference-pack",
@@ -226,6 +233,7 @@ def run_reference_runtime_e2e(
     e2e_commands = (
         reviewed_validation,
         seed_project,
+        doctor_seed,
         bind_reference,
         validate_bound,
         update_reference,
@@ -240,6 +248,7 @@ def run_reference_runtime_e2e(
         return checks, errors
 
     checks.append(f"{check_prefix}-reference-bind-update-e2e")
+    checks.append(f"{check_prefix}-project-doctor-runtime")
     rollback_root = workspace / "acme-creative-references-v3"
     shutil.copytree(update_root, rollback_root)
     populate_reviewed_reference_pack(rollback_root, "0.3.0")

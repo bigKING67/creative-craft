@@ -144,9 +144,6 @@ PROJECT_SEED_SCHEMA_VERSIONS = {
     "creative-craft.creative-direction.v1",
     "creative-craft.image-job.v2",
     "creative-craft.video-job.v2",
-    "creative-craft.execution-receipt.v1",
-    "creative-craft.output-inspection.v1",
-    "creative-craft.revision-lineage.v1",
     "creative-craft.evaluation.v2",
     "creative-craft.delivery.v2",
 }
@@ -154,6 +151,7 @@ PROJECT_MANIFEST_SEED_SCHEMA_VERSIONS = {
     "creative-craft.brief.v1",
     "creative-craft.asset-ledger.v1",
     "creative-craft.concept-routes.v1",
+    "creative-craft.critique.v1",
     "creative-craft.creative-direction.v1",
     "creative-craft.image-job.v2",
     "creative-craft.video-job.v2",
@@ -2297,6 +2295,12 @@ def _project_cross_checks(graph: ProjectGraph) -> None:
                 if isinstance(ref, dict):
                     graph.result.require(ref.get("asset_id") in assets,
                                          f"direction {artifact_id} references unknown asset {ref.get('asset_id')!r}")
+
+        if artifact_type == "critique":
+            graph.result.require(
+                data.get("asset_id") in assets,
+                f"critique {artifact_id} references unknown asset {data.get('asset_id')!r}",
+            )
 
         if artifact_type in {"image", "video"} and data.get("schema_version", "").endswith(".v2"):
             brief_id = data.get("brief_id")
@@ -4712,6 +4716,53 @@ def _project_payload(graph: ProjectGraph) -> dict[str, Any]:
     }
 
 
+def _unregistered_project_artifacts(graph: ProjectGraph) -> list[dict[str, Any]]:
+    registered_paths = {
+        Path(record["path"]).resolve() for record in graph.records.values()
+    }
+    scan_root = graph.manifest_path.parent
+    if not scan_root.is_dir():
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for path in sorted(scan_root.glob("*.json"), key=lambda item: item.name):
+        if path.is_symlink() or not path.is_file() or path.resolve() in registered_paths:
+            continue
+        try:
+            data = load_json(path)
+        except ValueError:
+            continue
+        schema_version = str(data.get("schema_version"))
+        entry = ARTIFACT_REGISTRY.get(schema_version)
+        if entry is None or entry["kind"] == "project-manifest":
+            continue
+
+        artifact_type = str(entry["kind"])
+        id_field = ARTIFACT_ID_FIELDS.get(artifact_type)
+        _, result = validate_data(data, artifact_type)
+        template_name = entry.get("template")
+        template_path = TEMPLATES_DIR / str(template_name) if template_name else None
+        digest = sha256_file(path)
+        matches_template = bool(
+            template_path
+            and template_path.is_file()
+            and sha256_file(template_path) == digest
+        )
+        findings.append({
+            "path": path.relative_to(graph.root).as_posix(),
+            "schema_version": schema_version,
+            "artifact_type": artifact_type,
+            "artifact_id": data.get(id_field) if id_field else None,
+            "sha256": digest,
+            "structurally_valid": result.ok,
+            "matches_bundled_template": matches_template,
+            "classification": (
+                "seed_template_residue" if matches_template else "unregistered_artifact"
+            ),
+        })
+    return findings
+
+
 def cmd_validate_project(args: argparse.Namespace) -> int:
     graph = validate_project(Path(args.root))
     payload = _project_payload(graph)
@@ -4728,6 +4779,30 @@ def cmd_validate_project(args: argparse.Namespace) -> int:
         for message in graph.result.warnings:
             print(f"  WARN:  {message}")
     return 0 if graph.result.ok else 1
+
+
+def cmd_doctor_project(args: argparse.Namespace) -> int:
+    graph = validate_project(Path(args.root))
+    payload = _project_payload(graph)
+    unregistered = _unregistered_project_artifacts(graph)
+    payload["unregistered_artifacts"] = unregistered
+    payload["healthy"] = graph.result.ok and not unregistered
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"{'PASS' if payload['healthy'] else 'FAIL'} project doctor: {graph.root}")
+        print(f"  Project graph: {'valid' if graph.result.ok else 'invalid'}")
+        print(f"  Unregistered artifacts: {len(unregistered)}")
+        for item in unregistered:
+            print(
+                f"  UNREGISTERED {item['artifact_type']}: {item['path']} "
+                f"({item['classification']})"
+            )
+        for message in graph.result.errors:
+            print(f"  ERROR: {message}")
+        for message in graph.result.warnings:
+            print(f"  WARN:  {message}")
+    return 0 if payload["healthy"] else 1
 
 
 def cmd_project_status(args: argparse.Namespace) -> int:
@@ -4952,7 +5027,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate_reference_parser.add_argument("--json", action="store_true")
     validate_reference_parser.set_defaults(func=cmd_validate_reference_pack)
 
-    seed_parser = sub.add_parser("seed", help="seed authority and job templates into a project")
+    seed_parser = sub.add_parser(
+        "seed", help="seed planning scaffolds and draft job templates into a project"
+    )
     seed_parser.add_argument("--target", required=True)
     seed_parser.add_argument("--brand-pack")
     seed_parser.add_argument("--brand-source-uri")
@@ -5009,6 +5086,14 @@ def build_parser() -> argparse.ArgumentParser:
     project_parser.add_argument("--root", required=True)
     project_parser.add_argument("--json", action="store_true")
     project_parser.set_defaults(func=cmd_validate_project)
+
+    project_doctor_parser = sub.add_parser(
+        "doctor-project",
+        help="diagnose invalid graphs and unregistered project artifacts without writing",
+    )
+    project_doctor_parser.add_argument("--root", required=True)
+    project_doctor_parser.add_argument("--json", action="store_true")
+    project_doctor_parser.set_defaults(func=cmd_doctor_project)
 
     status_parser = sub.add_parser(
         "project-status", help="project evidence and derived job status summary"

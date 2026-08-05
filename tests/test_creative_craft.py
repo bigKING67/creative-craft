@@ -580,6 +580,15 @@ class SeedTests(unittest.TestCase):
                 self.assertEqual(0, cc.cmd_seed(args))
                 self.assertTrue((Path(directory) / "BRAND.md").is_file())
                 self.assertTrue((Path(directory) / ".creative-craft/critique.json").is_file())
+                self.assertFalse(
+                    (Path(directory) / ".creative-craft/execution-receipt.json").exists()
+                )
+                self.assertFalse(
+                    (Path(directory) / ".creative-craft/output-inspection.json").exists()
+                )
+                self.assertFalse(
+                    (Path(directory) / ".creative-craft/revision-lineage.json").exists()
+                )
                 self.assertFalse((Path(directory) / ".creative-craft/brand-pack.json").exists())
                 self.assertFalse((Path(directory) / ".creative-craft/brand-binding.json").exists())
                 self.assertFalse(
@@ -588,9 +597,102 @@ class SeedTests(unittest.TestCase):
                 self.assertFalse(
                     (Path(directory) / ".creative-craft/reference-snapshots").exists()
                 )
-                self.assertTrue(cc.validate_project(Path(directory)).result.ok)
+                graph = cc.validate_project(Path(directory))
+                self.assertTrue(graph.result.ok, graph.result.errors)
+                self.assertIsNotNone(graph.record("critique", "critique-tbd"))
                 self.assertEqual(1, cc.cmd_seed(args))
             self.assertIn("refusing to overwrite", stderr.getvalue())
+
+    def test_project_rejects_critique_with_unknown_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {"target": directory, "force": False})()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(0, cc.cmd_seed(args))
+            critique_path = Path(directory) / ".creative-craft/critique.json"
+            critique = json.loads(critique_path.read_text(encoding="utf-8"))
+            critique["asset_id"] = "missing-asset"
+            write_json(critique_path, critique)
+            refresh_manifest(Path(directory))
+
+            graph = cc.validate_project(Path(directory))
+
+            self.assertFalse(graph.result.ok)
+            self.assertIn(
+                "critique critique-tbd references unknown asset 'missing-asset'",
+                graph.result.errors,
+            )
+
+    def test_project_doctor_detects_unregistered_seed_residue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {"target": directory, "force": False})()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(0, cc.cmd_seed(args))
+
+            doctor_args = type("Args", (), {"root": directory, "json": True})()
+            before_doctor = tree_snapshot(Path(directory))
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(0, cc.cmd_doctor_project(doctor_args))
+            self.assertTrue(json.loads(stdout.getvalue())["healthy"])
+            self.assertEqual(before_doctor, tree_snapshot(Path(directory)))
+
+            project_dir = Path(directory) / ".creative-craft"
+            residue_names = {
+                "execution-receipt.json",
+                "output-inspection.json",
+                "revision-lineage.json",
+            }
+            for name in residue_names:
+                shutil.copy2(cc.TEMPLATES_DIR / name, project_dir / name)
+
+            before_doctor = tree_snapshot(Path(directory))
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(1, cc.cmd_doctor_project(doctor_args))
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(payload["valid"])
+            self.assertFalse(payload["healthy"])
+            self.assertEqual(
+                residue_names,
+                {Path(item["path"]).name for item in payload["unregistered_artifacts"]},
+            )
+            self.assertTrue(
+                all(
+                    item["classification"] == "seed_template_residue"
+                    and item["matches_bundled_template"]
+                    for item in payload["unregistered_artifacts"]
+                )
+            )
+            self.assertEqual(before_doctor, tree_snapshot(Path(directory)))
+
+    def test_project_doctor_detects_unregistered_critique(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = type("Args", (), {"target": directory, "force": False})()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(0, cc.cmd_seed(args))
+            manifest_path = Path(directory) / ".creative-craft/project-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["artifacts"] = [
+                item for item in manifest["artifacts"] if item["artifact_type"] != "critique"
+            ]
+            write_json(manifest_path, manifest)
+
+            doctor_args = type("Args", (), {"root": directory, "json": True})()
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(1, cc.cmd_doctor_project(doctor_args))
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(payload["valid"])
+            self.assertEqual(1, len(payload["unregistered_artifacts"]))
+            self.assertEqual(
+                "critique", payload["unregistered_artifacts"][0]["artifact_type"]
+            )
 
 
 class BrandPackTests(unittest.TestCase):

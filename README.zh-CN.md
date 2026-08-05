@@ -230,6 +230,11 @@ python3 skills/creative-craft/scripts/creative_craft.py seed \
   --target /path/to/project
 ```
 
+Seed 只创建规划权威骨架、Critique、draft Jobs、Evaluation、planned Delivery
+和 Project Manifest；占位骨架不等于已经批准或锁定的权威。它不会创建 Execution
+Receipt、Output Inspection 或 Revision Lineage，这些生命周期工件只能在对应的真实
+尝试、输出检查或修订发生后创建。
+
 在独立私有仓库中初始化和校验一个只含占位内容的 Brand Skill：
 
 ```bash
@@ -343,12 +348,20 @@ python3 skills/creative-craft/scripts/creative_craft.py score \
 校验项目证据图并查看派生状态：
 
 ```bash
+python3 skills/creative-craft/scripts/creative_craft.py doctor-project \
+  --root examples/premium-haircare-launch --json
+
 python3 skills/creative-craft/scripts/creative_craft.py validate-project \
   --root examples/premium-haircare-launch
 
 python3 skills/creative-craft/scripts/creative_craft.py project-status \
   --root examples/premium-haircare-launch --json
 ```
+
+`doctor-project` 是只读诊断命令。它会报告无效项目图，以及与 Manifest 同目录但未
+注册的已知 Creative Craft JSON 工件。与内置模板逐字节一致的文件会被标记为
+`seed_template_residue`；该命令不会自动注册或删除文件，因为“文件存在”不能证明
+对应的生命周期事件真实发生过。
 
 ## 最重要的一条
 
