@@ -5,12 +5,12 @@ Codex is a Tier 1 host. The repository exposes `./skills/` through
 `../../skills/creative-craft/`.
 
 Use Codex's built-in `skill-installer` with repository
-`bigKING67/creative-craft`, ref `v0.2.5`, and path `skills/creative-craft`, or:
+`bigKING67/creative-craft`, ref `v0.2.6`, and path `skills/creative-craft`, or:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.5 \
+  --ref v0.2.6 \
   --path skills/creative-craft
 ```
 

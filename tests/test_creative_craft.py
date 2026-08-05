@@ -363,7 +363,7 @@ class DoctorTests(unittest.TestCase):
             )
             adapter = copied / "adapters/pi/README.md"
             adapter.write_text(
-                adapter.read_text(encoding="utf-8").replace("v0.2.5", "v0.2.1"),
+                adapter.read_text(encoding="utf-8").replace("v0.2.6", "v0.2.1"),
                 encoding="utf-8",
             )
 

@@ -2,9 +2,9 @@
 
 All notable changes are documented here.
 
-## Unreleased
+## 0.2.6 — 2026-08-05
 
-Review hardening after 0.2.5:
+Review evidence and transaction hardening release:
 
 - bind output and delivery Evaluation gates to a stage-compatible target and a
   matching Job, Receipt, Output, and Inspection chain instead of accepting an
@@ -18,9 +18,12 @@ Review hardening after 0.2.5:
   runtime and add keyword-complete parity mutations for all 12 public uses;
 - require timezone-bearing Receipt and approved-Inspection timestamps and
   compare their UTC-normalized values without leaking mixed-datetime errors;
-- synchronize immutable Pi and Codex install snippets with `v0.2.5`, gate future
+- synchronize immutable Pi and Codex install snippets with `v0.2.6`, gate future
   adapter tag drift, and add repository-local Review Craft E3 commands for the
   exact packaged runtime.
+
+This release remains GitHub-only, contains no private company content, does not
+call provider networks, and does not claim real Creative Golden Evals.
 
 ## 0.2.5 — 2026-08-05
 

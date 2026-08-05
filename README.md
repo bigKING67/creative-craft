@@ -22,12 +22,11 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.5` prevents planning scaffolds and current assets from silently
-becoming normative or lifecycle evidence. Seeded Critique is registered and
-Asset Ledger-bound, while `doctor-project` reports known unregistered artifacts
-and byte-identical seed residue without modifying the project. Company-specific
-Brand Packs and non-authoritative Reference Packs remain private, portable, and
-separate from this public method.
+Version `0.2.6` binds output and delivery evaluation to the matching Job,
+Receipt, Output, and Inspection chain; makes project seeding transactional and
+symlink-safe; and closes portable Schema and timestamp parity gaps. Company-
+specific Brand Packs and non-authoritative Reference Packs remain private,
+portable, and separate from this public method.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -283,17 +282,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.5
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.5
+pi install git:github.com/bigKING67/creative-craft@v0.2.6
+pi install -l git:github.com/bigKING67/creative-craft@v0.2.6
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.5`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.6`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.5 \
+  --ref v0.2.6 \
   --path skills/creative-craft
 ```
 
@@ -530,12 +529,12 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-`0.2.5` proves the planning-to-evidence graph, portable Primary Brand authority,
-multi-pack non-authoritative references, evidence-safe seed behavior, and
-read-only diagnosis of unregistered project artifacts through synthetic
-lifecycle fixtures. It still does not claim that unobserved image or video
-output is production quality, that real Golden Evals are complete, or that
-provider network adapters exist.
+`0.2.6` proves target-bound Evaluation evidence traversal, symlink-safe
+transactional seed behavior, portable Schema parity, timezone-aware lifecycle
+ordering, and exact packaged-runtime checks through synthetic lifecycle
+fixtures. It still does not claim that unobserved image or video output is
+production quality, that real Golden Evals are complete, or that provider
+network adapters exist.
 
 Maintainers build one release candidate from a clean commit after installing
 `requirements-dev.txt`:

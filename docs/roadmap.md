@@ -85,6 +85,17 @@ Implemented without claiming new provider or creative-quality evidence:
 - deterministic `seed_template_residue` classification by SHA-256 identity;
 - source, installed-runtime, package-boundary, macOS, Windows, and CI coverage.
 
+## 0.2.6 — review evidence and transaction hardening
+
+Implemented without claiming new provider or creative-quality evidence:
+
+- target-bound output and delivery Evaluation evidence traversal;
+- symlink-safe, same-filesystem staged-tree seed transactions;
+- symlink-free Project Manifest authority and read-only unsafe-link diagnosis;
+- JSON deep-equality for `uniqueItems` plus keyword-complete Schema parity;
+- timezone-bearing lifecycle timestamps normalized to UTC;
+- repository-local Review Craft E3 and exact packaged-runtime evidence gates.
+
 ## 0.3 — real creative evals
 
 Planned:
