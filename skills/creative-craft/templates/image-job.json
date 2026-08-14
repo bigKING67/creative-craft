@@ -4,6 +4,8 @@
   "brief_id": "brief-tbd",
   "direction_id": "direction-tbd",
   "selected_route_id": "route-1",
+  "copy_sheet_id": "copy-sheet-tbd",
+  "copy_unit_refs": [],
   "declared_status": "draft",
   "provider_profile": "openai.gpt-image-2.2026-04-21",
   "execution_surface": "openai.image_api",

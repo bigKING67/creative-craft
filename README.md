@@ -22,11 +22,17 @@ brief, or an existing asset into an explicit creative system:
 
 ## Status
 
-Version `0.2.6` binds output and delivery evaluation to the matching Job,
-Receipt, Output, and Inspection chain; makes project seeding transactional and
-symlink-safe; and closes portable Schema and timestamp parity gaps. Company-
-specific Brand Packs and non-authoritative Reference Packs remain private,
-portable, and separate from this public method.
+The working tree is the **unreleased `0.3.0` candidate**. It adds first-class
+`creative-craft.copy-sheet.v1` authority, public-copy approval gates, a v2
+copy-bound Project Manifest, modular portable runtime/test boundaries, safe
+atomic writes, and indexed `uniqueItems` validation. The latest published and
+installable GitHub release remains `v0.2.6`; the install commands below stay
+pinned to that immutable tag until a separate release is authorized.
+
+Company-specific Brand Packs and non-authoritative Reference Packs remain
+private, portable, and separate from this public method. The fictional example
+contains reviewed internal copy, not real Provider output or owner-approved
+public copy.
 
 The package deliberately does **not** make network calls or incur generation
 costs. It prepares and validates production jobs. Direct provider adapters are
@@ -68,23 +74,26 @@ Creative Craft requires:
    rights, channel constraints, and live output evidence outrank generic taste.
 2. **Strategy before style.** Objective, audience, tension, insight,
    proposition, and desired response are separated from execution.
-3. **Distinct routes, not cosmetic variants.** Concepts must differ in creative
+3. **Copy is governed authority.** Strategy, proof, exact units, evidence,
+   render method, and approval live in one Copy Sheet instead of drifting across
+   prompts and layouts.
+4. **Distinct routes, not cosmetic variants.** Concepts must differ in creative
    mechanism, not merely color, camera, or art style.
-4. **Model-agnostic core, provider-specific execution.** Current capabilities
+5. **Model-agnostic core, provider-specific execution.** Current capabilities
    live in dated provider profiles instead of leaking into timeless rules.
-5. **Reference roles.** Every reference states what it controls: identity,
+6. **Reference roles.** Every reference states what it controls: identity,
    geometry, composition, lighting, material, motion, sound, typography, or
    continuity.
-6. **Change/preserve contracts.** Editing instructions explicitly separate what
+7. **Change/preserve contracts.** Editing instructions explicitly separate what
    may change from what must remain invariant.
-7. **Evidence-aware critique.** Observation, interpretation, performance
+8. **Evidence-aware critique.** Observation, interpretation, performance
    hypothesis, decision, and remaining unknowns are never collapsed together.
-8. **Controlled iteration.** A revision changes one primary variable unless a
+9. **Controlled iteration.** A revision changes one primary variable unless a
    deliberate rebuild is authorized.
-9. **Evidence-gated evaluation.** Scores are comparative aids, not objective
+10. **Evidence-gated evaluation.** Scores are comparative aids, not objective
    truth, and are withheld when rights, brief, deliverable, or evidence coverage
    is inadequate.
-10. **Provenance and delivery integrity.** Source rights, model/provider,
+11. **Provenance and delivery integrity.** Source rights, model/provider,
     prompt, input roles, output specifications, versions, and checksums remain
     traceable.
 
@@ -213,7 +222,9 @@ The current contracts are:
 - `creative-craft.concept-routes.v1`
 - `creative-craft.critique.v1`
 - `creative-craft.project-manifest.v1`
+- `creative-craft.project-manifest.v2`
 - `creative-craft.creative-direction.v1`
+- `creative-craft.copy-sheet.v1`
 - `creative-craft.image-job.v2`
 - `creative-craft.video-job.v2`
 - `creative-craft.execution-receipt.v1`
@@ -227,10 +238,17 @@ The current contracts are:
 - `creative-craft.reference-binding.v1`
 - `creative-craft.reference-binding-history.v1`
 
-The v1 job, evaluation, and delivery contracts remain readable for migration,
-but new projects seed v2 contracts. Job v2 can declare only `draft`, `ready`,
-or `superseded`; generated, inspected, approved, and delivered states are
-derived from receipts, files, digests, inspections, and delivery evidence.
+The v1 Manifest, job, evaluation, and delivery contracts remain readable for
+migration. They are never silently upgraded or approved. New projects seed
+Project Manifest v2 with `copy_policy=required`; each image/video Job binds one
+Copy Sheet and explicit copy-unit references. Draft Copy Sheets are limited to
+exploration, reviewed Copy Sheets can support internal-ready Jobs, and public
+delivery requires an approved public Copy Sheet with a named owner. Approved
+public copy cannot rely on `HYPOTHESIZED` or `UNVERIFIED` evidence.
+
+Job v2 can declare only `draft`, `ready`, or `superseded`; generated, inspected,
+approved, and delivered states are derived from receipts, files, digests,
+inspections, and delivery evidence.
 
 Schemas live under `skills/creative-craft/schemas/`. Human-oriented templates
 live under `skills/creative-craft/templates/`.
@@ -310,6 +328,11 @@ directories currently document thin-adapter expectations; they are not Tier 1
 runtime claims.
 
 ## Quick start
+
+Creative Craft declares **Python `>=3.10`** for the portable runtime. The CI
+matrix covers the minimum plus Python 3.11 and 3.13; no third-party dependency
+is required for the installed leaf CLI. Repository Schema parity and lint gates
+use `requirements-dev.txt`.
 
 Run the portable repository checks:
 
@@ -529,12 +552,14 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-`0.2.6` proves target-bound Evaluation evidence traversal, symlink-safe
-transactional seed behavior, portable Schema parity, timezone-aware lifecycle
-ordering, and exact packaged-runtime checks through synthetic lifecycle
-fixtures. It still does not claim that unobserved image or video output is
-production quality, that real Golden Evals are complete, or that provider
-network adapters exist.
+The local `0.3.0` candidate proves copy-bound contract validation, named-owner
+public-delivery gating, legacy v1 readability, modular installed runtime, safe
+write boundaries, and measured near-linear `uniqueItems` scaling through
+synthetic fixtures and local package gates. It still does not claim that
+unobserved image or video output is production quality, that real Golden Evals
+are complete, that owner approval exists for the fictional example, or that
+Provider network adapters exist. Remote CI and release state remain those of
+the published `v0.2.6` baseline until separately executed.
 
 Maintainers build one release candidate from a clean commit after installing
 `requirements-dev.txt`:

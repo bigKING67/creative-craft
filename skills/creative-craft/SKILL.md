@@ -1,6 +1,6 @@
 ---
 name: creative-craft
-description: "Use for end-to-end creative strategy, concept development, creative direction, generative image and video production planning, existing-asset analysis, controlled iteration, adaptation, evaluation, provenance, delivery, and portable Primary Brand or multi-Reference Pack governance. Especially supports OpenAI GPT Image 2 image workflows and ByteDance Seedance video workflows through dated provider profiles. Do not use for product UI/UX implementation, software engineering review, media-buying attribution, or unlicensed likeness/IP use."
+description: "Use for end-to-end creative strategy, concept and copy development, creative direction, generative image and video production planning, existing-asset analysis, controlled iteration, adaptation, evaluation, provenance, delivery, and portable Primary Brand or multi-Reference Pack governance. Especially supports evidence-bound Copy Sheets, OpenAI GPT Image 2 image workflows, and ByteDance Seedance video workflows through dated provider profiles. Do not use for product UI/UX implementation, software engineering review, media-buying attribution, or unlicensed likeness/IP use."
 ---
 
 # Creative Craft
@@ -139,12 +139,13 @@ or a controlled test.
 For a project that needs traceability, use this causal graph:
 
 ```text
-project-manifest.v1
+project-manifest.v2 (project-manifest.v1 remains readable)
 -> optional 0..1 brand-binding.v1 -> immutable brand-pack.v1 snapshot
 -> optional 0..N reference-binding.v1 -> immutable reference-pack.v1 snapshots
 -> brief.v1
 -> concept-routes.v1
 -> creative-direction.v1
+-> copy-sheet.v1
 -> image-job.v2 / video-job.v2
 -> execution-receipt.v1
 -> output-inspection.v1
@@ -156,6 +157,13 @@ project-manifest.v1
 - JSON Schema is the structural authority. Use the bundled CLI for structure,
   Provider/Surface semantics, safe paths, SHA-256, references, rights, and
   lifecycle checks.
+- Project Manifest v2 uses `copy_policy=required`. Each Image/Video Job binds
+  one Copy Sheet plus explicit copy-unit references. Manifest v1 and legacy
+  copy-unbound Jobs remain readable but are never silently upgraded or approved.
+- A draft Copy Sheet is exploration-only. A reviewed Copy Sheet can support an
+  internal-ready Job. Public `ready` or `delivered` Delivery v2 requires an
+  approved/public Copy Sheet with a named owner, approval time, and basis.
+  Approved public copy cannot retain `HYPOTHESIZED` or `UNVERIFIED` evidence.
 - Job v2 may declare only `draft`, `ready`, or `superseded`. Never write
   `generated`, `inspected`, `approved`, or `delivered` into a Job. Those states
   are projected by `project-status` from receipts, output files, inspections,
@@ -247,11 +255,14 @@ does not require repository-only README, license, plugin, or source-lock files.
    - Lock message hierarchy, copy, visual grammar, composition, performance,
      camera, motion, transitions, lighting, materials, sound, continuity,
      reference roles, invariants, variants, and delivery slots.
+   - When copy is material, write or update the Copy Sheet: bind strategy,
+     distinct copy routes, proof, exact units, evidence, render method, and the
+     approval owner. Do not scatter final copy authority across prompts.
 
 8. **Fabricate**
    - Choose the smallest provider workflow that covers the task.
    - Build a versioned image or video job.
-   - Validate it before generation.
+   - Bind its Copy Sheet and exact copy units, then validate before generation.
    - Record provider/model/version, prompt, references, output settings, operator
      or host, and resulting asset identity.
 
@@ -310,7 +321,7 @@ Load only the references needed:
 | `understand` | `authority-and-scope.md`, `asset-analysis.md` |
 | `brief` | `authority-and-scope.md`, `brief-and-strategy.md` |
 | `concept` | `brief-and-strategy.md`, `concept-development.md` |
-| `direct` | `creative-direction.md`; add image/video references as needed |
+| `direct` | `creative-direction.md`; add `copy-development.md` and image/video references as needed |
 | `image` | `image-production.md`, matching provider profile, `rights-and-provenance.md` |
 | `video` | `video-production.md`, matching provider profile, `rights-and-provenance.md` |
 | `campaign` | brief, concept, direction, iteration, delivery |
@@ -364,6 +375,28 @@ Each route must contain:
 
 Use the distinctness test: if the route can become another route by changing
 only style words, color, location, talent, or camera, the routes are not distinct.
+
+## Copy Sheet contract
+
+Use `copy-development.md` when copy is a material part of the work. One Copy
+Sheet should make these decisions independently reviewable:
+
+- the communication objective, audience, tension, proposition, and desired
+  response;
+- voice principles and prohibited tones;
+- proof hierarchy with evidence state and resolvable evidence references;
+- mandatory, prohibited, and legal copy;
+- genuinely distinct copy routes, each with a specific job, mechanism,
+  intended response, and falsifiable evidence basis;
+- the selected route and exact copy units, roles, language, evidence, and render
+  method;
+- approval status, named reviewer/owner, timestamps, basis, and remaining
+  unknowns.
+
+Do not call a list of generic tones a copy route. Do not turn a hypothesis into
+a claim. Keep text rendering explicit: model-rendered text, post-overlay text,
+subtitle/caption, voiceover, and legal copy have different production and
+inspection requirements.
 
 ## Existing-asset analysis
 

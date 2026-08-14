@@ -31,6 +31,7 @@ def main() -> int:
                 continue
             run(str(CLI), "validate", "--file", str(path))
 
+    run("scripts/benchmark_unique_items.py")
     run("-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py")
     print("Creative Craft validation passed.")
     return 0

@@ -4,6 +4,8 @@
   "brief_id": "brief-tbd",
   "direction_id": "direction-tbd",
   "selected_route_id": "route-1",
+  "copy_sheet_id": "copy-sheet-tbd",
+  "copy_unit_refs": [],
   "declared_status": "draft",
   "provider_profile": "bytedance.seedance-2.5.2026-07-31",
   "execution_surface": "bytedance.jimeng_web",

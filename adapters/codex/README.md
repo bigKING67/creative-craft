@@ -14,6 +14,9 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
   --path skills/creative-craft
 ```
 
+`v0.2.6` is intentionally the latest published immutable tag here. The source
+tree's `0.3.0` metadata is an unreleased candidate, not an installable tag.
+
 The installed skill becomes discoverable on the next turn/session. Provider
 execution still depends on available host tools and explicit authorization;
 Creative Craft itself includes no network adapter.

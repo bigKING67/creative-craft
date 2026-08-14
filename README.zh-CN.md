@@ -136,16 +136,23 @@ Brand Pack 或其他 Reference Pack。
 
 ## 当前版本
 
-`0.2.6` 将 output 与 delivery Evaluation 绑定到匹配的 Job、Receipt、Output 和
-Inspection 因果链；Project seed 现在是 symlink-safe 的完整事务，并补齐 portable
-Schema 与 timestamp parity。公司私有 Brand Pack 与非权威 Reference Pack 继续与
-公共 Creative Craft 方法分离，并保持可移植。
+当前工作区是**尚未发布的 `0.3.0` candidate**。它加入一等
+`creative-craft.copy-sheet.v1` 文案权威、面向公开交付的具名 Owner 审批门禁、
+copy-bound Project Manifest v2、模块化 portable runtime/test、安全原子写入，以及
+索引化的 `uniqueItems` 校验。当前最新已发布、可按固定 tag 安装的版本仍是
+`v0.2.6`；下方安装命令在获得独立发布授权前继续固定到该不可变 tag。
+
+Project Manifest v2 默认 `copy_policy=required`。每个 Image/Video Job 必须绑定一份
+Copy Sheet 和明确的 Copy Unit：`draft` 只用于探索，`reviewed` 可进入内部制作就绪，
+公开 `ready/delivered` 则必须使用 `approved/public` Copy Sheet，并记录具名 Owner、
+时间和审批依据。公开批准的文案不得继续把 `HYPOTHESIZED` 或 `UNVERIFIED` 当作
+发布证据。旧 Project Manifest v1 和旧工件仍可读取，但不会被自动升级或自动批准。
 
 `0.2.0` 已建立：
 
 - 可被 Agent 安装的 canonical Skill；
 - GPT Image 2、Seedance 2.5 Provider Profile 与执行 Surface Profile；
-- `Project Manifest → Brief → Routes → Creative Direction → Job → Receipt
+- `Project Manifest v2 → Brief → Routes → Creative Direction → Copy Sheet → Job → Receipt
   → Inspection → Revision → Evaluation → Delivery` 正式工件链；
 - JSON Schema 结构真源、标准库运行时 Schema 校验和跨工件语义校验；
 - 文件路径、SHA-256、引用、Provider、Surface、版权和生命周期证据绑定；
@@ -154,9 +161,9 @@ Schema 与 timestamp parity。公司私有 Brand Pack 与非权威 Reference Pac
 - 原子安装、安装来源记录、单元测试、Schema parity 和真实 GitHub CI；
 - 明确不冒充真实生成结果的虚构高端洗护案例。
 
-本版本默认不直接调用模型、不产生费用。它先把“创意决策和执行协议”做好。
-它不宣称真实 Golden Evals 已完成，也不包含 GPT Image 2 或 Seedance 网络
-Adapter。
+本 candidate 默认不直接调用模型、不产生费用。它先把“创意决策、文案权威和执行
+协议”做好。虚构案例只证明内部 `reviewed` 文案合同，不代表真实 Provider 输出、
+真实 Owner 公开批准或 Golden Eval；也不包含 GPT Image 2 或 Seedance 网络 Adapter。
 
 ## 安装到 Pi、Codex 和其他 Agent
 
@@ -198,6 +205,10 @@ Reference bind、update、项目校验和精确树回滚 E2E。该证据只证�
 不等于已经发布到 npm 或完成所有 Agent Host 的真机验证。
 
 ## 开始使用
+
+Portable runtime 明确要求 **Python `>=3.10`**。CI 声明覆盖最低版本及 Python
+3.11/3.13；安装后的叶子 CLI 只依赖标准库，仓库级 Ruff 与 Schema parity 才使用
+`requirements-dev.txt`。
 
 ```bash
 python3 scripts/validate.py

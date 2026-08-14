@@ -20,8 +20,20 @@
       "timeoutSeconds": 120
     },
     "ruff": {
-      "argv": [".venv/bin/ruff", "check", "skills/creative-craft/scripts/creative_craft.py", "scripts", "tests"],
+      "argv": [".venv/bin/ruff", "check", "skills/creative-craft/scripts", "scripts", "tests"],
       "timeoutSeconds": 120
+    },
+    "unique-items-benchmark": {
+      "argv": [".venv/bin/python", "-B", "scripts/benchmark_unique_items.py"],
+      "timeoutSeconds": 120,
+      "evidenceClaims": [
+        {
+          "id": "linear-scaling-bound",
+          "kind": "benchmark",
+          "jsonPointer": "/passed",
+          "equals": true
+        }
+      ]
     },
     "schema-parity": {
       "argv": [".venv/bin/python", "-B", "scripts/validate_schemas.py"],

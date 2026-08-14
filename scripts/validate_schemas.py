@@ -29,7 +29,9 @@ ARTIFACT_ROOTS = (
 METADATA_PATHS = (
     ROOT / "sources.lock.json",
     *sorted((ROOT / "skills" / "creative-craft" / "providers").glob("*.json")),
-    *sorted((ROOT / "skills" / "creative-craft" / "providers" / "surfaces").glob("*.json")),
+    *sorted(
+        (ROOT / "skills" / "creative-craft" / "providers" / "surfaces").glob("*.json")
+    ),
 )
 CLI_PATH = ROOT / "skills" / "creative-craft" / "scripts" / "creative_craft.py"
 
@@ -83,7 +85,10 @@ def iter_unique_instance_paths(
 ) -> list[tuple[Any, ...]]:
     if "$ref" in schema:
         return iter_unique_instance_paths(
-            resolve_local_ref(root_schema, str(schema["$ref"])), root_schema, value, path
+            resolve_local_ref(root_schema, str(schema["$ref"])),
+            root_schema,
+            value,
+            path,
         )
     paths: list[tuple[Any, ...]] = []
     if schema.get("uniqueItems") is True and isinstance(value, list) and value:
@@ -121,38 +126,50 @@ def populate_unique_item_specimen(
     schema_version: str, artifact: dict[str, Any]
 ) -> dict[str, Any]:
     specimen = copy.deepcopy(artifact)
+    if schema_version in {
+        "creative-craft.image-job.v2",
+        "creative-craft.video-job.v2",
+    }:
+        specimen["copy_unit_refs"] = ["copy-unit-parity"]
+        return specimen
     if schema_version != "creative-craft.reference-pack.v1":
         return specimen
-    specimen["entities"] = [{
-        "reference_id": "reference-parity",
-        "entity_type": "brand",
-        "name": "Parity reference",
-        "relationship": "reference",
-        "summary": "Schema parity specimen.",
-        "source_refs": ["source-parity"],
-        "observations": [{
-            "observation_id": "observation-parity",
-            "dimension": "composition",
-            "evidence_state": "OBSERVED",
-            "statement": "Synthetic schema specimen.",
-            "evidence_refs": ["source-parity"],
-        }],
-        "transferable_principles": [{
-            "principle_id": "principle-parity",
-            "derived_from": ["observation-parity"],
-            "statement": "Synthetic schema specimen.",
-            "application_scope": ["image"],
-            "adaptation_required": True,
-            "must_preserve_primary_brand": ["identity"],
-        }],
-        "non_transferable_elements": ["exact expression"],
-        "applicable_to": ["campaign"],
-        "reference_roles": ["composition"],
-        "rights_policy": "research_only",
-        "prohibited_use": ["imitation"],
-        "asset_refs": ["asset-parity"],
-        "may_override_primary_brand": False,
-    }]
+    specimen["entities"] = [
+        {
+            "reference_id": "reference-parity",
+            "entity_type": "brand",
+            "name": "Parity reference",
+            "relationship": "reference",
+            "summary": "Schema parity specimen.",
+            "source_refs": ["source-parity"],
+            "observations": [
+                {
+                    "observation_id": "observation-parity",
+                    "dimension": "composition",
+                    "evidence_state": "OBSERVED",
+                    "statement": "Synthetic schema specimen.",
+                    "evidence_refs": ["source-parity"],
+                }
+            ],
+            "transferable_principles": [
+                {
+                    "principle_id": "principle-parity",
+                    "derived_from": ["observation-parity"],
+                    "statement": "Synthetic schema specimen.",
+                    "application_scope": ["image"],
+                    "adaptation_required": True,
+                    "must_preserve_primary_brand": ["identity"],
+                }
+            ],
+            "non_transferable_elements": ["exact expression"],
+            "applicable_to": ["campaign"],
+            "reference_roles": ["composition"],
+            "rights_policy": "research_only",
+            "prohibited_use": ["imitation"],
+            "asset_refs": ["asset-parity"],
+            "may_override_primary_brand": False,
+        }
+    ]
     return specimen
 
 
@@ -165,9 +182,7 @@ def main() -> int:
             schema = load_object(path)
             Draft202012Validator.check_schema(schema)
             schema_version = (
-                schema.get("properties", {})
-                .get("schema_version", {})
-                .get("const")
+                schema.get("properties", {}).get("schema_version", {}).get("const")
             )
             if not isinstance(schema_version, str) or not schema_version:
                 raise ValueError(
@@ -200,7 +215,9 @@ def main() -> int:
                     key=lambda error: [str(part) for part in error.absolute_path],
                 )
                 for error in validation_errors:
-                    location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+                    location = (
+                        ".".join(str(part) for part in error.absolute_path) or "<root>"
+                    )
                     errors.append(
                         f"{path.relative_to(ROOT)} [{location}] against "
                         f"{schema_path.name}: {error.message}"
@@ -221,7 +238,9 @@ def main() -> int:
             schema_path, validator = validators[str(schema_version)]
             validation_errors = list(validator.iter_errors(artifact))
             for error in validation_errors:
-                location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+                location = (
+                    ".".join(str(part) for part in error.absolute_path) or "<root>"
+                )
                 errors.append(
                     f"{path.relative_to(ROOT)} [{location}] against {schema_path.name}: {error.message}"
                 )
@@ -230,7 +249,9 @@ def main() -> int:
         except ValueError as exc:
             errors.append(str(exc))
 
-    spec = importlib.util.spec_from_file_location("creative_craft_schema_runtime", CLI_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "creative_craft_schema_runtime", CLI_PATH
+    )
     if spec is None or spec.loader is None:
         errors.append("cannot import Creative Craft runtime for schema parity")
     else:
@@ -279,7 +300,9 @@ def main() -> int:
                 generated_unique_cases += 1
             for index, mutation in enumerate(mutations):
                 reference_valid = not list(reference.iter_errors(mutation))
-                runtime_valid = runtime.validate_against_schema(mutation, schema_path).ok
+                runtime_valid = runtime.validate_against_schema(
+                    mutation, schema_path
+                ).ok
                 if reference_valid != runtime_valid:
                     errors.append(
                         f"schema parity mismatch for {path.relative_to(ROOT)} mutation {index}: "

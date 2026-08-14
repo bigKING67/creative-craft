@@ -4,6 +4,10 @@
   "brief_id": "northstar-airlift-launch-v1",
   "direction_id": "northstar-motion-proof-direction-v1",
   "selected_route_id": "motion-is-proof",
+  "copy_sheet_id": "northstar-motion-proof-copy-v1",
+  "copy_unit_refs": [
+    "hero-headline"
+  ],
   "declared_status": "ready",
   "provider_profile": "bytedance.seedance-2.5.2026-07-31",
   "execution_surface": "bytedance.jimeng_web",

@@ -2,6 +2,38 @@
 
 All notable changes are documented here.
 
+## 0.3.0 — Unreleased candidate
+
+Copy authority, runtime modularity, and validated-boundary candidate:
+
+- add first-class `creative-craft.copy-sheet.v1` with strategy, audience
+  tension, proposition, voice, proof hierarchy, mandatory/prohibited/legal
+  copy, distinct copy routes, selected units, evidence refs, render method,
+  approval, and unknowns;
+- add `creative-craft.project-manifest.v2` with `copy_policy=required`, bind v2
+  Image/Video Jobs to explicit Copy Sheets and units, and require reviewed copy
+  for internal readiness plus approved public copy with a named owner for
+  public delivery;
+- preserve Project Manifest v1 and legacy copy-unbound projects as readable
+  compatibility inputs without silently upgrading or approving them;
+- replace the 5,491-line runtime entrypoint with a compatibility facade over
+  domain modules for contracts, project graph, evaluation, pack transactions,
+  project operations, runtime checks, and CLI parsing; split the test suite by
+  the same ownership boundaries;
+- replace fixed sibling temporary files with random same-directory exclusive
+  files, fsync before atomic replace, reject symlink destinations/parents, and
+  reject Brand/Reference write transactions through symlink Project roots;
+- replace quadratic `uniqueItems` scanning with typed canonical indexing plus
+  collision verification, preserving JSON Schema equality while gating the
+  1,600-to-3,200 item median-time ratio at `<=2.5`;
+- declare Python `>=3.10`, add Python 3.10 to the CI matrix, lint all runtime
+  modules, and include the benchmark and new files in release/package gates.
+
+This candidate is not a published GitHub tag or npm release. Its public fixture
+is fictional and internally reviewed only; it does not include real Provider
+output, a real owner approval, private company evidence, or a Creative Golden
+Eval.
+
 ## 0.2.6 — 2026-08-05
 
 Review evidence and transaction hardening release:

@@ -126,9 +126,39 @@ snapshots remain readable only when already bound as historical evidence.
 Own contracts between strategy, direction, production, review, and delivery.
 Artifacts are both human-readable and machine-validatable.
 
+Project Manifest v2 makes copy governance explicit with
+`copy_policy=required`. `creative-craft.copy-sheet.v1` binds the Brief,
+Creative Direction, selected concept/copy routes, evidence-classed proof,
+exact copy units, render method, and approval. Image/Video Job v2 points to one
+Copy Sheet and explicit copy-unit references. Draft copy is exploratory;
+reviewed copy can support internal-ready Jobs; public `ready` or `delivered`
+Delivery v2 requires an approved public Copy Sheet with a named owner. Project
+Manifest v1 remains readable as a copy-unbound legacy contract and is never
+silently upgraded or approved.
+
 ### 5. Portable tooling
 
-`skills/creative-craft/scripts/creative_craft.py`
+`skills/creative-craft/scripts/creative_craft.py` is the stable executable and
+compatibility facade. Domain truth is owned by:
+
+- `creative_craft_contracts.py`: registries, Schema evaluation, semantic
+  artifact validators, and safe atomic writes;
+- `creative_craft_project.py`: project graph, cross-artifact invariants, and
+  lifecycle projection;
+- `creative_craft_evaluation.py`: prompt compilation and evidence-aware score
+  projection;
+- `creative_craft_packs.py`: Brand/Reference transactions, snapshots, lineage,
+  rollback, and write boundaries;
+- `creative_craft_project_ops.py`: seed, diagnosis, inspection, revision, and
+  delivery CLI operations;
+- `creative_craft_runtime.py`: repository/installed-leaf checks and core CLI
+  adapters;
+- `creative_craft_entrypoint.py`: parser and command dispatch only.
+
+The dependency direction is contracts -> project -> evaluation/runtime, with
+pack and project-operation modules consuming those lower layers. Domain modules
+do not import the CLI parser. The facade re-exports the historical Python
+surface while the public command path and exit codes remain stable.
 
 Standard-library CLI:
 
@@ -175,15 +205,15 @@ project manifest -- content hashes and artifact registry
 creative brief ---- asset ledger
         |
         v
-concept routes -> selected route -> creative direction
-        |                                |
-        |                                v
-        |                     image job / video job
-        |                                |
-        |                        provider execution
-        |                                |
-        v                                v
-evaluation <------ actual output inspection
+concept routes -> selected route -> creative direction -> copy sheet
+        |                                                 |
+        |                                                 v
+        |                                      image job / video job
+        |                                                 |
+        |                                         provider execution
+        |                                                 |
+        v                                                 v
+evaluation <--------------------------- actual output inspection
         |
         v
 revision lineage -> adaptation -> delivery manifest -> learning
@@ -200,6 +230,9 @@ observed only through a matching Job -> successful Receipt -> declared Output
 -> digest-bound Inspection chain. An Inspection from another Job cannot satisfy
 the gate. Delivery-stage Evaluation accepts a Delivery v2 target only and
 requires every delivered file to resolve through its matching causal chain.
+For a copy-bound v2 project, the same delivery transition also requires each Job
+to resolve to an approved/public Copy Sheet with a named owner. An approved
+sheet cannot retain `HYPOTHESIZED` or `UNVERIFIED` release evidence.
 
 Project seeding uses a same-filesystem staged copy of the complete target tree.
 All seed destinations and parents are checked for symlinks and non-directory
@@ -211,15 +244,16 @@ registered artifacts use the same symlink-free containment rule, while
 `doctor-project` reports top-level unsafe JSON symlinks without following them
 or recursively scanning immutable snapshot contents.
 
-## Why no direct model adapter in v0.2
+## Why no direct model adapter
 
 The first failure mode of a creative system is usually not API syntax. It is a
 missing brief, collapsed concept/execution thinking, vague reference use,
 uncontrolled edits, unobserved output claims, or absent rights.
 
-The current release therefore stabilizes the end-to-end evidence contracts. Direct adapters
-can be added later as opt-in integrations with explicit credentials, cost,
-network, moderation, receipt, and provider-version handling.
+The current public release and local `0.3.0` candidate therefore stabilize the
+end-to-end evidence contracts. Direct adapters can be added later as opt-in
+integrations with explicit credentials, cost, network, moderation, receipt, and
+provider-version handling.
 
 ## Compatibility principle
 
@@ -234,8 +268,14 @@ semantic validators are limited to Provider/Surface capability rules,
 cross-field constraints, digests, references, rights, and lifecycle evidence.
 The leaf evaluator implements JSON deep-equality for `uniqueItems`, and the
 parity gate generates an invalid duplicate mutation for every `uniqueItems`
-keyword in the public schemas. Receipt and approved-Inspection timestamps must
-carry a timezone and are normalized to UTC before ordering.
+keyword in the public schemas. The implementation uses typed canonical keys and
+verifies candidates inside collision buckets, preserving JSON equality while
+avoiding unbounded quadratic scans. Receipt and approved-Inspection timestamps
+must carry a timezone and are normalized to UTC before ordering.
+
+The declared portable runtime is Python `>=3.10`. Installed-leaf execution uses
+only the standard library. CI exercises the minimum plus Python 3.11 and 3.13;
+repository-only parity and lint dependencies remain development requirements.
 
 ## Release package evidence
 

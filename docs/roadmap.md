@@ -96,7 +96,27 @@ Implemented without claiming new provider or creative-quality evidence:
 - timezone-bearing lifecycle timestamps normalized to UTC;
 - repository-local Review Craft E3 and exact packaged-runtime evidence gates.
 
-## 0.3 — real creative evals
+## 0.3.0 — copy authority and modular runtime
+
+Implemented in the local unreleased candidate without claiming new Provider or
+creative-quality evidence:
+
+- first-class Copy Sheet v1 covering strategy, tension, proposition, voice,
+  proof, mandatory/prohibited/legal copy, distinct routes, exact units,
+  evidence, render method, approval, and unknowns;
+- Project Manifest v2 copy binding, reviewed internal-readiness gates, and
+  approved public-delivery gates with named owner accountability;
+- readable legacy v1/copy-unbound projects without automatic migration;
+- domain runtime modules behind the stable CLI facade and domain-split tests;
+- random exclusive atomic writes plus fail-closed symlink Project roots;
+- indexed `uniqueItems` validation with reference parity and a scaling-ratio
+  benchmark;
+- declared Python `>=3.10` and expanded CI/package evidence boundaries.
+
+The candidate is not yet a GitHub tag or release. Its fictional Copy Sheet is
+reviewed for internal contract testing only.
+
+## 0.3.x — real creative evals
 
 Planned:
 

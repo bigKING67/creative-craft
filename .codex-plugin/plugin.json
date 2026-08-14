@@ -1,6 +1,6 @@
 {
   "name": "creative-craft",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Creative strategy, direction, generative image and video production, evaluation, iteration, and delivery governance for real creative work.",
   "author": {
     "name": "bigKING67",
@@ -9,6 +9,9 @@
   "homepage": "https://github.com/bigKING67/creative-craft#readme",
   "repository": "https://github.com/bigKING67/creative-craft",
   "license": "MIT",
+  "runtime": {
+    "python": ">=3.10"
+  },
   "keywords": [
     "creative-strategy",
     "creative-direction",
@@ -32,6 +35,7 @@
     "websiteURL": "https://github.com/bigKING67/creative-craft",
     "defaultPrompt": [
       "Turn this brief into distinct creative routes and recommend one.",
+      "Create an evidence-bound Copy Sheet and prepare its approval path.",
       "Create an art direction and production plan for this campaign.",
       "Critique these creative assets and propose controlled revisions."
     ],

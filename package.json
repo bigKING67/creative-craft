@@ -1,6 +1,6 @@
 {
   "name": "@bigking67/creative-craft",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "private": true,
   "description": "Creative strategy, direction, generative image and video production, evaluation, iteration, and delivery governance for real creative work.",
   "license": "MIT",
@@ -39,9 +39,17 @@
       "skills/creative-craft"
     ]
   },
+  "creativeCraft": {
+    "python": ">=3.10",
+    "releaseStatus": "unreleased-candidate",
+    "publishedInstallTag": "v0.2.6"
+  },
   "scripts": {
     "doctor": "python3 skills/creative-craft/scripts/creative_craft.py doctor",
     "self-test": "python3 skills/creative-craft/scripts/creative_craft.py self-test",
+    "lint": "ruff check skills/creative-craft/scripts scripts tests",
+    "schema": "python3 scripts/validate_schemas.py",
+    "benchmark": "python3 scripts/benchmark_unique_items.py",
     "validate": "python3 scripts/validate.py",
     "test": "python3 -m unittest discover -s tests -p 'test_*.py'",
     "host-smoke": "python3 scripts/host_smoke.py",

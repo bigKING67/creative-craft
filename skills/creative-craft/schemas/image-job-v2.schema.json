@@ -10,6 +10,12 @@
     "brief_id": {"type": "string", "minLength": 1},
     "direction_id": {"type": "string", "minLength": 1},
     "selected_route_id": {"type": "string", "minLength": 1},
+    "copy_sheet_id": {"type": "string", "minLength": 1},
+    "copy_unit_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
     "declared_status": {"enum": ["draft", "ready", "superseded"]},
     "provider_profile": {"type": "string", "minLength": 1},
     "execution_surface": {"type": "string", "minLength": 1},

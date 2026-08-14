@@ -74,7 +74,15 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
 
     commands = [
-        [sys.executable, "-m", "ruff", "check", "skills/creative-craft/scripts/creative_craft.py", "scripts", "tests"],
+        [
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "skills/creative-craft/scripts",
+            "scripts",
+            "tests",
+        ],
         [sys.executable, "scripts/validate_schemas.py"],
         [sys.executable, "scripts/validate.py"],
         [sys.executable, "scripts/host_smoke.py", "--json"],

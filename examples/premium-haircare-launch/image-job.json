@@ -4,6 +4,10 @@
   "brief_id": "northstar-airlift-launch-v1",
   "direction_id": "northstar-motion-proof-direction-v1",
   "selected_route_id": "motion-is-proof",
+  "copy_sheet_id": "northstar-motion-proof-copy-v1",
+  "copy_unit_refs": [
+    "hero-headline"
+  ],
   "declared_status": "ready",
   "provider_profile": "openai.gpt-image-2.2026-04-21",
   "execution_surface": "openai.image_api",

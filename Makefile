@@ -1,15 +1,21 @@
 PYTHON ?= python3
 
-.PHONY: doctor test schema validate host-smoke package-check validate-all example
+.PHONY: doctor lint test schema benchmark validate host-smoke package-check validate-all example
 
 doctor:
 	$(PYTHON) skills/creative-craft/scripts/creative_craft.py doctor
+
+lint:
+	ruff check skills/creative-craft/scripts scripts tests
 
 test:
 	$(PYTHON) -m unittest discover -s tests -p "test_*.py"
 
 schema:
 	$(PYTHON) scripts/validate_schemas.py
+
+benchmark:
+	$(PYTHON) scripts/benchmark_unique_items.py
 
 validate:
 	$(PYTHON) scripts/validate.py
@@ -20,7 +26,7 @@ host-smoke:
 package-check:
 	$(PYTHON) scripts/check_package.py
 
-validate-all: schema validate host-smoke package-check
+validate-all: lint schema validate host-smoke package-check
 	$(PYTHON) skills/creative-craft/scripts/creative_craft.py self-test
 
 example:
