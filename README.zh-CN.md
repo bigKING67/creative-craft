@@ -393,8 +393,10 @@ python3 skills/creative-craft/scripts/creative_craft.py project-status \
 
 ## Agent 质量评测
 
-仓库提供仅供维护者使用的文本评测工具：在七个真实创意任务上比较空白 baseline、
-精确 committed Skill 和 worktree candidate，再做盲评计分与四个路由用例。
+仓库提供仅供维护者使用的文本评测工具：在七个真实创意任务上比较不加载 Skill 的
+baseline、选定的 committed comparison revision 和 worktree candidate，再做盲评
+计分与四个路由用例。内部 `baseline` / `current` evidence key 为兼容旧报告而保留，
+不表示本机或 package 中安装了多份 Skill。
 
 ```bash
 python3 scripts/evaluate_agent_quality.py check --json
@@ -408,11 +410,13 @@ python3 scripts/evaluate_agent_quality.py report --run-dir dist/evals/agent-qual
 内容，不安装全局 Skill；workspace 为空，Codex 使用 ephemeral、read-only、
 ignore-config/rules 参数。若本机使用自定义 model provider，工具只提取 `name`、
 `base_url`、`wire_api`、auth mode 和 WebSocket support 这些非敏感白名单传输字段，
-作为 CLI override 传入，不复制用户 config。证据写入已忽略的
-`dist/evals/agent-quality/`，并绑定模型、reasoning、commit 和 candidate Skill digest。
+作为 CLI override 传入，不复制用户 config。comparison revision 只导出到临时目录，
+生成结束即删除。证据写入已忽略的 `dist/evals/agent-quality/`，并绑定模型、
+reasoning、comparison revision 和 candidate Skill digest。
 
 真实模型评测有成本，因此不进入 CI。当前只评测文本 Agent 输出，不调用图片/视频
-Provider；盲评模型的比较结论也不能替代真实输出检查或人类创意审批。
+Provider；盲评模型的比较结论也不能替代真实输出检查或人类创意审批。每个变体在每个
+案例中只有一个生成样本和一次盲评，因此重复运行可能波动。
 
 ## 最重要的一条
 

@@ -64,6 +64,14 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def captured_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def load_cases(path: Path = EVAL_CONFIG / "cases.json") -> list[dict[str, Any]]:
     payload = read_json(path)
     cases = payload.get("cases") if isinstance(payload, dict) else None
@@ -433,8 +441,8 @@ def run_codex(
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
-            events_file.write_text(error.stdout or "", encoding="utf-8")
-            stderr_file.write_text(error.stderr or "", encoding="utf-8")
+            events_file.write_text(captured_text(error.stdout), encoding="utf-8")
+            stderr_file.write_text(captured_text(error.stderr), encoding="utf-8")
             raise EvalError(f"Codex call timed out after {timeout_seconds}s") from error
 
         events_file.write_text(result.stdout, encoding="utf-8")
@@ -1033,6 +1041,7 @@ def compute_report(
         "limitations": [
             "Text-only Codex evaluation; no image or video provider was called.",
             "A blind model judge is comparative evidence, not human creative approval.",
+            "Each variant has one generated sample and one blind judgment per case; repeated runs may vary.",
             "Routing calls test description-level selection in an isolated CODEX_HOME.",
             "Results apply only to the recorded model, reasoning level, prompts, and source hashes.",
         ],
@@ -1048,7 +1057,7 @@ def render_report(report: dict[str, Any], manifest: dict[str, Any]) -> str:
         f"- Model: `{manifest['model']}`",
         f"- Reasoning: `{manifest['reasoning']}`",
         f"- Codex: `{manifest['codex_version']}`",
-        f"- Current revision: `{manifest['current_revision']}`",
+        f"- Comparison revision: `{manifest['current_revision']}`",
         f"- Candidate skill SHA-256: `{manifest['candidate_skill_sha256']}`",
         f"- Model calls: `{len(manifest.get('calls', []))}`",
         "",
@@ -1057,10 +1066,16 @@ def render_report(report: dict[str, Any], manifest: dict[str, Any]) -> str:
         "| Variant | Total | Strategic | Distinct | Execution | Evidence | Ref/change | Scope | Clarity |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
+    display_variants = {
+        "baseline": "no Skill",
+        "current": "comparison",
+        "candidate": "candidate",
+    }
     for variant in VARIANTS:
         score = report["aggregates"][variant]
         lines.append(
-            f"| {variant} | {score['total']} | {score['strategic_fit']} | "
+            f"| {display_variants[variant]} | {score['total']} | "
+            f"{score['strategic_fit']} | "
             f"{score['distinctiveness']} | {score['execution_readiness']} | "
             f"{score['evidence_honesty']} | {score['reference_change_preserve']} | "
             f"{score['scope_proportionality']} | {score['clarity_usefulness']} |"
@@ -1068,7 +1083,15 @@ def render_report(report: dict[str, Any], manifest: dict[str, Any]) -> str:
     lines.extend(["", "## Acceptance", ""])
     for name, passed in report["acceptance_checks"].items():
         lines.append(f"- [{'x' if passed else ' '}] `{name}`")
-    lines.extend(["", "## Per-case totals", "", "| Case | Baseline | Current | Candidate |", "| --- | ---: | ---: | ---: |"])
+    lines.extend(
+        [
+            "",
+            "## Per-case totals",
+            "",
+            "| Case | No Skill | Comparison | Candidate |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+    )
     for case_id, case in report["per_case"].items():
         scores = case["scores"]
         lines.append(
@@ -1161,7 +1184,9 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--json", action="store_true")
     check_parser.set_defaults(func=run_check)
 
-    run_parser = subparsers.add_parser("run", help="Generate baseline/current/candidate outputs.")
+    run_parser = subparsers.add_parser(
+        "run", help="Generate no-Skill/comparison/candidate outputs."
+    )
     add_runtime_arguments(run_parser)
     run_parser.add_argument("--run-dir", type=Path)
     run_parser.add_argument("--revision", default="HEAD")

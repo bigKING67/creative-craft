@@ -14,6 +14,10 @@ Copy authority, runtime modularity, and validated-boundary candidate:
 - shorten the canonical Skill entrypoint, make automatic routing concrete, and
   exclude content calendars/KOL planning, brand strategy, media buying,
   product UI/UX, and software review;
+- ground video product interactions in supplied evidence, require one coherent
+  end-frame state, and preserve the creative premise through the closing line;
+- verify hard copy constraints, remove internal decision taxonomy from quick
+  critiques, and avoid repeated preservation language in compact edit briefs;
 - add a maintainer-only isolated Codex A/B/C text evaluation harness with seven
   quality cases, blind weighted judging, four routing cases, a 40-call ceiling,
   auth symlink/redaction checks, and ignored content-bound evidence reports;

@@ -184,10 +184,11 @@ It does not call providers or incur costs.
 `scripts/evaluate_agent_quality.py`
 
 Examples and unit tests prove that contracts and compilation work. The
-repository-only Agent evaluation harness separately compares baseline,
-committed, and candidate Skill behavior in an isolated `CODEX_HOME`, performs
-blind text scoring, and checks description-level routing. Generated evidence is
-ignored under `dist/evals/agent-quality/`; model calls are not part of CI.
+repository-only Agent evaluation harness separately compares no-Skill,
+temporary committed-comparison, and worktree-candidate behavior in an isolated
+`CODEX_HOME`, performs blind text scoring, and checks description-level routing.
+The comparison export is deleted after generation. Generated evidence is ignored
+under `dist/evals/agent-quality/`; model calls are not part of CI.
 
 This is still not a real Provider-output Golden Eval. A future layer must add
 immutable generated images/videos, human judgments, failed revisions, and

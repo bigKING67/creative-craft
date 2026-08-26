@@ -166,8 +166,82 @@ class IsolatedCodexTests(unittest.TestCase):
             self.assertEqual("creative result", output.read_text(encoding="utf-8"))
             self.assertNotIn("secret-fixture", events.read_text(encoding="utf-8"))
 
+    def test_timeout_preserves_byte_streams_and_raises_eval_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            auth = root / "auth.json"
+            auth.write_text("secret-fixture", encoding="utf-8")
+            events = root / "events.jsonl"
+            stderr = root / "events.stderr"
+            timeout = subprocess.TimeoutExpired(
+                cmd=["codex"],
+                timeout=10,
+                output=b'{"type":"partial"}\n',
+                stderr=b"provider still running\n",
+            )
+
+            with (
+                mock.patch.object(agent_eval.subprocess, "run", side_effect=timeout),
+                self.assertRaisesRegex(agent_eval.EvalError, "timed out after 10s"),
+            ):
+                agent_eval.run_codex(
+                    prompt="fixture prompt",
+                    skill_source=None,
+                    output_file=root / "result.md",
+                    events_file=events,
+                    stderr_file=stderr,
+                    output_schema=None,
+                    auth_file=auth,
+                    codex_bin="codex",
+                    model="gpt-5.6-sol",
+                    reasoning="high",
+                    timeout_seconds=10,
+                    provider_transport=None,
+                )
+
+            self.assertEqual('{"type":"partial"}\n', events.read_text(encoding="utf-8"))
+            self.assertEqual("provider still running\n", stderr.read_text(encoding="utf-8"))
+
 
 class ReportTests(unittest.TestCase):
+    def test_rendered_report_names_comparison_without_implying_installed_copy(
+        self,
+    ) -> None:
+        aggregate = {field: 1 for field in agent_eval.SCORE_FIELDS}
+        aggregate["total"] = len(agent_eval.SCORE_FIELDS)
+        report = {
+            "status": "PASS",
+            "aggregates": {
+                variant: dict(aggregate) for variant in agent_eval.VARIANTS
+            },
+            "acceptance_checks": {},
+            "per_case": {
+                "fixture": {
+                    "scores": {
+                        variant: {"total": aggregate["total"]}
+                        for variant in agent_eval.VARIANTS
+                    }
+                }
+            },
+            "limitations": [],
+        }
+        manifest = {
+            "model": "fixture-model",
+            "reasoning": "high",
+            "codex_version": "fixture-codex",
+            "current_revision": "abc123",
+            "candidate_skill_sha256": "def456",
+            "calls": [],
+        }
+
+        rendered = agent_eval.render_report(report, manifest)
+
+        self.assertIn("Comparison revision: `abc123`", rendered)
+        self.assertIn("| no Skill |", rendered)
+        self.assertIn("| comparison |", rendered)
+        self.assertIn("| Case | No Skill | Comparison | Candidate |", rendered)
+        self.assertNotIn("Current revision:", rendered)
+
     def test_acceptance_report_is_computed_from_blind_label_mapping(self) -> None:
         quality_cases = agent_eval.load_cases()
         judge_index = {"schema_version": 1, "cases": {}}

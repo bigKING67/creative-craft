@@ -548,8 +548,10 @@ python3 skills/creative-craft/scripts/creative_craft.py hash \
 ## Agent quality evaluation
 
 The repository includes a maintainer-only text evaluation harness. It compares
-an empty baseline, the exact committed Skill, and the worktree candidate across
-seven creative cases, then uses blind scoring and four routing cases:
+a no-Skill baseline, a selected committed comparison revision, and the worktree
+candidate across seven creative cases, then uses blind scoring and four routing
+cases. The internal `baseline` and `current` evidence keys remain stable for old
+report readability; they do not identify installed Skill copies:
 
 ```bash
 python3 scripts/evaluate_agent_quality.py check --json
@@ -567,12 +569,16 @@ allowlist of non-secret transport fields (`name`, `base_url`, `wire_api`, auth
 mode, and WebSocket support) and passes them as explicit CLI overrides; it never
 copies the user config.
 
-Generated evidence stays under ignored `dist/evals/agent-quality/` and is bound
-to the model, reasoning level, committed revision, and candidate Skill digest.
+The committed comparison is exported into a temporary directory and removed at
+the end of generation. Generated evidence stays under ignored
+`dist/evals/agent-quality/` and is bound to the model, reasoning level,
+comparison revision, and candidate Skill digest.
 
 This live evaluation is intentionally outside CI because it incurs model cost.
 It is text-only: no image or video Provider is called, and a blind model judge
-is not a substitute for real output inspection or human creative approval.
+is not a substitute for real output inspection or human creative approval. Each
+variant has one generated sample and one blind judgment per case, so repeated
+runs may vary.
 
 ## Relationship to the Craft family
 

@@ -108,7 +108,8 @@ production and inspection methods.
 Treat verified notes and features as an unordered fact set unless their
 progression is explicitly supported. Sensory language may create atmosphere,
 but it must not smuggle in a new ingredient, note, material, effect, or product
-behavior.
+behavior. Check every numeric length or format constraint before printing a
+count.
 
 Read [references/copy-development.md](references/copy-development.md) when copy
 has multiple units, evidence requirements, or approval owners.
@@ -124,18 +125,22 @@ Read [references/image-production.md](references/image-production.md) and the
 matching dated provider and surface profiles when provider feasibility matters.
 Provider capability does not override brand truth or rights.
 
-For a Quick Craft edit, prefer one execution prompt, a compact
+For a Quick Craft edit, give one execution prompt, one compact
 reference/change/preserve block, decisive failure checks, and at most two
-targeted iteration passes. Present masking, compositing, or pixel restoration
-as a conditional fidelity fallback, not mandatory process theater.
+targeted passes. Avoid repeating the same preserve/avoid list; introduce masks,
+compositing, or pixel restoration only as a conditional fidelity fallback.
 
 ### Video treatment, generation, or editing
 
 Define the narrative unit and end state, duration and ratio, timestamped beats,
 blocking and performance, camera and motion, lighting/material/physics, sound,
 continuity locks, edit boundary, and failure conditions. Do not overload a beat
-with incompatible action. For a real output, inspect subject consistency,
-motion, physics, cuts, audio sync, accidental text, and preservation failures.
+with incompatible action. Ground every product interaction in supplied or
+observed geometry and behavior; otherwise make it conditional rather than
+inventing a control or response. Give the end frame one unambiguous composition
+and keep the closing line tied to the creative premise, not a generic category
+slogan. For a real output, inspect subject consistency, motion, physics, cuts,
+audio sync, accidental text, and preservation failures.
 
 Read [references/video-production.md](references/video-production.md) and the
 matching dated provider and surface profiles when execution details matter.
@@ -148,9 +153,11 @@ First describe what is actually present. Then separate:
 2. observable craft strengths and defects;
 3. interpretation and likely audience meaning;
 4. performance hypotheses and how to test them;
-5. the proportional decision: `KEEP`, `AMPLIFY`, `POLISH`, `SIMPLIFY`,
-   `RECOMPOSE`, `REGENERATE`, `RE_EDIT`, `RE_SHOOT`, `REPLACE`, `DROP`,
-   `TEST`, `DEFER`, or `DOCUMENT`.
+5. the smallest proportional decision, stated in plain language.
+
+Use formal decision codes only when they clarify a traceable audit. For Quick
+Craft, give the recommended change directly instead of exposing internal
+taxonomy or extra methodology.
 
 Do not recommend rebuilding merely to demonstrate taste. Read
 [references/asset-analysis.md](references/asset-analysis.md) for a formal audit
