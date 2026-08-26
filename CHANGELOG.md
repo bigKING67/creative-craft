@@ -6,6 +6,17 @@ All notable changes are documented here.
 
 Copy authority, runtime modularity, and validated-boundary candidate:
 
+- make Quick Craft the default Agent path so bounded concept, copy, image,
+  video, and critique requests produce the requested artifact without mandatory
+  project files, schemas, gates, or CLI work;
+- isolate durable artifact graphs, lifecycle states, approval gates, pack
+  snapshots, and common CLI commands in an opt-in Traceable Project reference;
+- shorten the canonical Skill entrypoint, make automatic routing concrete, and
+  exclude content calendars/KOL planning, brand strategy, media buying,
+  product UI/UX, and software review;
+- add a maintainer-only isolated Codex A/B/C text evaluation harness with seven
+  quality cases, blind weighted judging, four routing cases, a 40-call ceiling,
+  auth symlink/redaction checks, and ignored content-bound evidence reports;
 - add first-class `creative-craft.copy-sheet.v1` with strategy, audience
   tension, proposition, voice, proof hierarchy, mandatory/prohibited/legal
   copy, distinct copy routes, selected units, evidence refs, render method,
@@ -32,7 +43,8 @@ Copy authority, runtime modularity, and validated-boundary candidate:
 This candidate is not a published GitHub tag or npm release. Its public fixture
 is fictional and internally reviewed only; it does not include real Provider
 output, a real owner approval, private company evidence, or a Creative Golden
-Eval.
+Eval. The repository-only text evaluation is outside CI and does not change
+`real_golden_evals=false`.
 
 ## 0.2.6 — 2026-08-05
 

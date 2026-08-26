@@ -180,10 +180,19 @@ It does not call providers or incur costs.
 
 `examples/`
 `tests/`
+`evals/agent-quality/`
+`scripts/evaluate_agent_quality.py`
 
-Prove that contracts and compilation work. A future evaluation layer should add
-real generated outputs, human judgments, and controlled comparisons without
-promoting historical results to current model guarantees.
+Examples and unit tests prove that contracts and compilation work. The
+repository-only Agent evaluation harness separately compares baseline,
+committed, and candidate Skill behavior in an isolated `CODEX_HOME`, performs
+blind text scoring, and checks description-level routing. Generated evidence is
+ignored under `dist/evals/agent-quality/`; model calls are not part of CI.
+
+This is still not a real Provider-output Golden Eval. A future layer must add
+immutable generated images/videos, human judgments, failed revisions, and
+controlled comparisons without promoting historical results to current model
+guarantees.
 
 ## Data flow
 

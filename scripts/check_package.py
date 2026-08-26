@@ -58,6 +58,7 @@ def main() -> int:
         "skills/creative-craft/schemas/reference-binding-history.schema.json",
         "skills/creative-craft/schemas/reference-pack.schema.json",
         "skills/creative-craft/references/copy-development.md",
+        "skills/creative-craft/references/traceable-project.md",
         "skills/creative-craft/scripts/creative_craft.py",
         "skills/creative-craft/scripts/creative_craft_contracts.py",
         "skills/creative-craft/scripts/creative_craft_entrypoint.py",

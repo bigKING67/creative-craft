@@ -123,6 +123,7 @@ def main() -> int:
         "claims": {
             "provider_network_adapters": False,
             "real_golden_evals": False,
+            "agent_quality_text_eval_in_ci": False,
             "packaged_reference_runtime_e2e": True,
             "npm_published": False,
             "distribution": "github-release",

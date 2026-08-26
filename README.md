@@ -1,7 +1,8 @@
 # creative-craft
 
-Creative strategy, direction, generative image and video production,
-evaluation, iteration, and delivery governance for real creative work.
+An Agent Skill for distinctive campaign concepts, commercial copy, art
+direction, production-ready image and video briefs, evidence-aware critique,
+and traceable creative production when the work actually needs it.
 
 ```text
 context -> routes -> direction -> production -> evaluation -> delivery -> learning
@@ -9,8 +10,8 @@ context -> routes -> direction -> production -> evaluation -> delivery -> learni
 
 > 中文定位：面向真实创意任务的创意策略、创意导演、生成式图像与视频生产、评估迭代和交付治理系统。
 
-Creative Craft is not a prompt collection. It turns a vague idea, an incomplete
-brief, or an existing asset into an explicit creative system:
+Creative Craft is not a prompt collection or a paperwork generator. It turns a
+vague idea, an incomplete brief, or an existing asset into usable creative work:
 
 - what the work must achieve;
 - who it is for and what tension it should unlock;
@@ -20,9 +21,24 @@ brief, or an existing asset into an explicit creative system:
 - what was observed, inferred, hypothesized, accepted, rejected, or left unknown;
 - how variants are evaluated, refined, adapted, packaged, and learned from.
 
+It has two operating depths:
+
+- **Quick Craft is the default.** The Agent delivers the requested concept,
+  copy, prompt, treatment, shot plan, or critique directly, using only the
+  structure that improves the answer.
+- **Traceable Project is opt-in.** Multi-asset or multi-agent campaigns can add
+  schemas, immutable authority snapshots, execution receipts, inspections,
+  approvals, provenance, and delivery verification.
+
+The schemas and CLI support the creative work; they are not the product's
+default response shape.
+
 ## Status
 
-The working tree is the **unreleased `0.3.0` candidate**. It adds first-class
+The working tree is the **unreleased `0.3.0` candidate**. It makes Quick Craft
+the default Agent path, moves the evidence-bound runtime behind an explicit
+Traceable Project mode, narrows automatic routing, and adds a repository-only
+text A/B evaluation harness. It also includes first-class
 `creative-craft.copy-sheet.v1` authority, public-copy approval gates, a v2
 copy-bound Project Manifest, modular portable runtime/test boundaries, safe
 atomic writes, and indexed `uniqueItems` validation. The latest published and
@@ -57,6 +73,7 @@ Use Creative Craft for:
 
 Do not use Creative Craft as a replacement for:
 
+- content calendars, KOL/KOC planning, full brand strategy, or media buying;
 - `design-craft` when the target is product UI/UX, interaction design, design
   systems, frontend implementation, or product presentation quality;
 - `review-craft` when the target is software engineering quality;
@@ -112,15 +129,16 @@ Creative Craft requires:
 - **T — Testing:** critique, compare, refine, adapt, package, measure, and feed
   learning back into the next brief.
 
-The full workflow is:
+The full Traceable Project workflow is:
 
 ```text
 frame -> inspect -> research -> brief -> diverge -> select -> direct
       -> produce -> inspect output -> refine -> adapt -> deliver -> learn
 ```
 
-A task may enter at any stage. The agent must reconstruct the missing upstream
-authority before making downstream claims.
+A task may enter at any stage. Quick Craft should not force a bounded request
+through every stage. The Agent reconstructs only the upstream authority needed
+to avoid false downstream claims.
 
 ## Modes
 
@@ -141,7 +159,7 @@ Choose the smallest mode that covers the request. Combined production follows
 one causal order: understand, lock authority, develop/select, direct, fabricate,
 inspect actual output, refine, validate, then deliver.
 
-## Canonical authority files
+## Optional Traceable Project authority files
 
 A project may seed:
 
@@ -154,8 +172,8 @@ A project may seed:
 - `asset-ledger.json` — source identity, role, rights, consent, checksum, and
   allowed use.
 
-These are optional for a small task, but unresolved authority must be named as
-an assumption rather than silently invented.
+These are not required for Quick Craft. In a Traceable Project, unresolved
+authority must be named as an assumption rather than silently invented.
 
 ## Public core, private packs, immutable projects
 
@@ -365,7 +383,8 @@ Inspect the CLI:
 python3 skills/creative-craft/scripts/creative_craft.py --help
 ```
 
-Seed project planning scaffolds without overwriting existing files:
+For Traceable Project work, seed planning scaffolds without overwriting
+existing files:
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py seed \
@@ -377,6 +396,7 @@ and a planned Delivery manifest. Placeholder scaffolds are not approved or
 locked authority. The seed does not create an Execution Receipt, Output
 Inspection, or Revision Lineage: those lifecycle artifacts must be created only
 after the corresponding real attempt, output inspection, or revision exists.
+Quick Craft does not require `seed` or any JSON artifact.
 
 Initialize and validate a separate private Brand Skill using placeholder-only
 authority:
@@ -524,6 +544,35 @@ Hash a source or output for the asset ledger:
 python3 skills/creative-craft/scripts/creative_craft.py hash \
   --file path/to/asset.png
 ```
+
+## Agent quality evaluation
+
+The repository includes a maintainer-only text evaluation harness. It compares
+an empty baseline, the exact committed Skill, and the worktree candidate across
+seven creative cases, then uses blind scoring and four routing cases:
+
+```bash
+python3 scripts/evaluate_agent_quality.py check --json
+python3 scripts/evaluate_agent_quality.py run
+python3 scripts/evaluate_agent_quality.py judge --run-dir dist/evals/agent-quality/<run>
+python3 scripts/evaluate_agent_quality.py route --run-dir dist/evals/agent-quality/<run>
+python3 scripts/evaluate_agent_quality.py report --run-dir dist/evals/agent-quality/<run>
+```
+
+Runs use a temporary `0700` `CODEX_HOME`, symlink only the existing Codex auth
+file without reading or copying it, install no global Skill, use an empty
+workspace, and invoke Codex with ephemeral/read-only/ignore-config flags. When
+the local Codex uses a custom model provider, the harness extracts only an
+allowlist of non-secret transport fields (`name`, `base_url`, `wire_api`, auth
+mode, and WebSocket support) and passes them as explicit CLI overrides; it never
+copies the user config.
+
+Generated evidence stays under ignored `dist/evals/agent-quality/` and is bound
+to the model, reasoning level, committed revision, and candidate Skill digest.
+
+This live evaluation is intentionally outside CI because it incurs model cost.
+It is text-only: no image or video Provider is called, and a blind model judge
+is not a substitute for real output inspection or human creative approval.
 
 ## Relationship to the Craft family
 

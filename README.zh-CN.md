@@ -1,6 +1,7 @@
 # creative-craft
 
-面向真实创意任务的创意策略、创意导演、生成式图片与视频生产、评估迭代和交付治理系统。
+帮助 Agent 直接产出更高质量的 Campaign 概念、商业文案、创意导演、图片/视频制作
+Brief 和创意评估；只有项目确实需要时才启用可追溯生产治理。
 
 ```text
 理解语境 -> 发展路线 -> 锁定导演方案 -> 生产执行 -> 评估迭代 -> 交付复用
@@ -9,7 +10,8 @@
 ## 它不是什么
 
 `creative-craft` 不是“提示词大全”，也不是把“高级感、电影感、质感”
-堆进提示词里。它解决的是从模糊想法到完整作品之间缺失的专业链路：
+堆进提示词里，更不是让 Agent 默认生成一堆 Schema 和流程文件。它解决的是从模糊
+想法到可执行创意之间缺失的专业判断：
 
 - 到底要解决什么传播任务；
 - 面向谁，抓住什么矛盾、情绪或欲望；
@@ -21,11 +23,22 @@
 - 哪些内容应该保留、放大、精修、重构、重新生成、重剪、重拍、测试或放弃；
 - 最终文件、版权、肖像授权、参考素材、提示词、版本和交付规格如何追溯。
 
+它有两种工作深度：
+
+- **Quick Craft 是默认路径**：直接交付用户要的概念、文案、Prompt、Treatment、
+  镜头方案或 Critique，只保留真正改善产出的结构。
+- **Traceable Project 按需启用**：多资产、多 Agent、重复 Provider 执行、正式审批、
+  来源追溯或交付核验时，再使用 Schema、不可变快照、Receipt、Inspection 和 Gate。
+
+运行时和治理合同用于支撑创意产出，不是默认产出本身。
+
 ## 与 design-craft、review-craft 的边界
 
 - `design-craft`：产品 UI/UX、交互、设计系统、动效和前端实现质量。
 - `review-craft`：软件工程审查、证据验证、整改决策和项目质量治理。
 - `creative-craft`：传播创意、内容创意、视觉与视频导演、生成式媒体生产和创意评估。
+
+内容日历、KOL/KOC 规划、完整品牌战略、媒介投放不应路由到 `creative-craft`。
 
 三者可以串联，但不互相吞并。比如广告落地页的“创意方向”由
 `creative-craft` 提供，产品界面体验交给 `design-craft`，代码工程质量再交给
@@ -40,7 +53,7 @@
 - **F — Fabrication / 制作**：生成或编辑图片、视频，检查真实输出并记录。
 - **T — Testing / 测试**：比较、精修、适配、交付、测量，并回流到下一轮。
 
-完整流程为：
+Traceable Project 的完整流程为：
 
 ```text
 界定任务 -> 盘点事实 -> 补充研究 -> 锁定 Brief -> 创意发散
@@ -76,14 +89,15 @@
 9. **评分必须有证据覆盖，缺 Brief、版权或交付规格时不强行打分。**
 10. **提示词、输入资产、模型、版本、输出规格和文件校验值可追溯。**
 
-## 项目权威文件
+## 可选的 Traceable Project 权威文件
 
 - `BRAND.md`：长期品牌权威。
 - `CREATIVE.md`：本次创意任务权威。
 - `DELIVERABLES.md`：渠道、规格、版本、文案和交付权威。
 - `asset-ledger.json`：素材来源、用途、版权、肖像授权和校验值。
 
-小任务不强制全部创建，但缺失内容必须标为假设，不能被 Agent 偷偷补成事实。
+Quick Craft 不需要创建这些文件。Traceable Project 中缺失内容必须标为假设，不能被
+Agent 偷偷补成事实。
 
 ## 公共内核、私有 Pack、不可变项目快照
 
@@ -136,11 +150,13 @@ Brand Pack 或其他 Reference Pack。
 
 ## 当前版本
 
-当前工作区是**尚未发布的 `0.3.0` candidate**。它加入一等
-`creative-craft.copy-sheet.v1` 文案权威、面向公开交付的具名 Owner 审批门禁、
-copy-bound Project Manifest v2、模块化 portable runtime/test、安全原子写入，以及
-索引化的 `uniqueItems` 校验。当前最新已发布、可按固定 tag 安装的版本仍是
-`v0.2.6`；下方安装命令在获得独立发布授权前继续固定到该不可变 tag。
+当前工作区是**尚未发布的 `0.3.0` candidate**。它把 Quick Craft 设为 Agent 默认
+路径，把证据链运行时收进显式 Traceable Project 模式，收窄自动路由，并新增仓库内
+文本 A/B 评测工具。它同时保留一等 `creative-craft.copy-sheet.v1` 文案权威、面向
+公开交付的具名 Owner 审批门禁、copy-bound Project Manifest v2、模块化 portable
+runtime/test、安全原子写入，以及索引化的 `uniqueItems` 校验。当前最新已发布、可按
+固定 tag 安装的版本仍是 `v0.2.6`；下方安装命令在获得独立发布授权前继续固定到该
+不可变 tag。
 
 Project Manifest v2 默认 `copy_policy=required`。每个 Image/Video Job 必须绑定一份
 Copy Sheet 和明确的 Copy Unit：`draft` 只用于探索，`reviewed` 可进入内部制作就绪，
@@ -161,9 +177,10 @@ Copy Sheet 和明确的 Copy Unit：`draft` 只用于探索，`reviewed` 可进�
 - 原子安装、安装来源记录、单元测试、Schema parity 和真实 GitHub CI；
 - 明确不冒充真实生成结果的虚构高端洗护案例。
 
-本 candidate 默认不直接调用模型、不产生费用。它先把“创意决策、文案权威和执行
-协议”做好。虚构案例只证明内部 `reviewed` 文案合同，不代表真实 Provider 输出、
-真实 Owner 公开批准或 Golden Eval；也不包含 GPT Image 2 或 Seedance 网络 Adapter。
+安装后的 Skill/runtime 默认不直接调用 Provider、不产生图片或视频生成费用。仓库级
+Agent 质量评测工具会在维护者显式运行时调用 Codex 文本模型，因此独立于 CI 和发布
+runtime。虚构案例只证明内部 `reviewed` 文案合同，不代表真实 Provider 输出、真实
+Owner 公开批准或 Golden Eval；也不包含 GPT Image 2 或 Seedance 网络 Adapter。
 
 ## 安装到 Pi、Codex 和其他 Agent
 
@@ -233,7 +250,7 @@ scope，不再要求仓库根目录的 README、LICENSE、plugin metadata 和 so
 使用 `self-test --scope runtime --json`，确保即使 `.tgz` 外层含有仓库元数据，
 实际被验证的仍是包内叶子 Skill runtime。
 
-初始化项目：
+需要 Traceable Project 时初始化项目：
 
 ```bash
 python3 skills/creative-craft/scripts/creative_craft.py seed \
@@ -243,7 +260,8 @@ python3 skills/creative-craft/scripts/creative_craft.py seed \
 Seed 只创建规划权威骨架、Critique、draft Jobs、Evaluation、planned Delivery
 和 Project Manifest；占位骨架不等于已经批准或锁定的权威。它不会创建 Execution
 Receipt、Output Inspection 或 Revision Lineage，这些生命周期工件只能在对应的真实
-尝试、输出检查或修订发生后创建。
+尝试、输出检查或修订发生后创建。Quick Craft 不需要执行 `seed`，也不需要生成任何
+JSON 工件。
 
 在独立私有仓库中初始化和校验一个只含占位内容的 Brand Skill：
 
@@ -372,6 +390,29 @@ python3 skills/creative-craft/scripts/creative_craft.py project-status \
 注册的已知 Creative Craft JSON 工件。与内置模板逐字节一致的文件会被标记为
 `seed_template_residue`；该命令不会自动注册或删除文件，因为“文件存在”不能证明
 对应的生命周期事件真实发生过。
+
+## Agent 质量评测
+
+仓库提供仅供维护者使用的文本评测工具：在七个真实创意任务上比较空白 baseline、
+精确 committed Skill 和 worktree candidate，再做盲评计分与四个路由用例。
+
+```bash
+python3 scripts/evaluate_agent_quality.py check --json
+python3 scripts/evaluate_agent_quality.py run
+python3 scripts/evaluate_agent_quality.py judge --run-dir dist/evals/agent-quality/<run>
+python3 scripts/evaluate_agent_quality.py route --run-dir dist/evals/agent-quality/<run>
+python3 scripts/evaluate_agent_quality.py report --run-dir dist/evals/agent-quality/<run>
+```
+
+工具使用临时 `0700` `CODEX_HOME`，只 symlink 现有 Codex auth 文件且不读取或复制
+内容，不安装全局 Skill；workspace 为空，Codex 使用 ephemeral、read-only、
+ignore-config/rules 参数。若本机使用自定义 model provider，工具只提取 `name`、
+`base_url`、`wire_api`、auth mode 和 WebSocket support 这些非敏感白名单传输字段，
+作为 CLI override 传入，不复制用户 config。证据写入已忽略的
+`dist/evals/agent-quality/`，并绑定模型、reasoning、commit 和 candidate Skill digest。
+
+真实模型评测有成本，因此不进入 CI。当前只评测文本 Agent 输出，不调用图片/视频
+Provider；盲评模型的比较结论也不能替代真实输出检查或人类创意审批。
 
 ## 最重要的一条
 

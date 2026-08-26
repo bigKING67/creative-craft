@@ -112,11 +112,20 @@ creative-quality evidence:
 - indexed `uniqueItems` validation with reference parity and a scaling-ratio
   benchmark;
 - declared Python `>=3.10` and expanded CI/package evidence boundaries.
+- Quick Craft as the default Agent path, with Traceable Project governance
+  loaded only for multi-agent, provenance, approval, or delivery needs;
+- a shorter, more discriminating Skill entrypoint that excludes content
+  calendars, KOL planning, brand strategy, media buying, UI/UX, and software
+  review;
+- a repository-only isolated Codex A/B/C text evaluation harness covering seven
+  creative cases, blind weighted judging, and four description-routing cases.
 
 The candidate is not yet a GitHub tag or release. Its fictional Copy Sheet is
-reviewed for internal contract testing only.
+reviewed for internal contract testing only. The text harness incurs model cost
+and is intentionally outside CI; it does not call an image/video Provider or
+constitute a real Creative Golden Eval.
 
-## 0.3.x — real creative evals
+## 0.3.x — real provider-output creative evals
 
 Planned:
 

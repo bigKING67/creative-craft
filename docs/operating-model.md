@@ -1,5 +1,15 @@
 # Operating model
 
+## Default depth
+
+Quick Craft is the default Agent path. Deliver a bounded concept, copy system,
+prompt, treatment, shot plan, adaptation, or critique directly; do not create
+roles, gates, JSON artifacts, or project state that the work does not need.
+
+Use the model below only for a Traceable Project: multi-asset or multi-agent
+campaigns, durable Brand/Reference bindings, repeated provider execution,
+formal approvals, provenance, or delivery verification.
+
 ## Roles
 
 One person or agent may perform several roles, but decisions remain distinct.
@@ -48,9 +58,9 @@ Is the concept locked, and are channel-specific changes explicit?
 
 Do files, rights, specifications, approvals, and manifests agree?
 
-## Small-task shortcut
+## Quick Craft boundary
 
-A one-image edit may compress G1–G3 into:
+A one-image edit normally needs only:
 
 - intended use;
 - exact change;
@@ -58,7 +68,8 @@ A one-image edit may compress G1–G3 into:
 - output specification;
 - source rights.
 
-The shortcut does not remove output inspection or delivery honesty.
+This does not require a project Manifest or lifecycle artifacts. If an actual
+output is produced, inspection and delivery honesty still apply.
 
 ## Learning loop
 
