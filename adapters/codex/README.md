@@ -5,21 +5,20 @@ Codex is a Tier 1 host. The repository exposes `./skills/` through
 `../../skills/creative-craft/`.
 
 Use Codex's built-in `skill-installer` with repository
-`bigKING67/creative-craft`, ref `v0.2.6`, and path `skills/creative-craft`, or:
+`bigKING67/creative-craft`, ref `v0.3.0`, and path `skills/creative-craft`, or:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.6 \
+  --ref v0.3.0 \
   --path skills/creative-craft
 ```
 
-`v0.2.6` is intentionally the latest published immutable tag here. The source
-tree's `0.3.0` metadata is an unreleased candidate, not an installable tag.
+`v0.3.0` is the latest published immutable tag. The installed Skill becomes
+discoverable on the next turn or session.
 
-The installed skill becomes discoverable on the next turn/session. Provider
-execution still depends on available host tools and explicit authorization;
-Creative Craft itself includes no network adapter.
+Provider execution still depends on available host tools and explicit
+authorization; Creative Craft itself includes no network adapter.
 
 Diagnose the installed leaf runtime without repository-only files:
 

@@ -9,9 +9,9 @@ Tier 1 in `0.2.0` means package/discovery and isolated installation are tested
 for Pi and Codex. Claude and Cursor adapters remain documentation-only and must
 not be described as runtime-verified.
 
-The repository currently contains an unreleased `0.3.0` candidate. Its local
-source/package gates do not change the published `v0.2.6` install baseline or
-upgrade any host to remotely verified `0.3.0` support.
+Version `0.3.0` keeps Pi and Codex as the runtime-verified Tier 1 hosts. It does
+not upgrade the documentation-only Claude, Cursor, or generic adapters to
+runtime-verified support.
 
 A host adapter should declare:
 

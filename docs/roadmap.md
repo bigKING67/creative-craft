@@ -98,8 +98,8 @@ Implemented without claiming new provider or creative-quality evidence:
 
 ## 0.3.0 — copy authority and modular runtime
 
-Implemented in the local unreleased candidate without claiming new Provider or
-creative-quality evidence:
+Released on 2026-08-26 without claiming new Provider or real image/video output
+evidence:
 
 - first-class Copy Sheet v1 covering strategy, tension, proposition, voice,
   proof, mandatory/prohibited/legal copy, distinct routes, exact units,
@@ -120,10 +120,9 @@ creative-quality evidence:
 - a repository-only isolated Codex A/B/C text evaluation harness covering seven
   creative cases, blind weighted judging, and four description-routing cases.
 
-The candidate is not yet a GitHub tag or release. Its fictional Copy Sheet is
-reviewed for internal contract testing only. The text harness incurs model cost
-and is intentionally outside CI; it does not call an image/video Provider or
-constitute a real Creative Golden Eval.
+The fictional Copy Sheet is reviewed for internal contract testing only. The
+text harness incurs model cost and is intentionally outside CI; it does not call
+an image/video Provider or constitute a real Creative Golden Eval.
 
 ## 0.3.x — real provider-output creative evals
 

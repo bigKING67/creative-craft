@@ -2,9 +2,9 @@
 
 All notable changes are documented here.
 
-## 0.3.0 — Unreleased candidate
+## 0.3.0 — 2026-08-26
 
-Copy authority, runtime modularity, and validated-boundary candidate:
+Agent-first creative quality, copy authority, and modular runtime release:
 
 - make Quick Craft the default Agent path so bounded concept, copy, image,
   video, and critique requests produce the requested artifact without mandatory
@@ -44,7 +44,7 @@ Copy authority, runtime modularity, and validated-boundary candidate:
 - declare Python `>=3.10`, add Python 3.10 to the CI matrix, lint all runtime
   modules, and include the benchmark and new files in release/package gates.
 
-This candidate is not a published GitHub tag or npm release. Its public fixture
+This release remains GitHub-only and is not published to npm. Its public fixture
 is fictional and internally reviewed only; it does not include real Provider
 output, a real owner approval, private company evidence, or a Creative Golden
 Eval. The repository-only text evaluation is outside CI and does not change

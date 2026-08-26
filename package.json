@@ -41,8 +41,8 @@
   },
   "creativeCraft": {
     "python": ">=3.10",
-    "releaseStatus": "unreleased-candidate",
-    "publishedInstallTag": "v0.2.6"
+    "releaseStatus": "released",
+    "publishedInstallTag": "v0.3.0"
   },
   "scripts": {
     "doctor": "python3 skills/creative-craft/scripts/creative_craft.py doctor",

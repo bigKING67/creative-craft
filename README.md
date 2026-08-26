@@ -35,15 +35,15 @@ default response shape.
 
 ## Status
 
-The working tree is the **unreleased `0.3.0` candidate**. It makes Quick Craft
-the default Agent path, moves the evidence-bound runtime behind an explicit
-Traceable Project mode, narrows automatic routing, and adds a repository-only
-text A/B evaluation harness. It also includes first-class
+Version **`0.3.0`** makes Quick Craft the default Agent path, moves the
+evidence-bound runtime behind an explicit Traceable Project mode, narrows
+automatic routing, and adds a repository-only text A/B evaluation harness. It
+also includes first-class
 `creative-craft.copy-sheet.v1` authority, public-copy approval gates, a v2
 copy-bound Project Manifest, modular portable runtime/test boundaries, safe
-atomic writes, and indexed `uniqueItems` validation. The latest published and
-installable GitHub release remains `v0.2.6`; the install commands below stay
-pinned to that immutable tag until a separate release is authorized.
+atomic writes, indexed `uniqueItems` validation, and evidence-backed Agent
+creative-quality improvements. The latest published and installable GitHub
+release is the immutable `v0.3.0` tag.
 
 Company-specific Brand Packs and non-authoritative Reference Packs remain
 private, portable, and separate from this public method. The fictional example
@@ -318,17 +318,17 @@ published to the npm registry.
 Pi is a Tier 1 host. Install the immutable release globally or for one project:
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.6
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.6
+pi install git:github.com/bigKING67/creative-craft@v0.3.0
+pi install -l git:github.com/bigKING67/creative-craft@v0.3.0
 ```
 
 Codex is a Tier 1 host. Ask the built-in `skill-installer` to install
-`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.2.6`, or run:
+`bigKING67/creative-craft`, path `skills/creative-craft`, ref `v0.3.0`, or run:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.6 \
+  --ref v0.3.0 \
   --path skills/creative-craft
 ```
 
@@ -607,14 +607,14 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-The local `0.3.0` candidate proves copy-bound contract validation, named-owner
+Version `0.3.0` proves copy-bound contract validation, named-owner
 public-delivery gating, legacy v1 readability, modular installed runtime, safe
-write boundaries, and measured near-linear `uniqueItems` scaling through
-synthetic fixtures and local package gates. It still does not claim that
+write boundaries, measured near-linear `uniqueItems` scaling, and improved
+Agent creative output through synthetic fixtures, package gates, and an
+isolated text evaluation. It still does not claim that
 unobserved image or video output is production quality, that real Golden Evals
 are complete, that owner approval exists for the fictional example, or that
-Provider network adapters exist. Remote CI and release state remain those of
-the published `v0.2.6` baseline until separately executed.
+Provider network adapters exist.
 
 Maintainers build one release candidate from a clean commit after installing
 `requirements-dev.txt`:

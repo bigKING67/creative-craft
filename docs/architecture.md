@@ -260,10 +260,9 @@ The first failure mode of a creative system is usually not API syntax. It is a
 missing brief, collapsed concept/execution thinking, vague reference use,
 uncontrolled edits, unobserved output claims, or absent rights.
 
-The current public release and local `0.3.0` candidate therefore stabilize the
-end-to-end evidence contracts. Direct adapters can be added later as opt-in
-integrations with explicit credentials, cost, network, moderation, receipt, and
-provider-version handling.
+The `0.3.0` release stabilizes the end-to-end evidence contracts. Direct
+adapters can be added later as opt-in integrations with explicit credentials,
+cost, network, moderation, receipt, and provider-version handling.
 
 ## Compatibility principle
 

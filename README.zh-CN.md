@@ -150,13 +150,12 @@ Brand Pack 或其他 Reference Pack。
 
 ## 当前版本
 
-当前工作区是**尚未发布的 `0.3.0` candidate**。它把 Quick Craft 设为 Agent 默认
-路径，把证据链运行时收进显式 Traceable Project 模式，收窄自动路由，并新增仓库内
-文本 A/B 评测工具。它同时保留一等 `creative-craft.copy-sheet.v1` 文案权威、面向
-公开交付的具名 Owner 审批门禁、copy-bound Project Manifest v2、模块化 portable
-runtime/test、安全原子写入，以及索引化的 `uniqueItems` 校验。当前最新已发布、可按
-固定 tag 安装的版本仍是 `v0.2.6`；下方安装命令在获得独立发布授权前继续固定到该
-不可变 tag。
+**`0.3.0`** 把 Quick Craft 设为 Agent 默认路径，把证据链运行时收进显式 Traceable
+Project 模式，收窄自动路由，并新增仓库内文本 A/B 评测工具。它同时保留一等
+`creative-craft.copy-sheet.v1` 文案权威、面向公开交付的具名 Owner 审批门禁、
+copy-bound Project Manifest v2、模块化 portable runtime/test、安全原子写入、
+索引化的 `uniqueItems` 校验，以及有评测证据支持的 Agent 创意质量提升。当前最新已
+发布、可安装的 GitHub 版本是不可变 `v0.3.0` tag。
 
 Project Manifest v2 默认 `copy_policy=required`。每个 Image/Video Job 必须绑定一份
 Copy Sheet 和明确的 Copy Unit：`draft` 只用于探索，`reviewed` 可进入内部制作就绪，
@@ -190,18 +189,18 @@ GitHub 分发，不发布 npm；`package.json` 只负责 Pi/GitHub package disco
 Pi 是 Tier 1 Host：
 
 ```bash
-pi install git:github.com/bigKING67/creative-craft@v0.2.6
-pi install -l git:github.com/bigKING67/creative-craft@v0.2.6
+pi install git:github.com/bigKING67/creative-craft@v0.3.0
+pi install -l git:github.com/bigKING67/creative-craft@v0.3.0
 ```
 
 Codex 是 Tier 1 Host。可以让内置 `skill-installer` 从
-`bigKING67/creative-craft` 的 `v0.2.6` tag 安装
+`bigKING67/creative-craft` 的 `v0.3.0` tag 安装
 `skills/creative-craft`，也可以执行：
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo bigKING67/creative-craft \
-  --ref v0.2.6 \
+  --ref v0.3.0 \
   --path skills/creative-craft
 ```
 

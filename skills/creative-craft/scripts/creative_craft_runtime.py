@@ -197,6 +197,11 @@ def doctor(root: Path = REPO_ROOT) -> Result:
             try:
                 package_metadata = load_json(package_path)
                 creative_craft_metadata = package_metadata.get("creativeCraft", {})
+                release_status = creative_craft_metadata.get("releaseStatus")
+                r.require(
+                    release_status in {"unreleased-candidate", "released"},
+                    "package.json creativeCraft.releaseStatus must be unreleased-candidate or released",
+                )
                 declared_tag = creative_craft_metadata.get("publishedInstallTag")
                 if declared_tag is not None:
                     r.require(
@@ -207,6 +212,16 @@ def doctor(root: Path = REPO_ROOT) -> Result:
                     )
                     if isinstance(declared_tag, str):
                         published_install_tag = declared_tag
+                if release_status == "released":
+                    r.require(
+                        published_install_tag == expected_tag,
+                        "released package metadata must publish the tag matching VERSION",
+                    )
+                elif release_status == "unreleased-candidate":
+                    r.require(
+                        published_install_tag != expected_tag,
+                        "unreleased candidate metadata must not claim its VERSION tag is published",
+                    )
             except ValueError as exc:
                 r.errors.append(str(exc))
         for rel in ("adapters/pi/README.md", "adapters/codex/README.md"):

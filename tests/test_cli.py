@@ -107,7 +107,7 @@ class DoctorTests(unittest.TestCase):
             )
             adapter = copied / "adapters/pi/README.md"
             adapter.write_text(
-                adapter.read_text(encoding="utf-8").replace("v0.2.6", "v0.2.1"),
+                adapter.read_text(encoding="utf-8").replace("v0.3.0", "v0.2.1"),
                 encoding="utf-8",
             )
 
@@ -116,6 +116,32 @@ class DoctorTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertTrue(
                 any("adapters/pi/README.md" in item for item in result.errors)
+            )
+
+    def test_doctor_rejects_released_metadata_with_a_different_version_tag(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            copied = Path(directory) / "repo"
+            shutil.copytree(
+                ROOT,
+                copied,
+                ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.pyc"),
+            )
+            package_path = copied / "package.json"
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+            package["creativeCraft"]["publishedInstallTag"] = "v0.2.6"
+            write_json(package_path, package)
+
+            result = cc.doctor(copied)
+
+            self.assertFalse(result.ok)
+            self.assertTrue(
+                any(
+                    "released package metadata must publish the tag matching VERSION"
+                    in item
+                    for item in result.errors
+                )
             )
 
     def test_python_minimum_is_synchronized_across_metadata_and_ci(self) -> None:
