@@ -137,7 +137,7 @@ class IsolatedCodexTests(unittest.TestCase):
                 codex_home = Path(environment["CODEX_HOME"])
                 isolated_auth = codex_home / "auth.json"
                 self.assertTrue(isolated_auth.is_symlink())
-                self.assertEqual(auth, Path(os.readlink(isolated_auth)))
+                self.assertTrue(os.path.samefile(auth, isolated_auth))
                 self.assertTrue(
                     (codex_home / "skills/creative-craft/SKILL.md").is_file()
                 )
