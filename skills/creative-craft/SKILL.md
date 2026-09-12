@@ -1,6 +1,6 @@
 ---
 name: creative-craft
-description: "Create and improve campaign concepts, advertising copy, art direction, image-generation or editing briefs, video treatments and shot plans, and evidence-aware creative critiques. Use for turning an incomplete creative brief, references, or an existing asset into distinctive, production-ready creative work. Do not use for content calendars or KOL planning, brand strategy, media buying, product UI/UX, or software review."
+description: "创作或评审广告概念、文案、艺术指导、图像 Brief 与视频方案；不用于内容排期、KOL 规划、品牌战略、投放、产品 UI 或软件审查。"
 ---
 
 # Creative Craft
