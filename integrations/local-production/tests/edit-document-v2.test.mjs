@@ -27,7 +27,14 @@ const reasons = { 'audio-only-asset-on-video-track': /has no video/, 'caption-li
   'duplicate-item-id': /Duplicate item id/, 'first-revision-with-parent': /parent digest/,
   'free-caption-missing-timing': /requires start_frame\/frames/, 'media-missing-source-in': /requires asset_id/,
   'same-track-overlap': /Overlapping/, 'source-range-exceeds-asset': /exceeds asset/, 'unknown-asset': /Unknown asset/,
-  'unknown-track': /Unknown track/ };
+  'unknown-track': /Unknown track/,
+  // P2 packaging and audio.
+  'caption-with-speed': /cannot carry speed, fades or transitions/, 'crossfade-overlap-mismatch': /overlap its predecessor .* by exactly 12/,
+  'crossfade-without-overlap': /Crossfade talk1 must overlap/, 'duck-on-video-track': /only allowed on audio tracks/,
+  'duck-under-self': /cannot duck under itself/, 'duck-under-unknown-track': /Duck under unknown track/,
+  'fades-exceed-item': /Fades exceed item length/, 'graphic-on-caption-track': /must be on a video track/,
+  'graphic-var-not-primitive': /Graphic var title must be a string/, 'graphic-with-media-field': /cannot carry media\/caption fields: volume/,
+  'overlap-without-crossfade': /without crossfade: talk1, talk2/, 'speed-source-exceeds-asset': /exceeds asset \(speed-scaled\): talk2/ };
 test('shared fixtures: every invalid document is rejected', async () => {
   const names = (await fs.readdir(path.join(fixtures, 'invalid'))).filter(n => n.endsWith('.json'));
   assert.ok(names.length >= 12);
@@ -115,6 +122,106 @@ test('cross-language rules: kind-exclusive fields, linked caption timing, parent
     }
   }
   assert.doesNotThrow(() => validateV2({ ...v2Fixture(), revision: 2, parent_sha256: sha('d') }));
+});
+// P2 rules agreed with the Python core beyond the contract text (root fixtures are
+// added on the Python side); one inline negative case each on the P2 fixture.
+test('P2 cross-language rules: graphic field whitelist, duck target kind, crossfade ordering and full overlap scan', async () => {
+  const base = await load('valid', 'p2-packaging.json');
+  const graphic = d => d.items.find(i => i.id === 'lower');
+  const cases = {
+    'graphic accepts only template/vars/timing/fades/opacity': [
+      d => { graphic(d).transform = { x: .5, y: .5, scale: .5 }; }, d => { graphic(d).transition_in = { kind: 'crossfade', frames: 2 }; },
+      d => { graphic(d).speed = 1; }, d => { graphic(d).fit = 'cover'; }],
+    'duck target must be a video or audio track': [d => { d.tracks.find(t => t.id === 'a_music').duck.under_track_id = 'c_sub'; }],
+    'crossfade must start strictly after its predecessor': [d => {
+      Object.assign(d.items.find(i => i.id === 'talk1'), { frames: 10, fade_in_frames: 0 });
+      Object.assign(d.items.find(i => i.id === 'talk2'), { start_frame: 0, transition_in: { kind: 'crossfade', frames: 10 } });
+      d.items = d.items.filter(i => i.id !== 'cap1');
+    }],
+    'overlap is checked against every earlier item, not only the adjacent one': [d => {
+      Object.assign(d.items.find(i => i.id === 'talk1'), { frames: 100 });
+      Object.assign(d.items.find(i => i.id === 'talk2'), { start_frame: 90, frames: 110, speed: 1, fade_out_frames: 0 });
+      d.items.push({ id: 'talk3', track_id: 'v_main', kind: 'media', asset_id: 'talk', start_frame: 95, frames: 110, source_in_seconds: 0, volume: 1,
+        transition_in: { kind: 'crossfade', frames: 105 } });
+    }],
+  };
+  assert.doesNotThrow(() => validateV2(base));
+  for (const [rule, mutations] of Object.entries(cases)) {
+    for (const mutate of mutations) {
+      const doc = structuredClone(base); mutate(doc);
+      assert.throws(() => validateV2(doc), Error, rule);
+    }
+  }
+  const ordered = structuredClone(base);
+  cases['crossfade must start strictly after its predecessor'][0](ordered);
+  assert.throws(() => validateV2(ordered), /must start after its predecessor/);
+  const scanned = structuredClone(base);
+  cases['overlap is checked against every earlier item, not only the adjacent one'][0](scanned);
+  assert.throws(() => validateV2(scanned), /overlaps more than its predecessor/);
+});
+test('P2 compile: playback rate, volume lanes only via data-automation, opacity tweens, graphics, speed-mapped captions; lint clean', async () => {
+  const doc = await load('valid', 'p2-packaging.json');
+  doc.items.push({ id: 'cap2', track_id: 'c_sub', kind: 'caption', text: '变速句', link: { item_id: 'talk2', source_from: 11.5, source_to: 13 } });
+  doc.items.find(i => i.id === 'lower').vars.title = '<b>&"x\'';
+  const { html, cues, graphics } = compose(doc);
+  assert.equal(graphics, 1);
+  assert.match(html, /id="v-talk2"[^>]*data-playback-rate="1.5"[^>]*data-track-index="40"/, 'crossfading item on the alternate roll');
+  assert.match(html, /id="a-talk2"[^>]*data-playback-rate="1.5"[^>]*data-track-index="140"/);
+  // talk2 starts at 140/30 s with source 10 s at 1.5×: source 11.5–13 → +1…+2 s.
+  assert.deepEqual(cues.filter(c => c.text === '变速句').map(c => [r9(c.start), r9(c.end)]), [[r9(140 / 30 + 1), r9(140 / 30 + 2)]]);
+  const { parseAudioElements } = await import('@hyperframes/engine');
+  const { parseAutomation, sampleAutomationLane } = await import('@hyperframes/core/audio-automation');
+  const audio = new Map(parseAudioElements(html).map(a => [a.id, a]));
+  assert.equal(audio.get('a-talk2').playbackRate, 1.5);
+  for (const id of ['a-talk1', 'a-talk2', 'a-bed']) {
+    assert.ok(!new RegExp(`id="${id}"[^>]*data-volume`).test(html), `${id}: the lane is the only gain`);
+    assert.ok(audio.get(id).automation, id);
+  }
+  const level = (id, t) => sampleAutomationLane(parseAutomation(audio.get(id).automation).lanes[0], t);
+  const duck = 0.2 * 10 ** (-12 / 20);
+  assert.equal(level('a-talk1', 0), 0); assert.equal(level('a-talk1', 1), 1);
+  assert.ok(Math.abs(level('a-talk1', 140 / 30 + 5 / 30) - 0.5) < 1e-3, 'outgoing half of the crossfade');
+  assert.ok(Math.abs(level('a-talk2', 5 / 30) - 0.5) < 1e-3, 'incoming half of the crossfade');
+  assert.ok(Math.abs(level('a-bed', 2) - duck) < 1e-5, 'music ducked under the main track speech');
+  assert.ok(Math.abs(level('a-bed', 8.5) - duck * 0.5) < 1e-3, 'fade-out multiplies the duck');
+  assert.match(html, /tl\.fromTo\("#v-talk2",\{opacity:0\},\{opacity:1,duration:0\.33333333,ease:"none",immediateRender:false\},4\.666666666\)/);
+  assert.match(html, /id="v-talk1"[^>]*opacity:0"/, 'animated picture is authored hidden');
+  assert.ok(!/tl\.(to|fromTo)\([^)]*volume/.test(html), 'no GSAP volume tween');
+  assert.match(html, /<div id="g-lower" class="clip gfx gfx-lower-third"[^>]*left:6%;top:70%;width:62%;height:20%;font-size:7\.2px;--accent:#e3b341;opacity:0/);
+  assert.match(html, /&lt;b&gt;&amp;&quot;x&#39;/);
+  assert.ok(!html.includes('<b>&'), 'template text is escaped');
+  const lint = await lintComposition(html);
+  assert.deepEqual([lint.error_count, lint.warning_count], [0, 0], JSON.stringify(lint.findings));
+  assert.ok(!lint.findings.some(f => f.code === 'audio_volume_double_automation'));
+});
+test('graphic templates: existence, typed vars, length limits and colour format are enforced', async () => {
+  const base = await load('valid', 'p2-packaging.json');
+  const lower = d => d.items.find(i => i.id === 'lower');
+  for (const [mutate, reason] of [
+    [d => { lower(d).template = 'news-ticker'; }, /Unknown graphic template/],
+    [d => { lower(d).vars.title = '一'.repeat(17); }, /title must be a string of 1–16/],
+    [d => { lower(d).vars.accent = 'red'; }, /accent must be a #rrggbb colour/],
+    [d => { lower(d).vars.accent = 'url(x)'; }, /accent must be a #rrggbb colour/],
+    [d => { lower(d).vars.href = 'https://example.com'; }, /has no var href/],
+    [d => { delete lower(d).vars.title; }, /missing required var title/],
+    [d => { lower(d).vars.subtitle = 3; }, /subtitle must be a string/]]) {
+    const doc = structuredClone(base); mutate(doc);
+    assert.throws(() => validateV2(doc), reason);
+  }
+  const card = structuredClone(base);
+  Object.assign(lower(card), { template: 'title-card', vars: { title: '品牌', panel: false, background: '#000000' } });
+  assert.match(compose(card).html, /class="clip gfx gfx-title-card"[^>]*data-panel="false"[^>]*style="[^"]*--background:#000000;--text_color:#ffffff/);
+  const { validateTemplate, TEMPLATES } = await import('../templates.mjs');
+  assert.deepEqual([...TEMPLATES.keys()], ['lower-third', 'title-card']);
+  const template = structuredClone(TEMPLATES.get('lower-third'));
+  for (const [mutate, reason] of [
+    [t => { t.box.top = 0.8; }, /safe area/], [t => { t.html += '<script>x</script>'; }, /forbidden markup|only contain <span/],
+    [t => { t.html = t.html.replace('<span class', '<div class').replace('</span>', '</div>'); }, /only contain <span/],
+    [t => { t.css += 'body{color:red}'; }, /scoped/], [t => { t.css += '.gfx-lower-third{background:url(x)}'; }, /forbidden/],
+    [t => { t.vars.title.max_length = 40; }, /cannot fit/]]) {
+    const copy = structuredClone(template); mutate(copy);
+    assert.throws(() => validateTemplate('lower-third', copy), reason);
+  }
 });
 test('compiled v2 HTML passes the HyperFrames lint gate', async () => {
   const lint = await lintComposition(compose(v2Fixture()).html);
@@ -218,6 +325,50 @@ test('split assigns linked captions by source_from; trim/slip/move/ripple behave
   doc = await readProject(dir);
   assert.equal(doc.items.find(i => i.id === 'talk1b').start_frame, 12);
   assert.ok(!doc.items.some(i => i.id === 'cap1'), 'linked caption removed with its media');
+});
+test('P2 operations: props, graphic add, duck set/clear, split/trim rules for speed, fades and transitions', async t => {
+  const { CAPTION_FONT, installCaptionFont } = await import('../caption-font.mjs');
+  const doc = { ...(await load('valid', 'p2-packaging.json')), revision: 1, parent_sha256: null, caption_font: { ...CAPTION_FONT } };
+  const dir = await onDisk(t, doc);
+  await installCaptionFont(dir);
+  const item = async key => (await readProject(dir)).items.find(i => i.id === key);
+  // Duck edits may share a batch (only lock changes must be alone).
+  await editBatch(dir, batch(1, [{ type: 'edit_track', track_id: 'a_music', duck: null },
+    { type: 'set_item_props', item_id: 'talk2', props: { speed: null, transition_in: null, fade_out_frames: null } },
+    { type: 'move_item', item_id: 'talk2', start_frame: 150 }]));
+  let current = await readProject(dir);
+  assert.ok(!('duck' in current.tracks.find(tr => tr.id === 'a_music')));
+  assert.deepEqual(['speed', 'transition_in', 'fade_out_frames'].filter(k => k in current.items.find(i => i.id === 'talk2')), []);
+  await editBatch(dir, batch(2, [{ type: 'edit_track', track_id: 'a_music', duck: { under_track_id: 'v_main', depth_db: -9, attack_frames: 3, release_frames: 6 } },
+    { type: 'move_item', item_id: 'talk2', start_frame: 140 },
+    { type: 'set_item_props', item_id: 'talk2', props: { speed: 1.25, transition_in: { kind: 'crossfade', frames: 10 }, fade_in_frames: 0 } },
+    { type: 'add_item', item: { id: 'card', track_id: 'v_gfx', kind: 'graphic', template: 'title-card', vars: { title: '开场' }, start_frame: 100, frames: 30, fade_in_frames: 5 } }]));
+  current = await readProject(dir);
+  assert.equal(current.tracks.find(tr => tr.id === 'a_music').duck.depth_db, -9);
+  assert.equal((await item('card')).template, 'title-card');
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'cap1', props: { speed: 2 } }])), /cannot carry speed/);
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'talk1', props: { fade_in_frames: 200 } }])), /Invalid fade_in_frames|Fades exceed/);
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'card', props: { vars: null } }])), /vars cannot be removed/);
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'edit_track', track_id: 'a_music', duck: { under_track_id: 'c_sub', depth_db: -9, attack_frames: 3, release_frames: 6 } }])), /video or audio/);
+  // Split: head keeps fade_in + transition_in, tail keeps fade_out; source advances by speed.
+  await editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'talk2', props: { fade_out_frames: 12 } },
+    { type: 'split_item', item_id: 'talk2', at_frame: 200, new_item_id: 'talk2b' }]));
+  const head = await item('talk2'), tail = await item('talk2b');
+  assert.deepEqual([head.frames, head.transition_in?.frames, head.fade_in_frames, head.fade_out_frames], [60, 10, 0, undefined]);
+  assert.deepEqual([tail.start_frame, tail.frames, tail.source_in_seconds, tail.speed, tail.fade_out_frames, 'transition_in' in tail], [200, 60, 12.5, 1.25, 12, false]);
+  // Trim head on a sped-up item advances the source by frames/fps × speed; a
+  // trim that breaks the crossfade overlap is rejected unless fixed in the batch.
+  await editBatch(dir, batch(4, [{ type: 'trim_item', item_id: 'talk2b', head_frames: 6 }]));
+  assert.equal((await item('talk2b')).source_in_seconds, 12.75);
+  await assert.rejects(editBatch(dir, batch(5, [{ type: 'trim_item', item_id: 'talk2', head_frames: 4 }])), /exactly 10 frames/);
+  await editBatch(dir, batch(5, [{ type: 'trim_item', item_id: 'talk2', head_frames: 4 }, { type: 'set_item_props', item_id: 'talk2', props: { transition_in: { kind: 'crossfade', frames: 6 } } }]));
+  assert.equal((await item('talk2')).source_in_seconds, 10.166666667);
+  await editBatch(dir, batch(6, [{ type: 'edit_track', track_id: 'a_music', locked: true }]));
+  await assert.rejects(editBatch(dir, batch(7, [{ type: 'edit_track', track_id: 'a_music', duck: null }])), /locked/, 'a locked track keeps its duck');
+  // Legacy project whose captions use system fonts: graphics would force a font rebinding.
+  const legacy = await onDisk(t, v2Fixture());
+  await assert.rejects(editBatch(legacy, batch(1, [{ type: 'add_item', item: { id: 'card', track_id: 'v_broll', kind: 'graphic', template: 'title-card',
+    vars: { title: '开场' }, start_frame: 60, frames: 12 } }])), /need the bound caption font/);
 });
 test('replace_media drops old linked captions unless new ones are given; revert_to must be alone', async t => {
   const dir = await onDisk(t, v2Fixture());

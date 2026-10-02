@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isV2, resolveCaptions } from './timeline.mjs';
+import { graphicTexts } from './templates.mjs';
 
 // Versioned renderer resource, not an assertion about the original video's font.
 const bundle = new URL('./fonts/', import.meta.url);
@@ -22,6 +23,14 @@ export function activeCaptions(project) {
   if (isV2(project)) return resolveCaptions(project).map(caption => caption.item);
   return project.clips.flatMap(clip => clip.captions.filter(caption =>
     caption.to > clip.in_seconds && caption.from < clip.in_seconds + clip.frames / project.canvas.fps));
+}
+
+// Every text run the bound font renders: visible captions and graphic template
+// text (graphics reuse the caption font and are bound the same way).
+export function fontRuns(project) {
+  const captions = activeCaptions(project).map(caption => ({ text: caption.text, weight: caption.style?.weight ?? 600 }));
+  if (!isV2(project)) return captions;
+  return [...captions, ...project.items.filter(i => i.kind === 'graphic').flatMap(graphicTexts).map(({ text, weight }) => ({ text, weight }))];
 }
 
 async function fontBytes(file) {
@@ -63,7 +72,7 @@ function glyphRanges(bytes) {
 
 function checkGlyphs(bytes, project) {
   const ranges = glyphRanges(bytes);
-  for (const char of new Set(activeCaptions(project).flatMap(caption => Array.from(caption.text)))) {
+  for (const char of new Set(fontRuns(project).flatMap(run => Array.from(run.text)))) {
     if ('\n\r\t'.includes(char)) continue;
     const code = char.codePointAt(0);
     if (!ranges.some(([start, end, glyph]) => code >= start && code <= end && glyph + code - start > 0)) {
@@ -74,7 +83,7 @@ function checkGlyphs(bytes, project) {
 
 // Check glyphs against the bundled font and record the binding (no writes).
 export async function planCaptionFont(project) {
-  if (!activeCaptions(project).length) return false;
+  if (!fontRuns(project).length) return false;
   checkGlyphs(await fontBytes(fileURLToPath(new URL(manifest.file, bundle))), project);
   project.caption_font = { ...CAPTION_FONT };
   return true;
@@ -90,7 +99,7 @@ export async function installCaptionFont(root) {
 }
 
 export async function bindCaptionFont(root, project) {
-  if (!activeCaptions(project).length) return;
+  if (!fontRuns(project).length) return;
   const binding = { ...project };
   await planCaptionFont(binding);
   await fs.mkdir(path.join(root, 'fonts'));
@@ -113,12 +122,12 @@ export async function copyCaptionFont(root, destination, project) {
 
 export function captionFontCss(project) {
   if (!project.caption_font) return '';
-  return `@font-face{font-family:'${FONT_FAMILY}';src:url('${project.caption_font.file}') format('truetype');font-weight:100 900;font-style:normal;font-display:block}.caption{font-family:'${FONT_FAMILY}';font-synthesis:none}`;
+  return `@font-face{font-family:'${FONT_FAMILY}';src:url('${project.caption_font.file}') format('truetype');font-weight:100 900;font-style:normal;font-display:block}.caption,.gfx{font-family:'${FONT_FAMILY}';font-synthesis:none}`;
 }
 
 export function captionFontReady(project) {
   if (!project.caption_font) return '';
-  const weights = [...new Set(activeCaptions(project).map(c => c.style?.weight ?? 600))];
+  const weights = [...new Set(fontRuns(project).map(run => run.weight))];
   // Producer's tween interceptor owns __hfTimelinesBuilding, and fonts.ready
   // resolves even on font failure. Use its explicit async build registry.
   // Producer 0.8.53 treated rejected build promises as settled (gate re-verified

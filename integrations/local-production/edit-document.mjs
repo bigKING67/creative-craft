@@ -1,5 +1,6 @@
 import { validateCaptionFont } from './caption-font.mjs';
-import { outputFrames } from './timeline.mjs';
+import { outputFrames, sourceSeconds } from './timeline.mjs';
+import { validateGraphicVars } from './templates.mjs';
 
 export const SCHEMA_V1 = 'creative-craft.local-edit.v1';
 export const SCHEMA_V2 = 'creative-craft.edit-document.v2';
@@ -49,9 +50,19 @@ export function validateOrigin(origin) {
       ('provenance_ref' in origin && !text(origin.provenance_ref))) fail('Invalid asset origin');
 }
 
-const MEDIA_KEYS = ['id', 'track_id', 'kind', 'asset_id', 'start_frame', 'frames', 'source_in_seconds', 'volume'];
+const FADE_KEYS = ['fade_in_frames', 'fade_out_frames'];
+const MEDIA_KEYS = ['id', 'track_id', 'kind', 'asset_id', 'start_frame', 'frames', 'source_in_seconds', 'volume', 'speed', ...FADE_KEYS, 'transition_in'];
 const VISUAL_KEYS = ['fit', 'opacity', 'transform'];
 const CAPTION_KEYS = ['id', 'track_id', 'kind', 'text', 'style', 'link', 'start_frame', 'frames'];
+const GRAPHIC_KEYS = ['id', 'track_id', 'kind', 'template', 'vars', 'start_frame', 'frames', 'opacity', ...FADE_KEYS];
+const P2_TIMING_KEYS = ['speed', ...FADE_KEYS, 'transition_in'];
+
+// P2 fades: non-negative integer frames whose sum fits the item.
+function validateFades(item) {
+  for (const key of FADE_KEYS) if (key in item && !integer(item[key], 0, item.frames)) fail(`Invalid ${key}: ${item.id}`);
+  if ((item.fade_in_frames ?? 0) + (item.fade_out_frames ?? 0) > item.frames) fail(`Fades exceed item length: ${item.id}`);
+}
+const visibleVar = v => (typeof v === 'string' && v.length >= 1 && v.length <= 200) || (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean';
 
 // Semantic validation of creative-craft.edit-document.v2. JSON Schema covers
 // shape; these rules cover kinds, references, ranges, overlap and output length.
@@ -77,10 +88,21 @@ export function validateV2(doc) {
   }
   const tracks = new Map();
   for (const track of doc.tracks) {
-    keys(track, ['id', 'kind', 'locked', 'name']);
+    keys(track, ['id', 'kind', 'locked', 'name', 'duck']);
     if (!id(track.id) || tracks.has(track.id) || !['video', 'audio', 'caption'].includes(track.kind) ||
         typeof track.locked !== 'boolean' || ('name' in track && !text(track.name))) fail('Invalid track');
     tracks.set(track.id, track);
+  }
+  // Ducking: one level only, audio tracks under an existing other video/audio track.
+  for (const track of doc.tracks.filter(t => 'duck' in t)) {
+    if (track.kind !== 'audio') fail(`Duck is only allowed on audio tracks: ${track.id}`);
+    keys(track.duck, ['under_track_id', 'depth_db', 'attack_frames', 'release_frames']);
+    const under = tracks.get(track.duck.under_track_id);
+    if (!under) fail(`Duck under unknown track: ${track.duck.under_track_id}`);
+    if (under === track) fail(`Track cannot duck under itself: ${track.id}`);
+    if (under.kind === 'caption') fail(`Duck must follow a video or audio track: ${track.id}`);
+    if (under.duck) fail(`Duck under a ducked track is not allowed (one level only): ${track.id}`);
+    if (!number(track.duck.depth_db, -24, -3) || !integer(track.duck.attack_frames, 0, 60) || !integer(track.duck.release_frames, 0, 120)) fail(`Invalid duck parameters: ${track.id}`);
   }
   const items = new Map();
   for (const item of doc.items) {
@@ -95,7 +117,13 @@ export function validateV2(doc) {
       if (track.kind === 'video' ? !asset.video : !asset.audio) fail(`Asset ${asset.id} has no ${track.kind} for track ${track.id}`);
       if (!integer(item.start_frame, 0, limit) || !integer(item.frames, 1, limit) || !number(item.source_in_seconds, 0, 1800) ||
           !number(item.volume, 0, 1)) fail(`Media item ${item.id} requires asset_id/start_frame/frames/source_in_seconds/volume`);
-      if (item.source_in_seconds + item.frames / fps > asset.duration + 0.001) fail(`Source range exceeds asset: ${item.id}`);
+      if ('speed' in item && !number(item.speed, 0.1, 10)) fail(`Invalid speed: ${item.id}`);
+      if (item.source_in_seconds + sourceSeconds(item, fps) > asset.duration + 0.001) fail(`Source range exceeds asset (speed-scaled): ${item.id}`);
+      validateFades(item);
+      if ('transition_in' in item) {
+        keys(item.transition_in, ['kind', 'frames']);
+        if (item.transition_in.kind !== 'crossfade' || !integer(item.transition_in.frames, 1, limit)) fail(`Invalid transition_in: ${item.id}`);
+      }
       if (('fit' in item && !['contain', 'cover'].includes(item.fit)) || ('opacity' in item && !number(item.opacity, 0, 1))) fail(`Invalid visual properties: ${item.id}`);
       if ('transform' in item) {
         keys(item.transform, ['x', 'y', 'scale']);
@@ -103,6 +131,7 @@ export function validateV2(doc) {
       }
     } else if (item.kind === 'caption') {
       if (track.kind !== 'caption') fail(`Caption item ${item.id} must be on a caption track`);
+      if (P2_TIMING_KEYS.some(k => k in item)) fail(`Caption ${item.id} cannot carry speed, fades or transitions`);
       keys(item, CAPTION_KEYS);
       if (!text(item.text)) fail(`Invalid caption text: ${item.id}`);
       if ('style' in item) validateCaptionStyle(item.style);
@@ -112,6 +141,16 @@ export function validateV2(doc) {
         if (!number(item.link.source_from, 0, 1800) || !number(item.link.source_to, 0, 1800) ||
             item.link.source_to <= item.link.source_from) fail(`Invalid caption link range: ${item.id}`);
       } else if (!integer(item.start_frame, 0, limit) || !integer(item.frames, 1, limit)) fail(`Free caption ${item.id} requires start_frame/frames`);
+    } else if (item.kind === 'graphic') {
+      if (track.kind !== 'video') fail(`Graphic item ${item.id} must be on a video track`);
+      const foreign = Object.keys(item).filter(k => !GRAPHIC_KEYS.includes(k));
+      if (foreign.length) fail(`Graphic item ${item.id} cannot carry media/caption fields: ${foreign.join(', ')}`);
+      if (typeof item.template !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(item.template) || !item.vars || typeof item.vars !== 'object' || Array.isArray(item.vars) ||
+          !integer(item.start_frame, 0, limit) || !integer(item.frames, 1, limit)) fail(`Graphic item ${item.id} requires template/vars/start_frame/frames`);
+      for (const [key, value] of Object.entries(item.vars)) if (!/^[a-z][a-z0-9_]{0,31}$/.test(key) || !visibleVar(value)) fail(`Graphic var ${key} must be a string (1–200), finite number or boolean: ${item.id}`);
+      if ('opacity' in item && !number(item.opacity, 0, 1)) fail(`Invalid visual properties: ${item.id}`);
+      validateFades(item);
+      validateGraphicVars(item); // Node only: template existence and typed vars.
     } else fail(`Invalid item kind: ${item.id}`);
   }
   for (const item of doc.items) {
@@ -120,11 +159,25 @@ export function validateV2(doc) {
     if (media?.kind !== 'media') fail(`Caption ${item.id} links to unknown media item: ${item.link.item_id}`);
     if (item.link.source_to > assets.get(media.asset_id).duration + 0.001) fail(`Caption link exceeds asset: ${item.id}`);
   }
+  // Same-track items never overlap, except a crossfade: the later media item
+  // declares transition_in and overlaps its immediate predecessor by exactly
+  // transition_in.frames (no more than either item's length). A declared
+  // crossfade without that overlap is invalid too.
   for (const track of doc.tracks) {
-    const spans = doc.items.filter(i => i.track_id === track.id && i.kind === 'media').sort((a, b) => a.start_frame - b.start_frame);
-    for (let i = 1; i < spans.length; i++) {
-      if (spans[i].start_frame < spans[i - 1].start_frame + spans[i - 1].frames) fail(`Overlapping media items on track ${track.id}: ${spans[i - 1].id}, ${spans[i].id}`);
-    }
+    const spans = doc.items.filter(i => i.track_id === track.id && (i.kind === 'media' || i.kind === 'graphic'))
+      .sort((a, b) => a.start_frame - b.start_frame || a.frames - b.frames);
+    let earlierEnd = 0;
+    spans.forEach((item, i) => {
+      const prev = spans[i - 1], overlap = prev ? prev.start_frame + prev.frames - item.start_frame : 0;
+      if (item.transition_in) {
+        const { frames } = item.transition_in;
+        if (!prev || prev.kind !== 'media' || overlap !== frames) fail(`Crossfade ${item.id} must overlap its predecessor on track ${track.id} by exactly ${frames} frames`);
+        if (frames > prev.frames || frames > item.frames) fail(`Crossfade ${item.id} is longer than an item it joins`);
+        if (item.start_frame <= prev.start_frame) fail(`Crossfade ${item.id} must start after its predecessor ${prev.id}`);
+      } else if (overlap > 0) fail(`Overlapping items on track ${track.id} without crossfade: ${prev.id}, ${item.id}`);
+      if (item.start_frame < earlierEnd) fail(`Overlapping items on track ${track.id}: ${item.id} overlaps more than its predecessor`);
+      if (prev) earlierEnd = Math.max(earlierEnd, prev.start_frame + prev.frames);
+    });
   }
   const frames = outputFrames(doc);
   if (frames < 1) fail('Empty timeline');

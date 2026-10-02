@@ -1,11 +1,11 @@
 import * as fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createProject, editProject, editBatch, readProject, digest, run } from './project.mjs';
 import { renderProject } from './render.mjs';
-import { verifySmoke, verifyMultitrack, frameAt, pcmAt, mae } from './verify-smoke.mjs';
+import { verifySmoke, verifyMultitrack, verifyBrand, frameAt, pcmAt, mae } from './verify-smoke.mjs';
 
 // Self-authored synthetic signals; no customer assets, ASR, TTS or paid APIs.
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -149,12 +149,67 @@ await fs.writeFile(path.join(tampered, 'receipt.json'), JSON.stringify(receipt, 
 const bad = await cli('qa', v2, tampered, path.join(base, 'tampered-qa'));
 assert.equal(bad.verdict, 'fail');
 assert.equal(bad.checks.find(c => c.id === 'audio-stream').status, 'fail');
-const revisionFiles = (await fs.readdir(path.join(v2, 'revisions'))).filter(n => n.endsWith('.json')).map(n => path.join(v2, 'revisions', n));
+summary.qa = { verdict: qa.verdict, checks: Object.fromEntries(qa.checks.map(c => [c.id, c.status])), samples: qa.samples.length,
+  boundary_clips: qa.boundary_clips.length, fault_injection: { verdict: bad.verdict, audio_stream: 'fail' } };
+
+// 5. P2 brand packaging: title card + lower third, two main shots joined by a
+// crossfade, a 1.5× segment, music ducked under the main track, fades.
+const brand = path.join(base, 'packaging');
+const depthDb = -12;
+await createProject(brand, { project_id: 'brand-smoke', title: '品牌包装技术样例', canvas: { width: 1280, height: 720, fps: 24 },
+  assets: [{ id: 'talk', path: source }, { id: 'bars', path: broll, origin: { kind: 'generated', provenance_ref: 'jobs/synthetic-bars.json' } }, { id: 'music', path: music }],
+  tracks: [{ id: 'v_main', kind: 'video', locked: false, name: '主画面' }, { id: 'v_gfx', kind: 'video', locked: false, name: '包装' },
+    { id: 'a_music', kind: 'audio', locked: false, duck: { under_track_id: 'v_main', depth_db: depthDb, attack_frames: 6, release_frames: 12 } },
+    { id: 'c_sub', kind: 'caption', locked: false }],
+  items: [
+    { id: 'main1', track_id: 'v_main', kind: 'media', asset_id: 'talk', start_frame: 0, frames: 72, source_in_seconds: 0, volume: 0.8, fit: 'cover', fade_in_frames: 12 },
+    { id: 'main2', track_id: 'v_main', kind: 'media', asset_id: 'bars', start_frame: 60, frames: 60, source_in_seconds: 0, volume: 0, fit: 'cover',
+      transition_in: { kind: 'crossfade', frames: 12 } },
+    { id: 'main3', track_id: 'v_main', kind: 'media', asset_id: 'talk', start_frame: 120, frames: 48, source_in_seconds: 2.5, volume: 0.8, fit: 'cover',
+      speed: 1.5, fade_out_frames: 12 },
+    { id: 'card', track_id: 'v_gfx', kind: 'graphic', template: 'title-card', vars: { title: '品牌焕新', subtitle: 'Creative Craft 技术样例' },
+      start_frame: 0, frames: 36, fade_in_frames: 6, fade_out_frames: 6 },
+    { id: 'strap', track_id: 'v_gfx', kind: 'graphic', template: 'lower-third', vars: { title: '主讲人', subtitle: '品牌顾问', accent: '#2f9e8f' },
+      start_frame: 76, frames: 40, fade_in_frames: 6, fade_out_frames: 6 },
+    { id: 'bed', track_id: 'a_music', kind: 'media', asset_id: 'music', start_frame: 0, frames: 168, source_in_seconds: 0, volume: 0.5,
+      fade_in_frames: 12, fade_out_frames: 24 },
+    { id: 'line', track_id: 'c_sub', kind: 'caption', text: '变速：细节一闪而过', link: { item_id: 'main3', source_from: 3.5, source_to: 4.5 } }] });
+const brandRender = await renderProject(brand, path.join(base, 'packaging-export'), { revision: 1 });
+assert.equal(brandRender.lint.warning_count + brandRender.lint.error_count, 0, JSON.stringify(brandRender.lint.findings));
+assert.ok(!brandRender.lint.findings.some(f => f.code === 'audio_volume_double_automation'));
+assert.equal(brandRender.caption_font.runtime_load, 'passed');
+const brandHtml = await fs.readFile(path.join(base, 'packaging-export/index.html'), 'utf8');
+assert.match(brandHtml, /id="v-main3"[^>]*data-playback-rate="1.5"/);
+assert.ok(!/<audio[^>]*data-volume/.test(brandHtml) && (brandHtml.match(/<audio[^>]*data-automation=/g) ?? []).length === 3, 'every sound level is a volume lane');
+// Linked caption on the 1.5× item: source 3.5–4.5 s → output 5 + 1/1.5 … 5 + 2/1.5 s.
+assert.match(await fs.readFile(path.join(base, 'packaging-export/captions.vtt'), 'utf8'), /00:00:05\.667 --> 00:00:06\.333\n变速：细节一闪而过/);
+const brandSignals = await verifyBrand(base, 'packaging-export', { depthDb });
+const brandQa = await cli('qa', brand, path.join(base, 'packaging-export'), path.join(base, 'packaging-qa'));
+assert.notEqual(brandQa.verdict, 'fail', JSON.stringify(brandQa.checks.filter(c => c.status === 'fail')));
+const brandCheck = id => brandQa.checks.find(c => c.id === id);
+for (const id of ['graphic-safe-area', 'caption-safe-area', 'hyperframes-lint', 'duration-matches-revision', 'audio-stream']) assert.equal(brandCheck(id).status, 'pass', id);
+assert.ok('audio_lowered_db' in brandCheck('true-peak').measured, 'true-peak cites the limiter record');
+assert.ok(brandQa.samples.some(s => s.item_id === 'card') && brandQa.samples.some(s => s.item_id === 'strap'), 'graphics are sampled');
+// Fault injection for a P2 check: a large two-line caption centred at 90% height
+// leaves the 5% safe area; the QA of that revision must fail on it.
+await editBatch(brand, { base_revision: 1, author: 'agent', summary: 'Oversized low caption', operations: [{ type: 'add_item', item: { id: 'low', track_id: 'c_sub',
+  kind: 'caption', text: '字幕太大\n贴近底边', start_frame: 24, frames: 24, style: { fontHeight: 0.08, centerY: 0.9, color: '#ffffff', strokeWidth: 0.002, weight: 700 } } }] });
+await renderProject(brand, path.join(base, 'packaging-unsafe-preview'), { revision: 2, preview: true });
+const unsafe = await cli('qa', brand, path.join(base, 'packaging-unsafe-preview'), path.join(base, 'packaging-unsafe-qa'));
+assert.equal(unsafe.verdict, 'fail');
+const unsafeCheck = unsafe.checks.find(c => c.id === 'caption-safe-area');
+assert.equal(unsafeCheck.status, 'fail');
+assert.ok(unsafeCheck.measured.boxes.find(b => b.item_id === 'low').bottom > 0.95);
+summary.brand_packaging = { render: brandRender.status, lint: { errors: brandRender.lint.error_count, warnings: brandRender.lint.warning_count },
+  audio_limiter: brandRender.audio_limiter, signals: brandSignals, qa: { verdict: brandQa.verdict, checks: Object.fromEntries(brandQa.checks.map(c => [c.id, c.status])),
+    true_peak: brandCheck('true-peak').measured }, fault_injection: { verdict: unsafe.verdict, caption_safe_area: unsafeCheck.status,
+    low_caption_box: unsafeCheck.measured.boxes.find(b => b.item_id === 'low') } };
+
+const revisionFiles = [v2, brand].flatMap(dir => readdirSync(path.join(dir, 'revisions')).filter(n => n.endsWith('.json')).map(n => path.join(dir, 'revisions', n)));
 revisionFiles.push(...[6, 7].map(n => path.join(root, 'revisions', `00000${n}.json`)));
 await validateSchema('edit-document-v2.schema.json', revisionFiles);
-await validateSchema('render-qa.schema.json', [path.join(base, 'multitrack-qa/qa.json'), path.join(base, 'tampered-qa/qa.json')]);
-summary.qa = { verdict: qa.verdict, checks: Object.fromEntries(qa.checks.map(c => [c.id, c.status])), samples: qa.samples.length,
-  boundary_clips: qa.boundary_clips.length, schema: 'passed', fault_injection: { verdict: bad.verdict, audio_stream: 'fail' } };
+await validateSchema('render-qa.schema.json', ['multitrack-qa', 'tampered-qa', 'packaging-qa', 'packaging-unsafe-qa'].map(d => path.join(base, d, 'qa.json')));
+summary.schema = { revisions: revisionFiles.length, qa_files: 4, status: 'passed' };
 summary.input_preserved = before === await digest(source);
 summary.status = 'passed';
 await fs.writeFile(path.join(base, 'summary.json'), JSON.stringify(summary, null, 2));
