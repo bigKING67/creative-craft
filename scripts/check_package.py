@@ -67,6 +67,7 @@ def main() -> int:
         "skills/creative-craft/scripts/creative_craft_project.py",
         "skills/creative-craft/scripts/creative_craft_project_ops.py",
         "skills/creative-craft/scripts/creative_craft_runtime.py",
+        "skills/creative-craft/scripts/creative_craft_video.py",
         "skills/creative-craft/templates/brand-binding.json",
         "skills/creative-craft/templates/brand-pack.json",
         "skills/creative-craft/templates/copy-sheet.json",

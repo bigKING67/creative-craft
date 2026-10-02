@@ -17,6 +17,7 @@ DOMAIN_MODULES = {
     "creative_craft_project",
     "creative_craft_project_ops",
     "creative_craft_runtime",
+    "creative_craft_video",
 }
 
 

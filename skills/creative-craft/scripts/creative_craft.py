@@ -17,8 +17,9 @@ import creative_craft_packs as packs
 import creative_craft_project as project
 import creative_craft_project_ops as project_ops
 import creative_craft_runtime as runtime
+import creative_craft_video as video
 
-_MODULES = (contracts, project, evaluation, runtime, packs, project_ops, entrypoint)
+_MODULES = (contracts, project, evaluation, runtime, packs, project_ops, video, entrypoint)
 for _module in _MODULES:
     for _name, _value in vars(_module).items():
         if not _name.startswith("__"):

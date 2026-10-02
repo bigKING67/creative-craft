@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -2113,9 +2114,7 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _indexed_ids(
-    r: Result, values: Any, label: str
-) -> dict[str, dict[str, Any]]:
+def _indexed_ids(r: Result, values: Any, label: str) -> dict[str, dict[str, Any]]:
     indexed: dict[str, dict[str, Any]] = {}
     for index, value in enumerate(values if isinstance(values, list) else []):
         if not isinstance(value, dict) or not isinstance(value.get("id"), str):
@@ -2156,7 +2155,10 @@ def edit_document_item_frames(data: dict[str, Any]) -> dict[str, tuple[int, int]
             if frames:
                 resolved[item_id] = frames
         elif "start_frame" in item and "frames" in item:
-            resolved[item_id] = (item["start_frame"], item["start_frame"] + item["frames"])
+            resolved[item_id] = (
+                item["start_frame"],
+                item["start_frame"] + item["frames"],
+            )
     return resolved
 
 
@@ -2196,7 +2198,7 @@ def edit_document_generated_share(data: dict[str, Any]) -> float:
         | {item["start_frame"] + item["frames"] for item in video_items}
     )
     generated_frames = 0
-    for start, end in zip(bounds, bounds[1:], strict=False):
+    for start, end in itertools.pairwise(bounds):
         covering = [
             item
             for item in video_items
@@ -2231,19 +2233,30 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
         label = f"items[{index}] ({item.get('id')})"
         track = tracks.get(str(item.get("track_id")))
         if track is None:
-            r.errors.append(f"{label} references unknown track {item.get('track_id')!r}")
+            r.errors.append(
+                f"{label} references unknown track {item.get('track_id')!r}"
+            )
         track_kind = track.get("kind") if track else None
         if item.get("kind") == "media":
-            for key in ("asset_id", "start_frame", "frames", "source_in_seconds", "volume"):
+            for key in (
+                "asset_id",
+                "start_frame",
+                "frames",
+                "source_in_seconds",
+                "volume",
+            ):
                 r.require(key in item, f"{label} media item requires {key}")
             for key in ("text", "style", "link"):
                 r.require(key not in item, f"{label} media item must not set {key}")
             r.require(
-                track_kind != "caption", f"{label} media item cannot be on a caption track"
+                track_kind != "caption",
+                f"{label} media item cannot be on a caption track",
             )
             asset = assets.get(str(item.get("asset_id")))
             if "asset_id" in item and asset is None:
-                r.errors.append(f"{label} references unknown asset {item.get('asset_id')!r}")
+                r.errors.append(
+                    f"{label} references unknown asset {item.get('asset_id')!r}"
+                )
             if asset is not None:
                 if track_kind == "video":
                     r.require(
@@ -2273,11 +2286,16 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 and isinstance(item.get("frames"), int)
             ):
                 by_track.setdefault(track["id"], []).append(
-                    (item["start_frame"], item["start_frame"] + item["frames"], item["id"])
+                    (
+                        item["start_frame"],
+                        item["start_frame"] + item["frames"],
+                        item["id"],
+                    )
                 )
         elif item.get("kind") == "caption":
             r.require(
-                track_kind == "caption", f"{label} caption item must be on a caption track"
+                track_kind == "caption",
+                f"{label} caption item must be on a caption track",
             )
             r.require(nonempty(item.get("text")), f"{label} caption item requires text")
             for key in ("asset_id", "source_in_seconds", "volume"):
@@ -2293,7 +2311,9 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                     target is not None and target.get("kind") == "media",
                     f"{label} link must reference a media item, got {link.get('item_id')!r}",
                 )
-                if _is_number(link.get("source_from")) and _is_number(link.get("source_to")):
+                if _is_number(link.get("source_from")) and _is_number(
+                    link.get("source_to")
+                ):
                     r.require(
                         link["source_to"] > link["source_from"],
                         f"{label} link.source_to must be greater than link.source_from",
@@ -2314,11 +2334,13 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                         )
             else:
                 for key in ("start_frame", "frames"):
-                    r.require(key in item, f"{label} caption without link requires {key}")
+                    r.require(
+                        key in item, f"{label} caption without link requires {key}"
+                    )
     for track_id, spans in by_track.items():
         spans.sort()
-        for (_, previous_end, previous_id), (start, _, item_id) in zip(
-            spans, spans[1:], strict=False
+        for (_, previous_end, previous_id), (start, _, item_id) in itertools.pairwise(
+            spans
         ):
             r.require(
                 start >= previous_end,
@@ -2351,10 +2373,13 @@ def validate_render_qa(data: dict[str, Any]) -> Result:
             review.get("decision") != "pending",
             "completed review requires a decision other than pending",
         )
-        r.require(nonempty(review.get("reviewer")), "completed review requires reviewer")
+        r.require(
+            nonempty(review.get("reviewer")), "completed review requires reviewer"
+        )
     if review.get("decision") == "pending":
         r.require(
-            review.get("status") == "pending", "pending decision requires review.status pending"
+            review.get("status") == "pending",
+            "pending decision requires review.status pending",
         )
     checks = data.get("checks", [])
     expected = render_qa_expected_verdict(checks)
@@ -2408,7 +2433,9 @@ def validate_production_plan(data: dict[str, Any]) -> Result:
                 _is_number(maximum) and 0 <= maximum <= 1,
                 f"{label} max_generated_share requires max between 0 and 1",
             )
-            r.require("min" not in check, f"{label} max_generated_share must not set min")
+            r.require(
+                "min" not in check, f"{label} max_generated_share must not set min"
+            )
         else:
             r.require(
                 "min" not in check and "max" not in check,
@@ -2470,7 +2497,9 @@ def validate_video_production(data: dict[str, Any]) -> Result:
     policy = data.get("policy", {})
     budget = policy.get("budget", {})
     if budget.get("mode") == "cap":
-        r.require(_is_number(budget.get("cap")), "budget mode cap requires a numeric cap")
+        r.require(
+            _is_number(budget.get("cap")), "budget mode cap requires a numeric cap"
+        )
     max_rounds = policy.get("max_revision_rounds")
     if isinstance(max_rounds, int) and isinstance(data.get("revision_rounds"), int):
         r.require(
@@ -2491,7 +2520,9 @@ def validate_video_production(data: dict[str, Any]) -> Result:
                 f"stage {stage_id} is completed without its required approval",
             )
         if stage.get("status") == "skipped":
-            r.require(nonempty(stage.get("note")), f"skipped stage {stage_id} requires a note")
+            r.require(
+                nonempty(stage.get("note")), f"skipped stage {stage_id} requires a note"
+            )
     ledger = _indexed_ids(r, data.get("ledger"), "ledger")
     for entry_id, entry in ledger.items():
         settled = entry.get("status") == "settled"

@@ -32,6 +32,7 @@ from creative_craft_runtime import (
     cmd_self_test,
     cmd_validate,
 )
+from creative_craft_video import register_video_commands
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -241,6 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
     delivery_parser.add_argument("--file", required=True)
     delivery_parser.add_argument("--json", action="store_true")
     delivery_parser.set_defaults(func=cmd_verify_delivery)
+
+    register_video_commands(sub)
     return parser
 
 
