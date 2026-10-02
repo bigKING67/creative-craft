@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fail, id, integer, keys, number, text, validateNewAssetOrigin } from './edit-document.mjs';
-import { outputFrames, round9 } from './timeline.mjs';
+import { outputFrames, round9, speedOf } from './timeline.mjs';
 
 // Canonical JSON: object keys sorted recursively, no whitespace. The batch's
 // operations_sha256 is SHA-256 over this UTF-8 string.
@@ -43,11 +43,18 @@ export async function applyOperations(base, operations, { importAsset, imports }
       if (!integer(index, 0, doc.tracks.length)) fail('Invalid track index');
       doc.tracks.splice(index, 0, { locked: false, ...structuredClone(op.track) });
     } else if (op.type === 'edit_track') {
-      keys(op, ['type', 'track_id', 'locked', 'name']);
+      keys(op, ['type', 'track_id', 'locked', 'name', 'duck']);
       const track = findTrack(doc, op.track_id);
-      if (!('locked' in op) && !('name' in op)) fail('edit_track requires locked or name');
+      if (!['locked', 'name', 'duck'].some(k => k in op)) fail('edit_track requires locked, name or duck');
       if ('locked' in op) { if (typeof op.locked !== 'boolean') fail('Invalid locked flag'); track.locked = op.locked; }
       if ('name' in op) { if (!text(op.name)) fail('Invalid track name'); track.name = op.name; }
+      if ('duck' in op) {
+        // Ducking changes how a track's items sound, so a locked track keeps its duck.
+        unlocked(doc, track.id);
+        if (op.duck === null) delete track.duck;
+        else if (plainObject(op.duck)) track.duck = structuredClone(op.duck); // Shape and references: validateV2.
+        else fail('Invalid duck');
+      }
     } else if (op.type === 'add_item') {
       keys(op, ['type', 'item']);
       if (!plainObject(op.item)) fail('Invalid item');
@@ -90,10 +97,12 @@ export async function applyOperations(base, operations, { importAsset, imports }
       unlocked(doc, item.track_id);
       if (!['head_frames', 'tail_frames', 'slip_seconds'].some(k => k in op)) fail('trim_item requires head_frames, tail_frames or slip_seconds');
       for (const k of ['head_frames', 'tail_frames']) if (k in op && !integer(op[k], -600 * fps, 600 * fps)) fail(`Invalid ${k}`);
+      // Fades and transition_in are kept as authored; the batch result must still
+      // validate (fades fit, crossfade overlap exact), else adjust them in the batch.
       if ('head_frames' in op) {
         item.start_frame += op.head_frames;
         item.frames -= op.head_frames;
-        if (item.kind === 'media') item.source_in_seconds = round9(item.source_in_seconds + op.head_frames / fps);
+        if (item.kind === 'media') item.source_in_seconds = round9(item.source_in_seconds + op.head_frames / fps * speedOf(item));
       }
       if ('tail_frames' in op) item.frames -= op.tail_frames;
       if ('slip_seconds' in op) {
@@ -109,8 +118,14 @@ export async function applyOperations(base, operations, { importAsset, imports }
       const head = op.at_frame - item.start_frame;
       if (!Number.isInteger(op.at_frame) || head < 1 || head >= item.frames) fail('Split frame must be strictly inside the item');
       const tail = { ...structuredClone(item), id: op.new_item_id, start_frame: op.at_frame, frames: item.frames - head };
+      // Rule: the head keeps what happens at the item's start (fade_in,
+      // transition_in), the tail keeps what happens at its end (fade_out); the
+      // new cut between them is a hard cut. Speed, volume and visuals copy to both.
+      delete item.fade_out_frames;
+      delete tail.fade_in_frames;
+      delete tail.transition_in;
       if (item.kind === 'media') {
-        tail.source_in_seconds = round9(item.source_in_seconds + head / fps);
+        tail.source_in_seconds = round9(item.source_in_seconds + head / fps * speedOf(item));
         // Rule: a linked caption belongs to the half whose source window holds
         // its source_from; the other half never shows it (no duplication).
         for (const caption of linkedTo(doc, item.id)) {
@@ -140,13 +155,13 @@ export async function applyOperations(base, operations, { importAsset, imports }
       }
     } else if (op.type === 'set_item_props') {
       keys(op, ['type', 'item_id', 'props']);
-      keys(op.props, ['volume', 'fit', 'opacity', 'transform', 'text', 'style']);
+      keys(op.props, ['volume', 'fit', 'opacity', 'transform', 'text', 'style', 'speed', 'fade_in_frames', 'fade_out_frames', 'transition_in', 'vars']);
       const item = findItem(doc, op.item_id);
       unlocked(doc, item.track_id);
       if (!Object.keys(op.props).length) fail('set_item_props requires props');
       for (const [k, value] of Object.entries(op.props)) {
         if (value === null) {
-          if (['volume', 'text'].includes(k)) fail(`${k} cannot be removed`);
+          if (['volume', 'text', 'vars'].includes(k)) fail(`${k} cannot be removed`);
           delete item[k];
         } else item[k] = structuredClone(value);
       }

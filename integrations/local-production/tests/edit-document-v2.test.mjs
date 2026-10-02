@@ -326,6 +326,50 @@ test('split assigns linked captions by source_from; trim/slip/move/ripple behave
   assert.equal(doc.items.find(i => i.id === 'talk1b').start_frame, 12);
   assert.ok(!doc.items.some(i => i.id === 'cap1'), 'linked caption removed with its media');
 });
+test('P2 operations: props, graphic add, duck set/clear, split/trim rules for speed, fades and transitions', async t => {
+  const { CAPTION_FONT, installCaptionFont } = await import('../caption-font.mjs');
+  const doc = { ...(await load('valid', 'p2-packaging.json')), revision: 1, parent_sha256: null, caption_font: { ...CAPTION_FONT } };
+  const dir = await onDisk(t, doc);
+  await installCaptionFont(dir);
+  const item = async key => (await readProject(dir)).items.find(i => i.id === key);
+  // Duck edits may share a batch (only lock changes must be alone).
+  await editBatch(dir, batch(1, [{ type: 'edit_track', track_id: 'a_music', duck: null },
+    { type: 'set_item_props', item_id: 'talk2', props: { speed: null, transition_in: null, fade_out_frames: null } },
+    { type: 'move_item', item_id: 'talk2', start_frame: 150 }]));
+  let current = await readProject(dir);
+  assert.ok(!('duck' in current.tracks.find(tr => tr.id === 'a_music')));
+  assert.deepEqual(['speed', 'transition_in', 'fade_out_frames'].filter(k => k in current.items.find(i => i.id === 'talk2')), []);
+  await editBatch(dir, batch(2, [{ type: 'edit_track', track_id: 'a_music', duck: { under_track_id: 'v_main', depth_db: -9, attack_frames: 3, release_frames: 6 } },
+    { type: 'move_item', item_id: 'talk2', start_frame: 140 },
+    { type: 'set_item_props', item_id: 'talk2', props: { speed: 1.25, transition_in: { kind: 'crossfade', frames: 10 }, fade_in_frames: 0 } },
+    { type: 'add_item', item: { id: 'card', track_id: 'v_gfx', kind: 'graphic', template: 'title-card', vars: { title: '开场' }, start_frame: 100, frames: 30, fade_in_frames: 5 } }]));
+  current = await readProject(dir);
+  assert.equal(current.tracks.find(tr => tr.id === 'a_music').duck.depth_db, -9);
+  assert.equal((await item('card')).template, 'title-card');
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'cap1', props: { speed: 2 } }])), /cannot carry speed/);
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'talk1', props: { fade_in_frames: 200 } }])), /Invalid fade_in_frames|Fades exceed/);
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'card', props: { vars: null } }])), /vars cannot be removed/);
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'edit_track', track_id: 'a_music', duck: { under_track_id: 'c_sub', depth_db: -9, attack_frames: 3, release_frames: 6 } }])), /video or audio/);
+  // Split: head keeps fade_in + transition_in, tail keeps fade_out; source advances by speed.
+  await editBatch(dir, batch(3, [{ type: 'set_item_props', item_id: 'talk2', props: { fade_out_frames: 12 } },
+    { type: 'split_item', item_id: 'talk2', at_frame: 200, new_item_id: 'talk2b' }]));
+  const head = await item('talk2'), tail = await item('talk2b');
+  assert.deepEqual([head.frames, head.transition_in?.frames, head.fade_in_frames, head.fade_out_frames], [60, 10, 0, undefined]);
+  assert.deepEqual([tail.start_frame, tail.frames, tail.source_in_seconds, tail.speed, tail.fade_out_frames, 'transition_in' in tail], [200, 60, 12.5, 1.25, 12, false]);
+  // Trim head on a sped-up item advances the source by frames/fps × speed; a
+  // trim that breaks the crossfade overlap is rejected unless fixed in the batch.
+  await editBatch(dir, batch(4, [{ type: 'trim_item', item_id: 'talk2b', head_frames: 6 }]));
+  assert.equal((await item('talk2b')).source_in_seconds, 12.75);
+  await assert.rejects(editBatch(dir, batch(5, [{ type: 'trim_item', item_id: 'talk2', head_frames: 4 }])), /exactly 10 frames/);
+  await editBatch(dir, batch(5, [{ type: 'trim_item', item_id: 'talk2', head_frames: 4 }, { type: 'set_item_props', item_id: 'talk2', props: { transition_in: { kind: 'crossfade', frames: 6 } } }]));
+  assert.equal((await item('talk2')).source_in_seconds, 10.166666667);
+  await editBatch(dir, batch(6, [{ type: 'edit_track', track_id: 'a_music', locked: true }]));
+  await assert.rejects(editBatch(dir, batch(7, [{ type: 'edit_track', track_id: 'a_music', duck: null }])), /locked/, 'a locked track keeps its duck');
+  // Legacy project whose captions use system fonts: graphics would force a font rebinding.
+  const legacy = await onDisk(t, v2Fixture());
+  await assert.rejects(editBatch(legacy, batch(1, [{ type: 'add_item', item: { id: 'card', track_id: 'v_broll', kind: 'graphic', template: 'title-card',
+    vars: { title: '开场' }, start_frame: 60, frames: 12 } }])), /need the bound caption font/);
+});
 test('replace_media drops old linked captions unless new ones are given; revert_to must be alone', async t => {
   const dir = await onDisk(t, v2Fixture());
   await editBatch(dir, batch(1, [{ type: 'replace_media', item_id: 'talk2', asset_id: 'broll', source_in_seconds: 0 },
