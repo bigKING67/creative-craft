@@ -114,3 +114,54 @@ AIOS 首期目标约 10 用户、每天 50 条合格成片；已分析素材、3
 对照人工/既有规则、仅经营方法、仅创作方法与组合方案，使用同一输入和质量标准；经营方法对照限有相关业务任务的样本。报告成片盲评、事实错误、总耗时、返工与人工分钟，以及方法加载/执行的额外成本。组件安装成功、容器运行或短样片不代表专业质量提高。
 
 业务经验留宿主；通用方法候选经脱敏、跨任务验证和仓库评测后发布。生产 Agent 不直接修改共享 Skill、权限或验收标准。本次文档同步未更新 Skill、模块代码、包清单或任何宿主运行配置。
+
+## Video Harness v1（2026-10-02，实施中）
+
+承接上文三层职责，把“需求 → 分镜 → 选片 → 生成 → 工程编辑 → 实际检查 → 修改 → 导出”落成代码强制的流程。参考依据见[上游复核 2026-10-02](upstream-absorption.md)：阶段关卡与交付承诺（OpenMontage）、素材/实例分离与合成画面验证（ChatCut）、批次编辑与试运行（OpenChatCut）、lint/抽帧/检查（HyperFrames）、按模态证据（Cerul）。只吸收方法，不复制 AGPL 源码；Remotion 与 OpenCut 维持原处置。
+
+### 分层与真源
+
+| 层 | 内容 | 位置 |
+| --- | --- | --- |
+| 共享合同 | `creative-craft.edit-document.v2`（多轨剪辑真源）、`creative-craft.render-qa.v1`（成片技术检查与评审） | `skills/creative-craft/schemas/`；跨语言语义一致性样例在 `tests/fixtures/edit-document-v2/{valid,invalid}/` |
+| 证据与关卡（Python 核心） | `creative-craft.production-plan.v1`（分镜每拍的来源、选片证据、交付承诺）、`creative-craft.video-production.v1`（阶段状态、产物 digest、审批、修改轮次、预算台账、事件） | Skill 包内，仅标准库 |
+| 执行（可选 Node 模块） | EditDocument v2 读写与有界编辑、编译到 HyperFrames、预览/导出、QA 采样与检测 | `integrations/local-production/`，不进 Skill 包 |
+
+EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反向解析。v1（`local-edit.v1`）旧修订保持只读；首次对 v1 工程提交编辑时在内存中迁移并发布 v2 新修订（`change.author = migration` 记录在该修订），旧文件不改写。
+
+### EditDocument v2 语义规则
+
+- 素材（asset）与时间线实例（item）分离；同一素材可被多处引用。工程创建后可通过 `add_asset` 继续导入（含生成镜头，`origin.kind = generated` 并记录 `provenance_ref`）。
+- 轨道 `video | audio | caption`，数组顺序即视频叠放顺序（靠前在下）。`locked` 轨道上的 item 不可被任何操作修改。
+- 输出时间为 canvas.fps 下的整数帧，半开区间；源时间为秒。同一轨道上的 media item 不可重叠，允许空隙。
+- media item 必须有 `asset_id/start_frame/frames/source_in_seconds/volume`；视频轨要求素材含画面，音频轨要求含声音；`source_in_seconds + frames/fps ≤ asset.duration`。
+- caption item 只能在 caption 轨：`link` 形式按所链接 media item 的源时间换算输出时间并随其移动、裁切；无 `link` 时必须给 `start_frame/frames`。`link.source_to > link.source_from`。
+- 成片时长 = 所有 media item 与非链接字幕的最大结束帧，1 帧至 10 分钟。
+
+### 编辑操作（P0）
+
+一次调用提交一个批次：`{ base_revision, author, summary, operations[] }`。整批校验通过才发布新修订；`--dry-run` 只返回 diff（新增/删除/变更的 item、时长变化）不发布；基于过期修订提交直接拒绝，需重读。操作：`add_asset`、`add_track`、`edit_track`（lock/unlock/rename）、`add_item`、`remove_item`（可选同轨 ripple）、`move_item`（改轨或起点）、`trim_item`（入/出点，或 slip 只移源入点）、`split_item`（链接字幕随之拆分归属）、`replace_media`（保持时序，未给新字幕则移除旧链接字幕）、`set_item_props`（volume/fit/opacity/transform/text/style）、`revert_to`（以旧修订内容发布新修订，必须单独成批）。转场、变速、淡入淡出、音乐自动闪避、图形模板属于 P2。
+
+### 检查（P0）
+
+`qa` 针对某一修订的实际渲染文件生成 render-qa：结构（时长/分辨率/音轨与修订一致）、视频（ffmpeg blackdetect/freezedetect）、音频（silencedetect、ebur128 响度与真峰值）、字幕（每条字幕时段内有采样帧）、lint（编译 HTML 的 HyperFrames lint，错误即阻断渲染）。采样合成后的成片帧（每个 item 中点、每个剪辑点前后、每条字幕），生成缩略图墙和剪辑点前后短片供听看。自动 `verdict` 只反映技术检查；`review` 由 Agent 或人工依据采样填写，发现须指向时间/item/采样，critical 须附修复方案。工具成功、源素材帧或自动检查都不能代替对合成画面的评审。
+
+### 阶段与关卡（P1）
+
+阶段：`brief → reference → plan → select → generate → assemble → inspect ⇄ revise → export`，可显式跳过（须给理由）。关卡由 Python CLI 执行，不依赖提示词：
+
+- 前序未完成或未跳过，后续不能完成；需审批的阶段（默认仅 `plan`，宿主可配置为空以自动执行）在审批前停在 `awaiting_approval`。
+- `plan`：产物通过 production-plan 校验。`select`：每个 `footage` 拍都有选定源区间与证据，`tbd` 拍阻断；仅有候选证据的标为 candidate 并在状态中可见。`generate`：有 `generate` 拍时须绑定 Job/Receipt，否则不可完成（可改计划并记录决策）。
+- `assemble`/`revise`：绑定 EditDocument v2 修订文件 digest。`inspect`：render-qa 必须绑定当前修订 digest；`verdict = fail` 或评审 `revise/reject` 进入 `revise`；`revise` 轮次超过上限（默认 3）进入 `blocked` 交人处理，不强制放行。
+- `export`：导出修订必须等于最近一次检查通过（`verdict ≠ fail` 且评审 `accept`）的修订；可机器检查的交付承诺（时长范围、含字幕、生成镜头占比上限）对该修订实算，不满足则阻断。
+- 预算台账先预留后结算；`cap` 模式下预留超过上限即拒绝；结果不明的付费任务不得自动重发。
+
+简单的局部修改（单次裁切、换一句字幕）走执行层的“读取—编辑—检查”快路径，不需要建立 production 状态。
+
+### 分期与验收
+
+- P0 执行底座：EditDocument v2、操作 v2、`add_asset`、v1 迁移、多轨编译、QA 与 lint 关卡、HyperFrames 升级评估。验收：共享样例两侧一致；smoke 覆盖多轨 B-roll、补导入素材、过期修订拒绝、锁定轨道、QA 产物与失败阻断。
+- P1 流程与合同：production-plan / video-production 合同与 CLI、关卡、交付承诺实算、样例与评测，`video-production.md` 增加阶段路由。验收：口播删段 + B-roll + 中文字幕样例端到端可追溯，含一次修改轮。
+- P2 包装与音频（转场、变速、淡变、闪避、带类型变量的图形模板）；P3 Seedance 生成适配与预算台账实接；P4 可选本地素材分析 sidecar。
+
+以上为实施合同；各项能力以对应提交、测试与实际渲染证据为准，本节不宣称已完成。
