@@ -150,7 +150,8 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 - **自动闪避** 轨道 `duck: {under_track_id, depth_db (−24…−3), attack_frames, release_frames}`：只允许在 audio 轨；`under_track_id` 必须存在、不能是自身、可以是 video 或 audio 轨，且被参照的轨道自身不能再带 `duck`（只有一层）。编译时依据被参照轨道上有声 media item 的区间生成音量包络。
 - **图形** item `kind: "graphic"`：只在 video 轨，参与同轨不重叠与成片时长计算；必须有 `template`、`vars`、`start_frame`、`frames`，可带淡变与 `opacity`，不得带 media/caption 字段。`vars` 的值只能是字符串（1–200 字符）、有限数字或布尔值。模板定义（变量类型、固定 HTML/CSS、安全区）属于执行层 `integrations/local-production/templates/`，变量类型与模板存在性由 Node 校验；Python 只校验结构。首批模板：`lower-third`、`title-card`。不接受任意 HTML、脚本或外部 URL。
 - **执行映射**：变速用 HyperFrames `data-playback-rate`；淡变、转场与闪避的音量统一写入 `data-automation` volume lane，不同时使用音量补间；画面淡变与转场使用透明度时间线。
-- **生成镜头占比** 承诺只统计 media 画面，graphic 叠层不计入遮挡。
+- **补充约定**：graphic 字段白名单为 `id/track_id/kind/template/vars/start_frame/frames/fade_in_frames/fade_out_frames/opacity`；`duck` 不能指向 caption 轨；crossfade 的后一 item 起点必须严格晚于前一 item，且同轨重叠检查覆盖所有在前 item。
+- **生成镜头占比** 承诺只统计 media 画面，graphic 叠层不计入遮挡；crossfade 重叠区间内任一段为生成素材即计为生成（上界计法）。
 - **导出人工评审** `policy.export_requires_human_review`（可选，缺省 false）：为 true 时，导出所依据的通过检查必须由 `review.reviewer_kind = "human"` 完成。
 - **QA 补充**：引用渲染回执中的 `audioLoweredDb` 作为真峰值限幅证据；字幕与图形采样帧检查安全区（距画面边缘 5%）。
 
