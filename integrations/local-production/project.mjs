@@ -274,11 +274,16 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
   validateV2(next);
-  // Fixed caption font: bound when captions are introduced. Legacy projects that
+  // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
   // already had captions without a binding keep the system-font contract.
   let installFont = false;
   if (next.caption_font) await verifyCaptionFont(root, next);
   else if (!activeCaptions(base).length) installFont = await planCaptionFont(next);
+  else if (next.items.some(i => i.kind === 'graphic')) {
+    // Graphics reuse the bound caption font; binding it now would silently restyle
+    // this legacy project's system-font captions, so refuse instead.
+    fail('Graphic items need the bound caption font; this legacy project renders captions with system fonts. Create a new project to add graphics');
+  }
   const result = { status: dryRun ? 'dry_run' : 'published', base_revision: latest.revision, migration_revision: migration?.revision ?? null,
     revision: next.revision, operations_sha256, diff: diffDocuments(base, next) };
   if (dryRun) return result;

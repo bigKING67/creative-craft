@@ -123,6 +123,42 @@ test('cross-language rules: kind-exclusive fields, linked caption timing, parent
   }
   assert.doesNotThrow(() => validateV2({ ...v2Fixture(), revision: 2, parent_sha256: sha('d') }));
 });
+// P2 rules agreed with the Python core beyond the contract text (root fixtures are
+// added on the Python side); one inline negative case each on the P2 fixture.
+test('P2 cross-language rules: graphic field whitelist, duck target kind, crossfade ordering and full overlap scan', async () => {
+  const base = await load('valid', 'p2-packaging.json');
+  const graphic = d => d.items.find(i => i.id === 'lower');
+  const cases = {
+    'graphic accepts only template/vars/timing/fades/opacity': [
+      d => { graphic(d).transform = { x: .5, y: .5, scale: .5 }; }, d => { graphic(d).transition_in = { kind: 'crossfade', frames: 2 }; },
+      d => { graphic(d).speed = 1; }, d => { graphic(d).fit = 'cover'; }],
+    'duck target must be a video or audio track': [d => { d.tracks.find(t => t.id === 'a_music').duck.under_track_id = 'c_sub'; }],
+    'crossfade must start strictly after its predecessor': [d => {
+      Object.assign(d.items.find(i => i.id === 'talk1'), { frames: 10, fade_in_frames: 0 });
+      Object.assign(d.items.find(i => i.id === 'talk2'), { start_frame: 0, transition_in: { kind: 'crossfade', frames: 10 } });
+      d.items = d.items.filter(i => i.id !== 'cap1');
+    }],
+    'overlap is checked against every earlier item, not only the adjacent one': [d => {
+      Object.assign(d.items.find(i => i.id === 'talk1'), { frames: 100 });
+      Object.assign(d.items.find(i => i.id === 'talk2'), { start_frame: 90, frames: 110, speed: 1, fade_out_frames: 0 });
+      d.items.push({ id: 'talk3', track_id: 'v_main', kind: 'media', asset_id: 'talk', start_frame: 95, frames: 110, source_in_seconds: 0, volume: 1,
+        transition_in: { kind: 'crossfade', frames: 105 } });
+    }],
+  };
+  assert.doesNotThrow(() => validateV2(base));
+  for (const [rule, mutations] of Object.entries(cases)) {
+    for (const mutate of mutations) {
+      const doc = structuredClone(base); mutate(doc);
+      assert.throws(() => validateV2(doc), Error, rule);
+    }
+  }
+  const ordered = structuredClone(base);
+  cases['crossfade must start strictly after its predecessor'][0](ordered);
+  assert.throws(() => validateV2(ordered), /must start after its predecessor/);
+  const scanned = structuredClone(base);
+  cases['overlap is checked against every earlier item, not only the adjacent one'][0](scanned);
+  assert.throws(() => validateV2(scanned), /overlaps more than its predecessor/);
+});
 test('compiled v2 HTML passes the HyperFrames lint gate', async () => {
   const lint = await lintComposition(compose(v2Fixture()).html);
   assert.equal(lint.error_count, 0, JSON.stringify(lint.findings));

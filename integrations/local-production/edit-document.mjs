@@ -173,6 +173,7 @@ export function validateV2(doc) {
         const { frames } = item.transition_in;
         if (!prev || prev.kind !== 'media' || overlap !== frames) fail(`Crossfade ${item.id} must overlap its predecessor on track ${track.id} by exactly ${frames} frames`);
         if (frames > prev.frames || frames > item.frames) fail(`Crossfade ${item.id} is longer than an item it joins`);
+        if (item.start_frame <= prev.start_frame) fail(`Crossfade ${item.id} must start after its predecessor ${prev.id}`);
       } else if (overlap > 0) fail(`Overlapping items on track ${track.id} without crossfade: ${prev.id}, ${item.id}`);
       if (item.start_frame < earlierEnd) fail(`Overlapping items on track ${track.id}: ${item.id} overlaps more than its predecessor`);
       if (prev) earlierEnd = Math.max(earlierEnd, prev.start_frame + prev.frames);
