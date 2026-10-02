@@ -2250,6 +2250,8 @@ _GRAPHIC_FIELDS = frozenset(
     }
 )
 _GRAPHIC_VAR_MAX_LENGTH = 200
+# Same grammar as integrations/local-production/templates.mjs variable names.
+_GRAPHIC_VAR_NAME = r"[a-z][a-z0-9_]{0,31}"
 
 
 def _graphic_var_ok(value: Any) -> bool:
@@ -2257,7 +2259,11 @@ def _graphic_var_ok(value: Any) -> bool:
         return True
     if _is_number(value):
         return math.isfinite(value)
-    return isinstance(value, str) and 1 <= len(value) <= _GRAPHIC_VAR_MAX_LENGTH
+    # Length in UTF-16 code units, matching JavaScript string length in Node.
+    return (
+        isinstance(value, str)
+        and 1 <= len(value.encode("utf-16-le")) // 2 <= _GRAPHIC_VAR_MAX_LENGTH
+    )
 
 
 def _check_fades(r: Result, label: str, item: dict[str, Any]) -> None:
@@ -2301,8 +2307,12 @@ def _check_ducking(r: Result, data: dict[str, Any], tracks: dict[str, Any]) -> N
 def _check_same_track_timing(
     r: Result, by_track: dict[str, list[tuple[int, int, str, dict[str, Any]]]]
 ) -> None:
-    """Same-track items must not overlap, except a declared crossfade whose frames
-    equal the overlap with the immediately preceding item."""
+    """Same-track items must not overlap, except a declared crossfade.
+
+    Matches Node validateV2: the overlap is the immediately preceding media
+    item's end minus this item's start and must equal the crossfade frames,
+    which may not exceed either item's length; any other overlap is invalid.
+    """
     for track_id, spans in by_track.items():
         spans.sort(key=lambda span: (span[0], span[1]))
         for index, (start, end, item_id, item) in enumerate(spans):
@@ -2310,31 +2320,29 @@ def _check_same_track_timing(
             crossfade = (
                 transition.get("frames") if isinstance(transition, dict) else None
             )
-            overlaps_previous = False
+            if crossfade is not None:
+                previous = spans[index - 1] if index else None
+                prev_start, prev_end, prev_id, prev_item = previous or (0, 0, "", {})
+                overlap = prev_end - start
+                r.require(
+                    previous is not None
+                    and prev_item.get("kind") == "media"
+                    and prev_start < start
+                    and overlap == crossfade
+                    and crossfade <= min(end - start, prev_end - prev_start),
+                    f"track {track_id} item {item_id} crossfade of {crossfade} frames "
+                    "must exactly overlap the end of its preceding media item"
+                    + (f" {prev_id}" if previous else ""),
+                )
             for previous_index in range(index):
-                previous_start, previous_end, previous_id, _ = spans[previous_index]
-                if previous_end <= start:
+                prev_start, prev_end, prev_id, _ = spans[previous_index]
+                if prev_end <= start:
                     continue
-                overlap = min(previous_end, end) - start
-                adjacent = previous_index == index - 1 and previous_start < start
-                if adjacent:
-                    overlaps_previous = True
-                if adjacent and crossfade is not None:
-                    r.require(
-                        overlap == crossfade,
-                        f"track {track_id} item {item_id} crossfade of {crossfade} "
-                        f"frames does not match its {overlap}-frame overlap with "
-                        f"{previous_id}",
-                    )
-                else:
-                    r.errors.append(
-                        f"track {track_id} items {previous_id} and {item_id} "
-                        "overlap without a matching crossfade"
-                    )
-            if crossfade is not None and not overlaps_previous:
+                if crossfade is not None and previous_index == index - 1:
+                    continue  # judged above
                 r.errors.append(
-                    f"track {track_id} item {item_id} declares a crossfade "
-                    "without overlapping the previous item"
+                    f"track {track_id} items {prev_id} and {item_id} "
+                    "overlap without a matching crossfade"
                 )
 
 
@@ -2430,6 +2438,10 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
             variables = item.get("vars")
             if isinstance(variables, dict):
                 for name, value in variables.items():
+                    r.require(
+                        re.fullmatch(_GRAPHIC_VAR_NAME, str(name)) is not None,
+                        f"{label} vars key {name!r} must match {_GRAPHIC_VAR_NAME}",
+                    )
                     r.require(
                         _graphic_var_ok(value),
                         f"{label} vars.{name} must be a string of 1-"
@@ -2679,6 +2691,8 @@ def validate_video_production(data: dict[str, Any]) -> Result:
             "revision_rounds must not exceed policy.max_revision_rounds",
         )
     required_approval = set(policy.get("approval_required", []))
+    if policy.get("export_requires_human_review") is True:
+        required_approval.add("inspect")
     for stage in stages:
         stage_id = stage.get("id")
         if stage.get("status") == "awaiting_approval":

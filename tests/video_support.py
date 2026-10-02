@@ -540,6 +540,8 @@ def build_talking_head_production(
         "qa/r2.json",
     )
     ok("video-complete", "--root", r, "--stage", "inspect")
+    if human_review:
+        ok("video-approve", "--root", r, "--stage", "inspect", "--by", "reviewer", "--note", "watched the cut")
     record_export_render(root, doc2, sha2, ok)
     ok(
         "video-record",

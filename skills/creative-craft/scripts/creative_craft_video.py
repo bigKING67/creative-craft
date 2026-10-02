@@ -51,6 +51,8 @@ CONTRACT_KINDS = {
 ALWAYS_REQUIRED = {"assemble", "inspect", "revise", "export"}
 RECEIPT_OK = {"succeeded", "partial"}
 REVISION_OPEN = {"in_progress", "blocked"}
+# Gate outcomes that let a stage finish; inspect reports "accepted".
+PASSING = {"completed", "accepted"}
 ROUNDS_CEILING = 20  # video-production schema maximum for max_revision_rounds
 
 
@@ -372,13 +374,16 @@ def _gate_export(
     if accepted is None:
         gate.block("no inspection passed with an accept review")
         return
-    reviewer_kind = accepted["review"].get("reviewer_kind")
-    if data["policy"].get("export_requires_human_review") and reviewer_kind != "human":
+    # reviewer_kind inside render-qa is agent-written; the policy needs a named,
+    # separately recorded sign-off. A completed inspect stage is immutable, so its
+    # approval belongs to the accepted inspection found above.
+    if data["policy"].get("export_requires_human_review") and (
+        _stage(data, "inspect")["approval"] is None
+    ):
         gate.block(
             "policy.export_requires_human_review: the accepted inspection "
-            f"(revision {accepted['revision']}) was reviewed by "
-            f"{reviewer_kind or 'an unspecified reviewer kind'}; record a render-qa "
-            "whose review.reviewer_kind is human and complete inspect again"
+            f"(revision {accepted['revision']}) has no named sign-off; run "
+            "video-approve --stage inspect --by <name>"
         )
         return
     if accepted["revision_sha256"] != edit["sha256"]:
@@ -570,10 +575,14 @@ def evaluate_gate(
     if not gate.ok:
         gate.outcome = "blocked"
     elif (
-        gate.outcome == "completed"
+        gate.outcome in PASSING
         and (
             stage_id in data["policy"]["approval_required"]
             or "approval_reason" in gate.info
+            or (
+                stage_id == "inspect"
+                and data["policy"].get("export_requires_human_review", False)
+            )
         )
         and stage["approval"] is None
     ):
@@ -689,7 +698,7 @@ def approve_stage(
         raise VideoError("--by must name the approver")
     stage["approval"] = {"by": by, "at": _now(), "note": note}
     gate = evaluate_gate(root, data, stage_id)
-    if gate.outcome != "completed":
+    if gate.outcome not in PASSING:
         stage["approval"] = None
         raise VideoError(
             "gate no longer passes: " + "; ".join(gate.reasons or [gate.outcome])

@@ -397,7 +397,8 @@ blocks completion. Write plan changes after approval to a new file; structural
 changes (beats, timing, roles, promises) send select/generate to approval. When the
 round limit blocks revise, a person decides: accept, change the plan, or
 `video-extend-rounds --by --reason`. `video-init --export-requires-human-review`
-makes export wait for an inspection accepted with `reviewer_kind: human`. Edit
+makes an accepted inspection wait for a named `video-approve --stage inspect
+--by` sign-off before export; `reviewer_kind` inside render-qa is not evidence. Edit
 documents may add speed, fades, crossfades, ducking and template graphics; see
 the schema. Passing a gate proves contract consistency only; the render-qa
 review of composited frames remains the visual evidence.

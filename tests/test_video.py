@@ -64,8 +64,12 @@ class EditDocumentContractTests(unittest.TestCase):
             "graphic-with-transform": "graphic item must not set transform",
             "duck-under-caption-track": "duck must reference a video or audio track",
             "crossfade-same-start": "overlap without a matching crossfade",
-            "crossfade-overlap-mismatch": "does not match its 10-frame overlap",
-            "crossfade-without-overlap": "declares a crossfade without overlapping",
+            "crossfade-nested-in-predecessor": "must exactly overlap the end of its preceding media item talk1",
+            "crossfade-after-graphic": "must exactly overlap the end of its preceding media item lower",
+            "graphic-var-bad-name": "vars key 'Title' must match",
+            "graphic-var-too-long-utf16": "vars.title must be a string of 1-200",
+            "crossfade-overlap-mismatch": "must exactly overlap the end of its preceding media item talk1",
+            "crossfade-without-overlap": "crossfade of 5 frames must exactly overlap",
             "duck-on-video-track": "duck is only allowed on audio tracks",
             "duck-under-self": "duck must not reference its own track",
             "duck-under-unknown-track": "duck references unknown track",
@@ -944,10 +948,25 @@ class VideoGateTests(unittest.TestCase):
             "rev/000001.json",
         )
         record_export_render(self.root, doc, sha, self.via_root)
+        # An agent-written reviewer_kind is not a sign-off; inspect waits for one.
+        self.assertEqual("awaiting_approval", stage(self.root, "inspect")["status"])
         out = self.cli("video-complete", "--stage", "export", code=1)
-        self.assertIn("policy.export_requires_human_review", out)
-        self.assertIn("reviewed by agent", out)
-        self.assertNotIn("delivery promise", out)
+        self.assertIn("preceding stage inspect is not completed", out)
+        self.cli("video-approve", "--stage", "inspect", "--by", "reviewer")
+        self.assertEqual("reviewer", stage(self.root, "inspect")["approval"]["by"])
+        out = self.cli("video-complete", "--stage", "export", code=1)
+        self.assertNotIn("policy.export_requires_human_review", out)
+        self.assertIn("delivery promise", out)
+
+    def test_human_review_policy_rejects_unsigned_completed_inspect(self) -> None:
+        sha = self.assembled("--export-requires-human-review")
+        self.inspect("qa/r1.json", render_qa(edit_document(1), sha, decision="accept"))
+        data = production(self.root)
+        insp = next(s for s in data["stages"] if s["id"] == "inspect")
+        insp.update(status="completed", approval=None)
+        self.assertTrue(
+            any("completed without its required approval" in e for e in errors(data))
+        )
 
     def test_export_human_review_policy_defaults_off(self) -> None:
         self.init()
