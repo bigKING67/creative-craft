@@ -121,7 +121,8 @@ export function captionFontReady(project) {
   const weights = [...new Set(activeCaptions(project).map(c => c.style?.weight ?? 600))];
   // Producer's tween interceptor owns __hfTimelinesBuilding, and fonts.ready
   // resolves even on font failure. Use its explicit async build registry.
-  // Producer 0.8.53 treats rejected build promises as settled: on error keep
+  // Producer 0.8.53 treated rejected build promises as settled (gate re-verified
+  // on 0.8.108 by tests/font-render.integration.mjs): on error keep
   // this readiness entry pending so its bounded readiness timeout fails the
   // job. The rejection remains observable through __captionFontReady.
   return `window.__captionFontLoaded=false;

@@ -1,6 +1,6 @@
 {
   "name": "@creative-craft/local-production",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,15 @@
     "fetch-font": "node fetch-font.mjs"
   },
   "dependencies": {
-    "@hyperframes/producer": "0.8.53",
+    "@hyperframes/lint": "0.8.108",
+    "@hyperframes/producer": "0.8.108",
     "gsap": "3.13.0"
+  },
+  "overrides": {
+    "@hyperframes/core": "0.8.108",
+    "@hyperframes/engine": "0.8.108",
+    "@hyperframes/lint": "0.8.108",
+    "@hyperframes/parsers": "0.8.108",
+    "@hyperframes/studio-server": "0.8.108"
   }
 }
