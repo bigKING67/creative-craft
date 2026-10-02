@@ -1,6 +1,6 @@
 import { validate } from './project.mjs';
 import { validateV2 } from './edit-document.mjs';
-import { crossfadeSuccessor, isV2, itemEnvelope, resolveCaptions } from './timeline.mjs';
+import { envelopeIndex, isV2, itemEnvelope, resolveCaptions, volumeEnvelope } from './timeline.mjs';
 import { getTemplate, renderGraphic, escapeHtml as escape } from './templates.mjs';
 import { captionFontCss, captionFontReady } from './caption-font.mjs';
 
@@ -75,9 +75,11 @@ function composeV2(doc, canvas) {
   const kinds = new Map(doc.tracks.map(t => [t.id, t.kind]));
   // Lane order, then time: a crossfading item follows (and paints over) its predecessor.
   const byLane = (a, b) => lanes.get(a.track_id) - lanes.get(b.track_id) || (a.start_frame ?? 0) - (b.start_frame ?? 0);
+  // Crossfade neighbours and duck curves, built once for this compile.
+  const index = envelopeIndex(doc);
   const rolls = new Map();
   for (const item of doc.items.filter(i => i.kind !== 'caption').sort(byLane)) {
-    const previous = item.transition_in ? doc.items.find(o => crossfadeSuccessor(doc, o) === item) : null;
+    const previous = item.transition_in ? index.predecessor.get(item) : null;
     rolls.set(item.id, previous ? 1 - rolls.get(previous.id) : 0);
   }
   const span = item => timelineTiming(item.start_frame / fps, (item.start_frame + item.frames) / fps);
@@ -86,7 +88,7 @@ function composeV2(doc, canvas) {
   const elements = [], tweens = [];
   // Opacity animation: authored hidden, then one tween per envelope segment.
   const visual = (elementId, item, style) => {
-    const envelope = itemEnvelope(doc, item, 'visual');
+    const envelope = itemEnvelope(doc, item, 'visual', index);
     if (!envelope) { if ('opacity' in item && item.opacity !== 1) style.push(`opacity:${item.opacity}`); return; }
     style.push('opacity:0');
     // A finished tween holds its end value, so constant segments after the first
@@ -120,10 +122,9 @@ function composeV2(doc, canvas) {
       elements.push(`<video id="v-${item.id}" src="${asset.file}" ${timing(item)} data-track-index="${lane + roll}" muted playsinline style="${style.join(';')}"></video>`);
     }
     if (asset.audio && item.volume > 0) {
-      const envelope = itemEnvelope(doc, item, 'audio'), start = item.start_frame / fps;
+      const envelope = volumeEnvelope(doc, item, index), start = item.start_frame / fps;
       let level = `data-volume="${item.volume}"`;
       if (envelope) {
-        if (envelope.length > 512) throw new Error(`Volume automation for ${item.id} exceeds 512 points`);
         const automation = { version: 1, lanes: [{ target: 'volume', points: envelope.map(([t, v]) => ({ t: Math.max(0, Math.round((t - start) * 1e6) / 1e6), v })) }] };
         level = `data-automation="${escape(JSON.stringify(automation))}"`;
       }

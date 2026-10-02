@@ -8,6 +8,7 @@ import { bindCaptionFont, installCaptionFont, planCaptionFont, validateCaptionFo
 import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCanvas, validateCaptionStyle, validateAssetFields, validateNewAssetOrigin,
   validateV2, migrateV1 } from './edit-document.mjs';
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
+import { checkVolumeAutomation } from './timeline.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -180,6 +181,7 @@ export async function createProject(root, spec) {
       change: { author: 'system', summary: 'Created project', operations_sha256: null } };
   }
   validateDocument(project);
+  if (!v1) checkVolumeAutomation(project); // Compile limits fail here, not at render.
   root = await safePath(root);
   await fs.mkdir(root); // Existing projects are never replaced.
   await fs.mkdir(path.join(root, 'assets'));
@@ -224,8 +226,9 @@ export async function editProject(root, expectedRevision, operations) {
 
 const asV2 = doc => doc.schema_version === SCHEMA_V2 ? structuredClone(doc) : migrateV1(doc);
 
-// Whole-document restore as a new revision. Locked tracks protect their items:
-// a revert that would change any item on a currently locked track is refused.
+// Whole-document restore as a new revision. Locked tracks are frozen: a revert
+// that would change any item on a currently locked track (or drop the track) is
+// refused, and the track's own settings are kept from the current revision.
 async function revertContent(root, base, op) {
   keys(op, ['type', 'revision']);
   if (!integer(op.revision, 1, base.revision - 1)) fail('revert_to requires an earlier revision');
@@ -234,9 +237,10 @@ async function revertContent(root, base, op) {
     const on = doc => JSON.stringify(doc.items.filter(i => i.track_id === track.id));
     if (!target.tracks.some(t => t.id === track.id) || on(base) !== on(target)) fail(`Track is locked: ${track.id}`);
   }
-  // Lock state is current editorial intent, not history: a revert never unlocks.
-  const locked = new Set(base.tracks.filter(t => t.locked).map(t => t.id));
-  const tracks = target.tracks.map(t => ({ ...t, locked: t.locked || locked.has(t.id) }));
+  // Lock state is current editorial intent, not history: a revert never unlocks,
+  // and a locked track keeps its whole current definition (duck, name, …).
+  const locked = new Map(base.tracks.filter(t => t.locked).map(t => [t.id, t]));
+  const tracks = target.tracks.map(t => locked.has(t.id) ? structuredClone(locked.get(t.id)) : t);
   const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks, items: target.items };
   if (target.caption_font && !next.caption_font) next.caption_font = target.caption_font;
   return next;
@@ -274,6 +278,7 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
   validateV2(next);
+  checkVolumeAutomation(next); // Same envelope code as compilation; refused before dry-run or publish.
   // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
   // already had captions without a binding keep the system-font contract.
   let installFont = false;

@@ -20,11 +20,9 @@ test('caption boxes follow the compiled caption CSS and wrap inside 7%–93%', (
   // A long line wraps (more lines, taller box) instead of widening.
   assert.ok(captionBox(portrait, { text: '很'.repeat(40), style }).lines >= 2);
 });
-test('graphic boxes are the template box; validated templates fit their text at max length', () => {
-  for (const canvas of [landscape, portrait]) {
-    const lower = graphicBox(canvas, { template: 'lower-third', vars: { title: '一'.repeat(16), subtitle: '二'.repeat(24) } });
-    assert.deepEqual([lower.left, lower.top, lower.right, lower.bottom, lower.truncated], [0.06, 0.7, 0.68, 0.9, []]);
-    assert.ok(insideSafeArea(lower));
-    assert.ok(insideSafeArea(graphicBox(canvas, { template: 'title-card', vars: { title: '一'.repeat(12) } })));
-  }
+test('graphic boxes are the template box only (load-time guarantee, no text-fit estimate)', () => {
+  const lower = graphicBox({ template: 'lower-third', vars: { title: '一'.repeat(16), subtitle: '二'.repeat(24) } });
+  assert.deepEqual(lower, { left: 0.06, top: 0.7, right: 0.68, bottom: 0.9 });
+  assert.ok(insideSafeArea(lower));
+  assert.ok(insideSafeArea(graphicBox({ template: 'title-card', vars: { title: '一'.repeat(12) } })));
 });

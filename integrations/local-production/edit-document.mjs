@@ -1,6 +1,6 @@
 import { validateCaptionFont } from './caption-font.mjs';
 import { outputFrames, sourceSeconds } from './timeline.mjs';
-import { validateGraphicVars } from './templates.mjs';
+import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, validateGraphicVars } from './templates.mjs';
 
 export const SCHEMA_V1 = 'creative-craft.local-edit.v1';
 export const SCHEMA_V2 = 'creative-craft.edit-document.v2';
@@ -62,7 +62,6 @@ function validateFades(item) {
   for (const key of FADE_KEYS) if (key in item && !integer(item[key], 0, item.frames)) fail(`Invalid ${key}: ${item.id}`);
   if ((item.fade_in_frames ?? 0) + (item.fade_out_frames ?? 0) > item.frames) fail(`Fades exceed item length: ${item.id}`);
 }
-const visibleVar = v => (typeof v === 'string' && v.length >= 1 && v.length <= 200) || (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean';
 
 // Semantic validation of creative-craft.edit-document.v2. JSON Schema covers
 // shape; these rules cover kinds, references, ranges, overlap and output length.
@@ -145,9 +144,9 @@ export function validateV2(doc) {
       if (track.kind !== 'video') fail(`Graphic item ${item.id} must be on a video track`);
       const foreign = Object.keys(item).filter(k => !GRAPHIC_KEYS.includes(k));
       if (foreign.length) fail(`Graphic item ${item.id} cannot carry media/caption fields: ${foreign.join(', ')}`);
-      if (typeof item.template !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(item.template) || !item.vars || typeof item.vars !== 'object' || Array.isArray(item.vars) ||
+      if (typeof item.template !== 'string' || !TEMPLATE_ID.test(item.template) || !item.vars || typeof item.vars !== 'object' || Array.isArray(item.vars) ||
           !integer(item.start_frame, 0, limit) || !integer(item.frames, 1, limit)) fail(`Graphic item ${item.id} requires template/vars/start_frame/frames`);
-      for (const [key, value] of Object.entries(item.vars)) if (!/^[a-z][a-z0-9_]{0,31}$/.test(key) || !visibleVar(value)) fail(`Graphic var ${key} must be a string (1–200), finite number or boolean: ${item.id}`);
+      for (const [key, value] of Object.entries(item.vars)) if (!VAR_NAME.test(key) || !isGraphicVarValue(value)) fail(`Graphic var ${key} must be a string (1–200), finite number or boolean: ${item.id}`);
       if ('opacity' in item && !number(item.opacity, 0, 1)) fail(`Invalid visual properties: ${item.id}`);
       validateFades(item);
       validateGraphicVars(item); // Node only: template existence and typed vars.

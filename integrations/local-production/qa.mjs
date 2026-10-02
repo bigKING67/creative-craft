@@ -179,21 +179,24 @@ export async function qaRender(root, renderDir, qaDir) {
     captions.length ? { refs: captions.map(c => ({ time_seconds: round(captionSample.get(c.item.id).time, 6), item_id: c.item.id, ...(sampled.has(captionSample.get(c.item.id).id) ? { sample_id: captionSample.get(c.item.id).id } : {}) })) } : {});
 
   // Safe area (5% from every edge) at the sampled caption and graphic frames.
-  // Method: boxes computed from the compiled layout (template box; caption block,
-  // wrap and line metrics from estimated text width), not detected in pixels.
-  const safeArea = (id, category, entries, sampleOf, label) => {
-    const outside = entries.filter(e => !insideSafeArea(e.box)), truncated = entries.filter(e => e.box.truncated?.length);
-    check(id, category, !entries.length ? 'not_applicable' : outside.length ? 'fail' : truncated.length ? 'warn' : 'pass',
+  // Neither is detected in pixels. Captions: boxes computed from the compiled
+  // layout (caption block, wrap and line metrics from estimated text width).
+  // Graphics: the template box, which template load validation already keeps
+  // inside the margin; the check records that guarantee, it measures nothing new.
+  const safeArea = (id, category, entries, sampleOf, label, method, inside) => {
+    const outside = entries.filter(e => !insideSafeArea(e.box));
+    check(id, category, !entries.length ? 'not_applicable' : outside.length ? 'fail' : 'pass',
       !entries.length ? `No ${label} in this revision.` : outside.length ? `${outside.length} ${label} box(es) cross the 5% safe margin: ${outside.map(e => e.id).join(', ')}.`
-        : truncated.length ? `All ${label} boxes are inside the 5% safe margin; estimated text overflow (ellipsis) in ${truncated.map(e => e.id).join(', ')}.`
-          : `All ${entries.length} ${label} box(es) are inside the 5% safe margin (layout estimate).`,
-      entries.length ? { measured: { method: 'compiled-layout-estimate', margin: 0.05, boxes: entries.map(e => ({ item_id: e.id, ...e.box })) },
+        : inside(entries.length),
+      entries.length ? { measured: { method, margin: 0.05, boxes: entries.map(e => ({ item_id: e.id, ...e.box })) },
         refs: entries.map(e => ({ time_seconds: round(sampleOf(e).time, 6), item_id: e.id, ...(sampled.has(sampleOf(e).id) ? { sample_id: sampleOf(e).id } : {}) })) } : {});
   };
-  safeArea('caption-safe-area', 'captions', captions.map(c => ({ id: c.item.id, box: captionBox(doc.canvas, c.item) })), e => captionSample.get(e.id), 'caption');
+  safeArea('caption-safe-area', 'captions', captions.map(c => ({ id: c.item.id, box: captionBox(doc.canvas, c.item) })), e => captionSample.get(e.id), 'caption',
+    'compiled-layout-estimate', n => `All ${n} caption box(es) are inside the 5% safe margin (layout estimate, not a pixel detection).`);
   const graphicItems = doc.items.filter(i => i.kind === 'graphic');
-  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(doc.canvas, i), frame: i.start_frame + Math.floor(i.frames / 2) })),
-    e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic');
+  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(i), frame: i.start_frame + Math.floor(i.frames / 2) })),
+    e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic', 'template-load-guarantee',
+    n => `${n} graphic(s) render in their template box; template load validation guarantees every template box lies inside the 5% safe margin. Not a pixel detection, and text fit inside the box is not measured.`);
 
   // Lint result recorded by the render receipt (render is blocked on errors).
   const lint = receipt.lint;
