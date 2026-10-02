@@ -140,6 +140,20 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 - 字段按类型互斥：media item 不得带 `text/style/link`；caption item 不得带 `asset_id/source_in_seconds/volume`；音频轨 item 不得带 `fit/opacity/transform`；link 字幕不得带 `start_frame/frames`。`revision > 1` 必须有 `parent_sha256`，`revision = 1` 必须为 null。字幕之间允许重叠。
 - 以上规则在 Node（`integrations/local-production/edit-document.mjs`）与 Python（`creative_craft_contracts.py`）各实现一次，由 `tests/fixtures/edit-document-v2/` 共享样例强制一致；新增规则必须同时补样例。
 
+### P2 语义规则：包装与音频（2026-10-02，实施中）
+
+在 EditDocument v2 上增加可选字段，旧文档继续合法；Node 与 Python 同步实现，`tests/fixtures/edit-document-v2/valid/p2-packaging.json` 与对应 `invalid/` 样例强制一致。
+
+- **变速** `speed`（media，0.1–10，缺省 1）：源区间 = `source_in_seconds + frames / fps × speed`，必须在素材时长 + 0.001 s 内；link 字幕的输出时间按同一比例换算。
+- **淡变** `fade_in_frames` / `fade_out_frames`（media、graphic）：两者之和不超过 `frames`；视频画面为透明度，声音为音量包络。caption 不得带 speed、淡变或转场字段。
+- **转场** `transition_in: {kind: "crossfade", frames}`（media）：同一轨道上 item 不得重叠，唯一例外是后一 item 声明 crossfade 且与紧邻前一 item 的重叠帧数恰好等于 `frames`，`frames` 不超过两者各自长度；声明了 crossfade 却没有重叠同样无效。
+- **自动闪避** 轨道 `duck: {under_track_id, depth_db (−24…−3), attack_frames, release_frames}`：只允许在 audio 轨；`under_track_id` 必须存在、不能是自身、可以是 video 或 audio 轨，且被参照的轨道自身不能再带 `duck`（只有一层）。编译时依据被参照轨道上有声 media item 的区间生成音量包络。
+- **图形** item `kind: "graphic"`：只在 video 轨，参与同轨不重叠与成片时长计算；必须有 `template`、`vars`、`start_frame`、`frames`，可带淡变与 `opacity`，不得带 media/caption 字段。`vars` 的值只能是字符串（1–200 字符）、有限数字或布尔值。模板定义（变量类型、固定 HTML/CSS、安全区）属于执行层 `integrations/local-production/templates/`，变量类型与模板存在性由 Node 校验；Python 只校验结构。首批模板：`lower-third`、`title-card`。不接受任意 HTML、脚本或外部 URL。
+- **执行映射**：变速用 HyperFrames `data-playback-rate`；淡变、转场与闪避的音量统一写入 `data-automation` volume lane，不同时使用音量补间；画面淡变与转场使用透明度时间线。
+- **生成镜头占比** 承诺只统计 media 画面，graphic 叠层不计入遮挡。
+- **导出人工评审** `policy.export_requires_human_review`（可选，缺省 false）：为 true 时，导出所依据的通过检查必须由 `review.reviewer_kind = "human"` 完成。
+- **QA 补充**：引用渲染回执中的 `audioLoweredDb` 作为真峰值限幅证据；字幕与图形采样帧检查安全区（距画面边缘 5%）。
+
 ### 编辑操作（P0）
 
 一次调用提交一个批次：`{ base_revision, author, summary, operations[] }`。整批校验通过才发布新修订；`--dry-run` 只返回 diff（新增/删除/变更的 item、时长变化）不发布；基于过期修订提交直接拒绝，需重读。操作：`add_asset`、`add_track`、`edit_track`（lock/unlock/rename）、`add_item`、`remove_item`（可选同轨 ripple）、`move_item`（改轨或起点）、`trim_item`（入/出点，或 slip 只移源入点）、`split_item`（链接字幕随之拆分归属）、`replace_media`（保持时序，未给新字幕则移除旧链接字幕）、`set_item_props`（volume/fit/opacity/transform/text/style）、`revert_to`（以旧修订内容发布新修订，必须单独成批；不解除当前锁定，也不能改动当前锁定轨道的内容）。修改轨道锁定状态的 `edit_track` 必须单独成批，避免“先解锁再修改”藏在同一批次中。转场、变速、淡入淡出、音乐自动闪避、图形模板属于 P2。

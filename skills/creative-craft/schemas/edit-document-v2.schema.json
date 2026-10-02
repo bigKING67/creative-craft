@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bigKING67/creative-craft/schemas/edit-document-v2.schema.json",
   "title": "Creative Craft Edit Document v2",
-  "description": "Engine-independent, revisioned multi-track edit. Source assets are distinct from timeline item instances. Output time is integer frames at canvas.fps using half-open [start_frame, start_frame + frames); source time is seconds. Kind-specific item rules (media vs caption, linked caption timing, same-track overlap, locked tracks) are enforced by semantic validation.",
+  "description": "Engine-independent, revisioned multi-track edit. Source assets are distinct from timeline item instances. Output time is integer frames at canvas.fps using half-open [start_frame, start_frame + frames); source time is seconds. Kind-specific item rules (media/caption/graphic fields, linked caption timing, same-track overlap except declared crossfades, speed-scaled source ranges, fades, ducking, locked tracks) are enforced by semantic validation.",
   "type": "object",
   "required": ["schema_version", "project_id", "revision", "parent_sha256", "title", "canvas", "assets", "tracks", "items", "change"],
   "properties": {
@@ -79,7 +79,18 @@
         "id": {"$ref": "#/$defs/id"},
         "kind": {"enum": ["video", "audio", "caption"]},
         "locked": {"type": "boolean"},
-        "name": {"type": "string", "minLength": 1}
+        "name": {"type": "string", "minLength": 1},
+        "duck": {
+          "type": "object",
+          "required": ["under_track_id", "depth_db", "attack_frames", "release_frames"],
+          "properties": {
+            "under_track_id": {"$ref": "#/$defs/id"},
+            "depth_db": {"type": "number", "minimum": -24, "maximum": -3},
+            "attack_frames": {"type": "integer", "minimum": 0, "maximum": 60},
+            "release_frames": {"type": "integer", "minimum": 0, "maximum": 120}
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },
@@ -89,7 +100,7 @@
       "properties": {
         "id": {"$ref": "#/$defs/id"},
         "track_id": {"$ref": "#/$defs/id"},
-        "kind": {"enum": ["media", "caption"]},
+        "kind": {"enum": ["media", "caption", "graphic"]},
         "start_frame": {"type": "integer", "minimum": 0},
         "frames": {"type": "integer", "minimum": 1},
         "asset_id": {"$ref": "#/$defs/id"},
@@ -120,6 +131,20 @@
           },
           "additionalProperties": false
         },
+        "speed": {"type": "number", "minimum": 0.1, "maximum": 10},
+        "fade_in_frames": {"type": "integer", "minimum": 0},
+        "fade_out_frames": {"type": "integer", "minimum": 0},
+        "transition_in": {
+          "type": "object",
+          "required": ["kind", "frames"],
+          "properties": {
+            "kind": {"enum": ["crossfade"]},
+            "frames": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
+        },
+        "template": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
+        "vars": {"type": "object"},
         "link": {
           "type": "object",
           "required": ["item_id", "source_from", "source_to"],
