@@ -164,6 +164,6 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 
 - P0 执行底座：EditDocument v2、操作 v2、`add_asset`、v1 迁移、多轨编译、QA 与 lint 关卡、HyperFrames 升级评估。验收：共享样例两侧一致；smoke 覆盖多轨 B-roll、补导入素材、过期修订拒绝、锁定轨道、QA 产物与失败阻断。
 - P1 流程与合同：production-plan / video-production 合同与 CLI、关卡、交付承诺实算、样例与评测，`video-production.md` 增加阶段路由。验收：口播删段 + B-roll + 中文字幕样例端到端可追溯，含一次修改轮。
-- P2 包装与音频（转场、变速、淡变、闪避、带类型变量的图形模板）；P3 Seedance 生成适配与预算台账实接；P4 可选本地素材分析 sidecar。
+- P2 包装与音频（转场、变速、淡变、闪避、带类型变量的图形模板）：音量包络统一用 HyperFrames `data-automation` volume lane，变速用 `data-playback-rate` 与 `rate` lane（0.8.108 已支持），图形模板参考 Remotion 的类型化 props；输入见[首次复查结论](upstream-absorption.md#首次复查结论2026-10-02)；P3 Seedance 生成适配与预算台账实接；P4 可选本地素材分析 sidecar。
 
 以上为实施合同；各项能力以对应提交、测试与实际渲染证据为准，本节不宣称已完成。

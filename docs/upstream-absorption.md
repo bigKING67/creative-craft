@@ -247,3 +247,21 @@ AIOS 的本轮只读检查观察到媒体渲染/提取容器已运行，并发�
 需复查：HyperFrames（编辑配方、CLI skill、lint/inspect 参考、SDK 类型、timeline 命令有变化；npm 最新版与锁定版同为 0.8.108）、ChatCut（basics 一行变化）、OpenChatCut（`reducerActions.ts`、工具 schema）、Remotion（`packages/skills`）、Cerul（`DESIGN.md`）。无变化：OpenMontage；OpenCut 的监控路径不变。
 
 已复查：ChatCut `codex/skills/chatcut-plugin-basics/SKILL.md` 的唯一变化是 `inspect_item` 改为每次最多 10 个 item，归类为无影响；其余项目尚未复查，固定 SHA 保持不变。
+
+### 首次复查结论（2026-10-02）
+
+按上述流程复查了首次运行标记的全部变化，逐文件阅读两版内容。结论：现有实现均无需改动；HyperFrames 与 Remotion 为 P2 提供输入。复查后 watch 文件的固定 SHA 更新为：HyperFrames `70900216f0da`、ChatCut `877b9177144f`、OpenChatCut `d03acbd6c7b1`、Cerul `e93237887eaa`、Remotion `579e314165ce`；OpenMontage 不变；OpenCut 监控路径无变化，保留原固定点。
+
+| 项目 / 路径 | 分类 | 结论 |
+| --- | --- | --- |
+| HyperFrames `creator-editing-recipes.md` | 实现候选（P2） | 上游默认改为视频自带声音（`data-has-audio="true"`），独立 `<audio>` 只用于 J/L 切、替换音轨、配乐与旁白；转场和闪避的音量写在 `data-automation` volume lane，不与音量补间并用（lint 规则 `audio_volume_double_automation`）；变速 0.1–10 并有 `rate` lane。均已含于锁定的 0.8.108（本地 `core/dist` 中 `MAX_PLAYBACK_RATE = 10` 已核实），P2 无需升级。我们现有“静音视频 + 独立音频”仍有效；若 P2 迁移到视频自带声音，先加 `data-has-audio` 严格取值的回归测试 |
+| HyperFrames `hyperframes-cli/SKILL.md` | 方法更新 | 新增 `history`（试行）与 `clean`；我们不经 CLI 驱动，`render.mjs`/`qa.mjs` 不受影响 |
+| HyperFrames `lint-validate-inspect.md` | 方法更新 | 新增 `canvas_content_at_edge`（CLI `check`，本地 lint 包不含）；P2 图形模板若用 canvas 绘字需另行检查贴边 |
+| HyperFrames `packages/sdk/src/types.ts` | 观察 | `setTiming.linked`、`moveIntoSync`/`slipIntoSync`（`data-link`/`data-sync-origin` 视音链接与失步修复）需 ≥0.8.109，npm 尚未发布；我们不依赖 SDK，暂不吸收 |
+| HyperFrames `cli/commands/timeline.ts` | 方法参考 | `--plan` 预演与回执撤销，与我们的 `--dry-run`、原子批次一致；不依赖 CLI |
+| HyperFrames 0.8.108 producer | 实现候选（P0 补强） | 新增 `audioLoweredDb`：真峰值限幅压低整段混音时记录（本地 `producer/dist` 已核实）。`qa.mjs` 的真峰值检查可引用它作为限幅证据 |
+| ChatCut basics | 无影响 | 仅 `inspect_item` 改为每次最多 10 个 |
+| OpenChatCut `reducerActions.ts` | 无影响 | 新增 `durationFps` 与仅空时间线可用的 `tl.setFps`；我们的源时间为秒、fps 为固定枚举 |
+| OpenChatCut 工具 schema | 无影响 / deferred | `edit_item`（validateOnly、整批原子）与 `verify_export` 定义及工具名单不变；新增 Fal 生成目录超出范围；`import_timeline`（FCPXML/EDL）记为未来工程交换参考 |
+| Cerul `DESIGN.md` | 无影响 | 仅命令清单与 CI 文案；索引单元、采样与融合公式不变 |
+| Remotion `packages/skills`（4.0.526→4.0.532） | 方法参考 | `LICENSE.md` blob 不变，维持 candidate。P2 可参考：音量关键帧（淡变、闪避）、带可编辑类型化 props 的独立时间线组合（图形模板）、转场统一提前挂载。监控路径已细化为 `remotion-markup/{transitions,audio,timing-props,connected-compositions}.md` |
