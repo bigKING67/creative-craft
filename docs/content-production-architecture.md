@@ -150,9 +150,9 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 - **自动闪避** 轨道 `duck: {under_track_id, depth_db (−24…−3), attack_frames, release_frames}`：只允许在 audio 轨；`under_track_id` 必须存在、不能是自身、可以是 video 或 audio 轨，且被参照的轨道自身不能再带 `duck`（只有一层）。编译时依据被参照轨道上有声 media item 的区间生成音量包络。
 - **图形** item `kind: "graphic"`：只在 video 轨，参与同轨不重叠与成片时长计算；必须有 `template`、`vars`、`start_frame`、`frames`，可带淡变与 `opacity`，不得带 media/caption 字段。`vars` 的值只能是字符串（1–200 字符）、有限数字或布尔值。模板定义（变量类型、固定 HTML/CSS、安全区）属于执行层 `integrations/local-production/templates/`，变量类型与模板存在性由 Node 校验；Python 只校验结构。首批模板：`lower-third`、`title-card`。不接受任意 HTML、脚本或外部 URL。
 - **执行映射**：变速用 HyperFrames `data-playback-rate`；淡变、转场与闪避的音量统一写入 `data-automation` volume lane，不同时使用音量补间；画面淡变与转场使用透明度时间线。
-- **补充约定**：graphic 字段白名单为 `id/track_id/kind/template/vars/start_frame/frames/fade_in_frames/fade_out_frames/opacity`；`duck` 不能指向 caption 轨；crossfade 的后一 item 起点必须严格晚于前一 item，且同轨重叠检查覆盖所有在前 item。
+- **补充约定**：crossfade 重叠帧数 = 紧邻前一 item 的结束帧 − 后一 item 的起点，前一 item 必须是 media，后一 item 必须结束得比前一 item 晚（不能嵌套其中）；graphic `vars` 的键名须匹配 `^[a-z][a-z0-9_]{0,31}$`，字符串长度按 UTF-16 码元计（1–200）；volume 自动化每条最多 512 点，在编辑提交与创建时即校验，不留到渲染才失败；锁定冻结的是该轨道自身的 item 与设置（含 `duck` 配置，回退也不得改动），不冻结由被参照轨道派生的闪避包络。graphic 字段白名单为 `id/track_id/kind/template/vars/start_frame/frames/fade_in_frames/fade_out_frames/opacity`；`duck` 不能指向 caption 轨；crossfade 的后一 item 起点必须严格晚于前一 item，且同轨重叠检查覆盖所有在前 item。
 - **生成镜头占比** 承诺只统计 media 画面，graphic 叠层不计入遮挡；crossfade 重叠区间内任一段为生成素材即计为生成（上界计法）。
-- **导出人工评审** `policy.export_requires_human_review`（可选，缺省 false）：为 true 时，导出所依据的通过检查必须由 `review.reviewer_kind = "human"` 完成。
+- **导出人工评审** `policy.export_requires_human_review`（可选，缺省 false）：为 true 时，inspect 阶段在评审接受后必须再经显式签字 `video-approve --stage inspect --by <name>` 才能完成，导出所依据的那次通过检查必须带有该签字。render-qa 中的 `review.reviewer_kind` 只是 Agent 写入的说明，不作为人工证据。边界：本地 CLI 无法核实签字人是否真人，签字只提供具名、可追溯的责任记录；真实身份认证由宿主（如 AIOS 的登录用户）绑定到签字动作。
 - **QA 补充**：引用渲染回执中的 `audioLoweredDb` 作为真峰值限幅证据；字幕与图形采样帧检查安全区（距画面边缘 5%）。
 
 ### 编辑操作（P0）
