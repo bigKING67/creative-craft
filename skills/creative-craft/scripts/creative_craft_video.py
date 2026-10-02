@@ -454,8 +454,24 @@ def plan_structure_changes(
     return sorted(changes)
 
 
+PLAN_CHANGE_NOTE = "plan structure changed since it was last accepted"
+
+
+def _accepted_plan(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Latest plan bound by a completed stage: approved, or accepted unchanged."""
+    accepted = None
+    for stage_id in ("plan", "select", "generate"):
+        stage = _stage(data, stage_id)
+        if stage["status"] != "completed":
+            continue
+        for artifact in stage["artifacts"]:
+            if artifact["kind"] == "production-plan":
+                accepted = artifact
+    return accepted
+
+
 def _check_plan_changes(root: Path, data: dict[str, Any], gate: Gate) -> None:
-    approved_art = _latest(data, ("plan",), "production-plan")
+    approved_art = _accepted_plan(data)
     if approved_art is None or data["plan"] is None:
         return
     if data["plan"]["sha256"] == approved_art["sha256"]:
@@ -471,7 +487,7 @@ def _check_plan_changes(root: Path, data: dict[str, Any], gate: Gate) -> None:
     changes = plan_structure_changes(approved, current)
     if changes:
         gate.info["plan_changes"] = changes
-        gate.info["approval_reason"] = "plan structure changed after the plan stage"
+        gate.info["approval_reason"] = PLAN_CHANGE_NOTE
 
 
 def evaluate_gate(
@@ -636,7 +652,11 @@ def complete_stage(root: Path, data: dict[str, Any], stage_id: str) -> Gate:
             gate.reasons.append(stage["note"])
     elif gate.outcome == "awaiting_approval":
         stage["status"] = "awaiting_approval"
-        stage["note"] = "gate passed; awaiting approval"
+        stage["note"] = (
+            f"{PLAN_CHANGE_NOTE}: " + "; ".join(gate.info["plan_changes"])
+            if "plan_changes" in gate.info
+            else "gate passed; awaiting approval"
+        )
     else:
         _finish_stage(data, stage_id, "gate passed")
     _event(
@@ -686,6 +706,13 @@ def skip_stage(root: Path, data: dict[str, Any], stage_id: str, reason: str) -> 
         if _stage(data, prior)["status"] not in DONE:
             gate.block(f"preceding stage {prior} is not completed or skipped")
     plan = _plan(root, data, gate)
+    if stage_id in {"select", "generate"}:
+        _check_plan_changes(root, data, gate)
+        if "plan_changes" in gate.info:
+            gate.block(
+                f"{PLAN_CHANGE_NOTE} ({'; '.join(gate.info['plan_changes'])}); "
+                "complete the stage for approval instead of skipping"
+            )
     if gate.reasons:
         raise VideoError("cannot skip: " + "; ".join(gate.reasons))
     if stage_id in {"select", "generate"} and plan is None:
@@ -738,18 +765,16 @@ def record_artifact(
                 f"revision {revision} is not newer than current revision {current}"
             )
         data["current_revision"] = revision
+    for done in data["stages"]:
+        if done["status"] != "completed":
+            continue
+        for bound in done["artifacts"]:
+            if bound["path"] == relative and bound["sha256"] != artifact["sha256"]:
+                raise VideoError(
+                    f"{relative} is bound by completed stage {done['id']} and must "
+                    "stay unchanged; write changes to a new file"
+                )
     if kind == "production-plan":
-        approved = _latest(data, ("plan",), "production-plan")
-        if (
-            stage_id != "plan"
-            and approved is not None
-            and approved["path"] == relative
-            and approved["sha256"] != artifact["sha256"]
-        ):
-            raise VideoError(
-                f"{relative} is the approved plan and must stay unchanged; "
-                "write plan changes to a new file"
-            )
         data["plan"] = {"path": relative, "sha256": artifact["sha256"]}
     stage["artifacts"].append(artifact)
     if stage["status"] in {"pending", "blocked", "awaiting_approval"}:

@@ -2534,7 +2534,13 @@ def validate_video_production(data: dict[str, Any]) -> Result:
             # select/generate also wait for approval when they change the
             # approved plan's structure, regardless of policy.
             r.require(
-                stage_id in required_approval or stage_id in {"select", "generate"},
+                stage_id in required_approval
+                or (
+                    stage_id in {"select", "generate"}
+                    and str(stage.get("note", "")).startswith(
+                        "plan structure changed since it was last accepted"
+                    )
+                ),
                 f"stage {stage_id} awaits approval it does not require",
             )
         if stage.get("status") == "completed" and stage_id in required_approval:

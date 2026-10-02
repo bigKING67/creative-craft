@@ -19,7 +19,6 @@ import json
 import re
 import subprocess
 import sys
-import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -38,14 +37,20 @@ class NotFound(Exception):
 
 
 def gh_api(endpoint: str) -> Any:
-    proc = subprocess.run(
-        ["gh", "api", endpoint], capture_output=True, text=True, check=False
-    )
+    try:
+        proc = subprocess.run(
+            ["gh", "api", endpoint], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("gh CLI not found; install and authenticate gh") from exc
     if proc.returncode != 0:
         if "HTTP 404" in proc.stderr or "Not Found" in proc.stderr:
             raise NotFound(endpoint)
         raise RuntimeError(f"gh api {endpoint} failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"gh api {endpoint} returned non-JSON output") from exc
 
 
 def npm_latest(package: str) -> str:
@@ -118,7 +123,14 @@ def check_upstream(
 ) -> dict[str, Any]:
     repo = upstream["repo"]
     report: dict[str, Any] = {"id": upstream["id"], "repo": repo, "status": upstream["status"]}
+    errors: list[str] = []
     try:
+        try:
+            fetch(f"repos/{repo}/commits/{upstream['pinned_sha']}")
+        except NotFound as exc:
+            raise RuntimeError(
+                f"pinned_sha {upstream['pinned_sha'][:12]} is not resolvable upstream; re-pin after review"
+            ) from exc
         branch = fetch(f"repos/{repo}")["default_branch"]
         head = fetch(f"repos/{repo}/commits/{branch}")["sha"]
         report.update(branch=branch, head_sha=head, pinned_sha=upstream["pinned_sha"])
@@ -130,23 +142,30 @@ def check_upstream(
             )
             paths.append({"path": entry["path"], "state": state, "maps_to": entry["maps_to"]})
         report["paths"] = paths
+        for item in paths:
+            if item["state"] == "missing":
+                errors.append(f"watch path {item['path']} exists at neither pin nor head")
     except (NotFound, RuntimeError, KeyError) as exc:
-        report["error"] = str(exc)
+        errors.append(str(exc))
     npm = upstream.get("npm")
     if npm:
         manifest = json.loads((root / npm["pinned_in"]).read_text(encoding="utf-8"))
         pinned = manifest.get("dependencies", {}).get(npm["package"])
         try:
             newest = latest(npm["package"])
-        except (urllib.error.URLError, KeyError, ValueError) as exc:
+        except (OSError, KeyError, ValueError) as exc:  # URLError and timeouts are OSError
             newest = None
-            report.setdefault("error", f"npm lookup failed: {exc}")
+            errors.append(f"npm lookup failed: {exc}")
         report["npm"] = {"package": npm["package"], "pinned": pinned, "latest": newest}
+    if errors:
+        report["error"] = "; ".join(errors)
     return report
 
 
 def needs_review(report: dict[str, Any]) -> bool:
-    changed = any(p["state"] != "unchanged" for p in report.get("paths", []))
+    changed = any(
+        p["state"] in {"changed", "added", "removed"} for p in report.get("paths", [])
+    )
     npm = report.get("npm")
     return changed or bool(npm and npm["latest"] and npm["latest"] != npm["pinned"])
 
@@ -186,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.offline:
         print(f"upstream-watch.json valid: {len(data['upstreams'])} upstreams")
         return 0
+    known = {u["id"] for u in data["upstreams"]}
+    unknown = sorted(set(args.only or []) - known)
+    if unknown:
+        print(f"unknown upstream id(s): {', '.join(unknown)}", file=sys.stderr)
+        return 2
     selected = [u for u in data["upstreams"] if not args.only or u["id"] in args.only]
     reports = [check_upstream(upstream) for upstream in selected]
     print(json.dumps(reports, indent=2) if args.json else render_text(reports))

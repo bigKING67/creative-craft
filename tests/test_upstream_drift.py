@@ -5,9 +5,11 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("upstream_drift", ROOT / "scripts/upstream_drift.py")
@@ -18,10 +20,14 @@ SPEC.loader.exec_module(drift)
 PIN, HEAD = "a" * 40, "b" * 40
 
 
-def fake_fetch(tree: dict[str, dict[str, object]]):
+def fake_fetch(tree: dict[str, dict[str, object]], *, pin_exists: bool = True):
     """tree maps ref -> {path: file-sha | list-of-children}; absent paths are 404."""
 
     def fetch(endpoint: str):
+        if endpoint == f"repos/o/r/commits/{PIN}":
+            if not pin_exists:
+                raise drift.NotFound(endpoint)
+            return {"sha": PIN}
         if endpoint == "repos/o/r":
             return {"default_branch": "main"}
         if endpoint == "repos/o/r/commits/main":
@@ -83,6 +89,42 @@ class DriftTests(unittest.TestCase):
         )
         self.assertTrue(drift.needs_review(report))
         self.assertEqual(HEAD, report["head_sha"])
+        # A path present in neither version is a broken watch entry, not drift.
+        self.assertIn("never.md exists at neither pin nor head", report["error"])
+
+    def test_unresolvable_pin_is_an_error_not_added_paths(self) -> None:
+        report = drift.check_upstream(
+            self.upstream(["a.md"]),
+            fetch=fake_fetch({PIN: {}, HEAD: {"a.md": "1"}}, pin_exists=False),
+        )
+        self.assertIn("not resolvable upstream", report["error"])
+        self.assertNotIn("paths", report)
+
+    def test_npm_timeout_and_github_errors_are_both_reported(self) -> None:
+        def broken(endpoint: str):
+            raise RuntimeError("gh api failed: rate limited")
+
+        def slow(_: str) -> str:
+            raise TimeoutError("read timed out")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text(json.dumps({"dependencies": {"pkg": "1"}}))
+            report = drift.check_upstream(
+                self.upstream(["a.md"], {"package": "pkg", "pinned_in": "package.json"}),
+                fetch=broken,
+                latest=slow,
+                root=root,
+            )
+        self.assertIn("rate limited", report["error"])
+        self.assertIn("read timed out", report["error"])
+
+    def test_missing_gh_binary_is_a_clear_error(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"PATH": ""}),
+            self.assertRaisesRegex(RuntimeError, "gh CLI not found"),
+        ):
+            drift.gh_api("repos/o/r")
 
     def test_unchanged_paths_and_current_npm_need_no_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

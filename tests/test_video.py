@@ -305,7 +305,7 @@ class VideoGateTests(unittest.TestCase):
             "video-record", "--stage", "select", "--kind", "production-plan",
             "--artifact", "plan.json", code=1,
         )
-        self.assertIn("approved plan and must stay unchanged", out)
+        self.assertIn("bound by completed stage plan and must stay unchanged", out)
         (self.root / "plan.json").write_bytes(approved)
         write_doc(self.root, "plan-select.json", production_plan())
         self.cli(
@@ -319,9 +319,37 @@ class VideoGateTests(unittest.TestCase):
         select = next(s for s in status["stages"] if s["id"] == "select")
         self.assertIn("added, removed or reordered", " ".join(select["gate"]["plan_changes"]))
         self.cli("video-approve", "--stage", "select", "--by", "editor", "--note", "drop open beat")
+        # The select-approved plan is now the baseline and is itself immutable.
+        approved_select = (self.root / "plan-select.json").read_bytes()
+        changed = production_plan()
+        changed["delivery_promises"] = []
+        write_doc(self.root, "plan-select.json", changed)
+        out = self.cli(
+            "video-record", "--stage", "generate", "--kind", "production-plan",
+            "--artifact", "plan-select.json", code=1,
+        )
+        self.assertIn("bound by completed stage select", out)
+        (self.root / "plan-select.json").write_bytes(approved_select)
+        status = json.loads(self.cli("video-status", "--json"))
+        generate = next(s for s in status["stages"] if s["id"] == "generate")
+        self.assertNotIn("plan_changes", generate["gate"])
+        # A structural change cannot be skipped past.
+        write_doc(self.root, "plan-generate.json", changed)
+        self.cli(
+            "video-record", "--stage", "generate", "--kind", "production-plan",
+            "--artifact", "plan-generate.json",
+        )
+        out = self.cli("video-skip", "--stage", "generate", "--reason", "none", code=1)
+        self.assertIn("delivery_promises changed", out)
+        write_doc(self.root, "plan-generate2.json", production_plan())
+        self.cli(
+            "video-record", "--stage", "generate", "--kind", "production-plan",
+            "--artifact", "plan-generate2.json",
+        )
+        self.cli("video-skip", "--stage", "generate", "--reason", "no generated beats")
         status = json.loads(self.cli("video-status", "--json"))
         self.assertEqual(["broll"], status["candidates"])
-        self.assertEqual("generate", status["current_stage"])
+        self.assertEqual("assemble", status["current_stage"])
 
     def test_generate_requires_bound_job_and_receipt(self) -> None:
         self.plan_ready(production_plan(extra_beats=[generate_beat()]))
