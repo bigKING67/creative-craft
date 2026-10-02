@@ -176,6 +176,30 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
         "template": "reference-binding-history.json",
         "legacy": False,
     },
+    "creative-craft.edit-document.v2": {
+        "kind": "edit-document",
+        "schema": "edit-document-v2.schema.json",
+        "template": None,
+        "legacy": False,
+    },
+    "creative-craft.render-qa.v1": {
+        "kind": "render-qa",
+        "schema": "render-qa.schema.json",
+        "template": None,
+        "legacy": False,
+    },
+    "creative-craft.production-plan.v1": {
+        "kind": "production-plan",
+        "schema": "production-plan.schema.json",
+        "template": "production-plan.json",
+        "legacy": False,
+    },
+    "creative-craft.video-production.v1": {
+        "kind": "video-production",
+        "schema": "video-production.schema.json",
+        "template": "video-production.json",
+        "legacy": False,
+    },
 }
 
 # Brand and Reference artifacts are opt-in. Keeping an explicit project
@@ -2067,6 +2091,417 @@ def validate_reference_binding_history(data: dict[str, Any]) -> Result:
     return r
 
 
+# --- Video Harness v1: shared edit/QA contracts and production evidence ---
+
+VIDEO_STAGES = (
+    "brief",
+    "reference",
+    "plan",
+    "select",
+    "generate",
+    "assemble",
+    "inspect",
+    "revise",
+    "export",
+)
+EDIT_DOCUMENT_MAX_SECONDS = 600
+SELECTION_EVIDENCE_TOLERANCE_SECONDS = 2.0
+_TIME_EPSILON = 1e-6
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _indexed_ids(
+    r: Result, values: Any, label: str
+) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    for index, value in enumerate(values if isinstance(values, list) else []):
+        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+            continue
+        r.require(
+            value["id"] not in indexed,
+            f"{label}[{index}] duplicates id {value['id']}",
+        )
+        indexed.setdefault(value["id"], value)
+    return indexed
+
+
+def linked_caption_frames(
+    caption: dict[str, Any], target: dict[str, Any], fps: int
+) -> tuple[int, int] | None:
+    """Output frames of a linked caption, clipped to its media item's source range."""
+    link = caption.get("link", {})
+    source_in = float(target["source_in_seconds"])
+    source_out = source_in + target["frames"] / fps
+    start = max(float(link["source_from"]), source_in)
+    end = min(float(link["source_to"]), source_out)
+    if end <= start:
+        return None
+    first = target["start_frame"] + round((start - source_in) * fps)
+    last = target["start_frame"] + round((end - source_in) * fps)
+    return (first, last) if last > first else None
+
+
+def edit_document_item_frames(data: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    """Resolved half-open output frame ranges for every timed item of a valid document."""
+    fps = int(data["canvas"]["fps"])
+    items = {item["id"]: item for item in data.get("items", [])}
+    resolved: dict[str, tuple[int, int]] = {}
+    for item_id, item in items.items():
+        if "link" in item:
+            target = items.get(item["link"]["item_id"])
+            frames = linked_caption_frames(item, target, fps) if target else None
+            if frames:
+                resolved[item_id] = frames
+        elif "start_frame" in item and "frames" in item:
+            resolved[item_id] = (item["start_frame"], item["start_frame"] + item["frames"])
+    return resolved
+
+
+def edit_document_duration_frames(data: dict[str, Any]) -> int:
+    """Output length: the maximum end of media items and unlinked captions."""
+    ends = [
+        item["start_frame"] + item["frames"]
+        for item in data.get("items", [])
+        if "link" not in item and "start_frame" in item and "frames" in item
+    ]
+    return max(ends, default=0)
+
+
+def edit_document_generated_share(data: dict[str, Any]) -> float:
+    """Share of output frames whose topmost visible video item uses a generated asset."""
+    duration = edit_document_duration_frames(data)
+    if duration <= 0:
+        return 0.0
+    order = {
+        track["id"]: index
+        for index, track in enumerate(data.get("tracks", []))
+        if track.get("kind") == "video"
+    }
+    generated = {
+        asset["id"]
+        for asset in data.get("assets", [])
+        if asset.get("origin", {}).get("kind") == "generated"
+    }
+    video_items = [
+        item
+        for item in data.get("items", [])
+        if item.get("kind") == "media" and item.get("track_id") in order
+    ]
+    bounds = sorted(
+        {0, duration}
+        | {item["start_frame"] for item in video_items}
+        | {item["start_frame"] + item["frames"] for item in video_items}
+    )
+    generated_frames = 0
+    for start, end in zip(bounds, bounds[1:], strict=False):
+        covering = [
+            item
+            for item in video_items
+            if item["start_frame"] <= start < item["start_frame"] + item["frames"]
+        ]
+        if covering:
+            top = max(covering, key=lambda item: order[item["track_id"]])
+            if top["asset_id"] in generated:
+                generated_frames += min(end, duration) - start
+    return generated_frames / duration
+
+
+def validate_edit_document(data: dict[str, Any]) -> Result:
+    r = Result()
+    revision = data.get("revision")
+    if revision == 1:
+        r.require(
+            data.get("parent_sha256") is None,
+            "revision 1 must have parent_sha256 null",
+        )
+    else:
+        r.require(
+            isinstance(data.get("parent_sha256"), str),
+            "revision > 1 requires parent_sha256",
+        )
+    fps = data.get("canvas", {}).get("fps")
+    assets = _indexed_ids(r, data.get("assets"), "assets")
+    tracks = _indexed_ids(r, data.get("tracks"), "tracks")
+    items = _indexed_ids(r, data.get("items"), "items")
+    by_track: dict[str, list[tuple[int, int, str]]] = {}
+    for index, item in enumerate(data.get("items", [])):
+        label = f"items[{index}] ({item.get('id')})"
+        track = tracks.get(str(item.get("track_id")))
+        if track is None:
+            r.errors.append(f"{label} references unknown track {item.get('track_id')!r}")
+        track_kind = track.get("kind") if track else None
+        if item.get("kind") == "media":
+            for key in ("asset_id", "start_frame", "frames", "source_in_seconds", "volume"):
+                r.require(key in item, f"{label} media item requires {key}")
+            for key in ("text", "style", "link"):
+                r.require(key not in item, f"{label} media item must not set {key}")
+            r.require(
+                track_kind != "caption", f"{label} media item cannot be on a caption track"
+            )
+            asset = assets.get(str(item.get("asset_id")))
+            if "asset_id" in item and asset is None:
+                r.errors.append(f"{label} references unknown asset {item.get('asset_id')!r}")
+            if asset is not None:
+                if track_kind == "video":
+                    r.require(
+                        asset.get("video") is True,
+                        f"{label} on a video track requires an asset with video",
+                    )
+                if track_kind == "audio":
+                    r.require(
+                        asset.get("audio") is True,
+                        f"{label} on an audio track requires an asset with audio",
+                    )
+                if (
+                    _is_number(item.get("source_in_seconds"))
+                    and isinstance(item.get("frames"), int)
+                    and fps
+                    and _is_number(asset.get("duration"))
+                ):
+                    source_end = item["source_in_seconds"] + item["frames"] / fps
+                    r.require(
+                        source_end <= asset["duration"] + _TIME_EPSILON,
+                        f"{label} source range ends at {source_end:g}s beyond asset "
+                        f"duration {asset['duration']:g}s",
+                    )
+            if (
+                track is not None
+                and isinstance(item.get("start_frame"), int)
+                and isinstance(item.get("frames"), int)
+            ):
+                by_track.setdefault(track["id"], []).append(
+                    (item["start_frame"], item["start_frame"] + item["frames"], item["id"])
+                )
+        elif item.get("kind") == "caption":
+            r.require(
+                track_kind == "caption", f"{label} caption item must be on a caption track"
+            )
+            r.require(nonempty(item.get("text")), f"{label} caption item requires text")
+            for key in ("asset_id", "source_in_seconds", "volume"):
+                r.require(key not in item, f"{label} caption item must not set {key}")
+            link = item.get("link")
+            if isinstance(link, dict):
+                for key in ("start_frame", "frames"):
+                    r.require(
+                        key not in item, f"{label} linked caption must not set {key}"
+                    )
+                target = items.get(str(link.get("item_id")))
+                r.require(
+                    target is not None and target.get("kind") == "media",
+                    f"{label} link must reference a media item, got {link.get('item_id')!r}",
+                )
+                if _is_number(link.get("source_from")) and _is_number(link.get("source_to")):
+                    r.require(
+                        link["source_to"] > link["source_from"],
+                        f"{label} link.source_to must be greater than link.source_from",
+                    )
+                    if (
+                        target is not None
+                        and target.get("kind") == "media"
+                        and fps
+                        and all(
+                            key in target
+                            for key in ("start_frame", "frames", "source_in_seconds")
+                        )
+                        and link["source_to"] > link["source_from"]
+                    ):
+                        r.warn(
+                            linked_caption_frames(item, target, fps) is not None,
+                            f"{label} link range lies outside the linked item's source range",
+                        )
+            else:
+                for key in ("start_frame", "frames"):
+                    r.require(key in item, f"{label} caption without link requires {key}")
+    for track_id, spans in by_track.items():
+        spans.sort()
+        for (_, previous_end, previous_id), (start, _, item_id) in zip(
+            spans, spans[1:], strict=False
+        ):
+            r.require(
+                start >= previous_end,
+                f"track {track_id} media items {previous_id} and {item_id} overlap",
+            )
+    if r.ok and fps:
+        duration = edit_document_duration_frames(data)
+        r.require(duration >= 1, "edit duration must be at least one frame")
+        r.require(
+            duration <= EDIT_DOCUMENT_MAX_SECONDS * fps,
+            f"edit duration {duration} frames exceeds {EDIT_DOCUMENT_MAX_SECONDS} seconds",
+        )
+    return r
+
+
+def render_qa_expected_verdict(checks: list[dict[str, Any]]) -> str:
+    statuses = {check.get("status") for check in checks if isinstance(check, dict)}
+    if "fail" in statuses:
+        return "fail"
+    if "warn" in statuses:
+        return "pass_with_warnings"
+    return "pass"
+
+
+def validate_render_qa(data: dict[str, Any]) -> Result:
+    r = Result()
+    review = data.get("review", {})
+    if review.get("status") == "done":
+        r.require(
+            review.get("decision") != "pending",
+            "completed review requires a decision other than pending",
+        )
+        r.require(nonempty(review.get("reviewer")), "completed review requires reviewer")
+    if review.get("decision") == "pending":
+        r.require(
+            review.get("status") == "pending", "pending decision requires review.status pending"
+        )
+    checks = data.get("checks", [])
+    expected = render_qa_expected_verdict(checks)
+    r.require(
+        data.get("verdict") == expected,
+        f"verdict {data.get('verdict')!r} contradicts checks; expected {expected!r}",
+    )
+    r.warn(
+        not any(check.get("status") == "unknown" for check in checks),
+        "some checks are unknown; the verdict does not cover them",
+    )
+    samples = _indexed_ids(r, data.get("samples"), "samples")
+    _indexed_ids(r, checks, "checks")
+    findings = review.get("findings", [])
+    _indexed_ids(r, findings, "review.findings")
+    for group, entries in (("checks", checks), ("review.findings", findings)):
+        for index, entry in enumerate(entries):
+            for ref in entry.get("refs", []):
+                sample_id = ref.get("sample_id")
+                r.require(
+                    sample_id is None or sample_id in samples,
+                    f"{group}[{index}] references unknown sample {sample_id!r}",
+                )
+    for index, finding in enumerate(findings):
+        if finding.get("severity") == "critical":
+            r.require(
+                nonempty(finding.get("fix")),
+                f"review.findings[{index}] critical finding requires fix",
+            )
+    return r
+
+
+def validate_production_plan(data: dict[str, Any]) -> Result:
+    r = Result()
+    promises = _indexed_ids(r, data.get("delivery_promises"), "delivery_promises")
+    for promise_id, promise in promises.items():
+        check = promise.get("check", {})
+        kind = check.get("kind")
+        label = f"delivery promise {promise_id}"
+        if kind == "duration_range":
+            minimum, maximum = check.get("min"), check.get("max")
+            r.require(
+                _is_number(minimum) and _is_number(maximum),
+                f"{label} duration_range requires min and max",
+            )
+            if _is_number(minimum) and _is_number(maximum):
+                r.require(0 <= minimum <= maximum, f"{label} requires 0 <= min <= max")
+        elif kind == "max_generated_share":
+            maximum = check.get("max")
+            r.require(
+                _is_number(maximum) and 0 <= maximum <= 1,
+                f"{label} max_generated_share requires max between 0 and 1",
+            )
+            r.require("min" not in check, f"{label} max_generated_share must not set min")
+        else:
+            r.require(
+                "min" not in check and "max" not in check,
+                f"{label} {kind} must not set min or max",
+            )
+    beats = _indexed_ids(r, data.get("beats"), "beats")
+    total = 0.0
+    for beat_id, beat in beats.items():
+        label = f"beat {beat_id}"
+        if _is_number(beat.get("duration_seconds")):
+            total += beat["duration_seconds"]
+        source_kind = beat.get("source_kind")
+        r.require(
+            beat.get("generation_ref") is None or source_kind == "generate",
+            f"{label} generation_ref requires source_kind generate",
+        )
+        r.require(
+            beat.get("selection") is None or source_kind != "tbd",
+            f"{label} with source_kind tbd must not have a selection",
+        )
+        selection = beat.get("selection")
+        if not isinstance(selection, dict):
+            continue
+        start = selection.get("source_start_seconds")
+        end = selection.get("source_end_seconds")
+        if not (_is_number(start) and _is_number(end)):
+            continue
+        r.require(end > start, f"{label} selection end must be after start")
+        for index, evidence in enumerate(selection.get("evidence", [])):
+            ev_start = evidence.get("start_seconds")
+            ev_end = evidence.get("end_seconds")
+            if not (_is_number(ev_start) and _is_number(ev_end)):
+                continue
+            r.require(
+                ev_end >= ev_start, f"{label} evidence[{index}] end precedes start"
+            )
+            tolerance = SELECTION_EVIDENCE_TOLERANCE_SECONDS
+            r.require(
+                ev_start <= end + tolerance and ev_end >= start - tolerance,
+                f"{label} evidence[{index}] lies outside the selected source range "
+                f"(±{tolerance:g}s)",
+            )
+    target = data.get("output", {}).get("duration_seconds_target")
+    if _is_number(target) and target > 0 and beats:
+        r.warn(
+            abs(total - target) <= max(1.0, target * 0.2),
+            f"beat durations total {total:g}s; output target is {target:g}s",
+        )
+    return r
+
+
+def validate_video_production(data: dict[str, Any]) -> Result:
+    r = Result()
+    stages = data.get("stages", [])
+    r.require(
+        [stage.get("id") for stage in stages] == list(VIDEO_STAGES),
+        "stages must list " + ", ".join(VIDEO_STAGES) + " in order",
+    )
+    policy = data.get("policy", {})
+    budget = policy.get("budget", {})
+    if budget.get("mode") == "cap":
+        r.require(_is_number(budget.get("cap")), "budget mode cap requires a numeric cap")
+    max_rounds = policy.get("max_revision_rounds")
+    if isinstance(max_rounds, int) and isinstance(data.get("revision_rounds"), int):
+        r.require(
+            data["revision_rounds"] <= max_rounds,
+            "revision_rounds must not exceed policy.max_revision_rounds",
+        )
+    required_approval = set(policy.get("approval_required", []))
+    for stage in stages:
+        stage_id = stage.get("id")
+        if stage.get("status") == "awaiting_approval":
+            r.require(
+                stage_id in required_approval,
+                f"stage {stage_id} awaits approval it does not require",
+            )
+        if stage.get("status") == "completed" and stage_id in required_approval:
+            r.require(
+                stage.get("approval") is not None,
+                f"stage {stage_id} is completed without its required approval",
+            )
+        if stage.get("status") == "skipped":
+            r.require(nonempty(stage.get("note")), f"skipped stage {stage_id} requires a note")
+    ledger = _indexed_ids(r, data.get("ledger"), "ledger")
+    for entry_id, entry in ledger.items():
+        settled = entry.get("status") == "settled"
+        r.require(
+            (entry.get("actual") is not None) == settled,
+            f"ledger {entry_id} actual must be set exactly when settled",
+        )
+    return r
+
+
 def _no_semantic_validation(data: dict[str, Any]) -> Result:
     del data
     return Result()
@@ -2095,6 +2530,10 @@ def _call_semantic_validator(
         "creative-craft.reference-pack.v1": validate_reference_pack_artifact,
         "creative-craft.reference-binding.v1": validate_reference_binding,
         "creative-craft.reference-binding-history.v1": validate_reference_binding_history,
+        "creative-craft.edit-document.v2": validate_edit_document,
+        "creative-craft.render-qa.v1": validate_render_qa,
+        "creative-craft.production-plan.v1": validate_production_plan,
+        "creative-craft.video-production.v1": validate_video_production,
     }
     if schema_version in {"creative-craft.image-job.v1", "creative-craft.image-job.v2"}:
         return validate_image_job(data, context)
@@ -2166,4 +2605,8 @@ ARTIFACT_ID_FIELDS = {
     "reference-pack": "reference_pack_id",
     "reference-binding": "binding_id",
     "reference-binding-history": "history_id",
+    "edit-document": None,
+    "render-qa": "qa_id",
+    "production-plan": "plan_id",
+    "video-production": "production_id",
 }
