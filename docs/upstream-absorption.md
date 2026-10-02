@@ -209,3 +209,41 @@ AIOS 的本轮只读检查观察到媒体渲染/提取容器已运行，并发�
 - 选片检索返回：`{recipe_version, space_id, hits:[{asset_id, source_revision, source_start_ms, source_end_ms, score, matched[], evidence:[{track, raw_score, rank, norm, contributes, excerpt, start_ms, end_ms}], preview_frame, scene_id}], stale_excluded, capability_gaps}`，源时间为半开区间，可直接传给 `add_clip`。
 
 剩余限制：上表 P1 宿主完成条件仍未验收；未运行任何上游代码。下次复查仍按“升级、接口变化、回归失败或新任务”触发，并优先比对上面列出的固定路径。
+
+## 持续吸收机制与当前状态：2026-10-02
+
+### 机器真源与检查
+
+[`upstream-watch.json`](upstream-watch.json) 是固定研究 SHA、监控路径、上游路径到本仓库文件的映射，以及当前吸收状态的机器可读真源。前文「审阅基线」表保留为 2026-09-20 历史快照，后续更新以 watch 文件加本文件的日期记录为准，两者在同一提交中修改。
+
+`make upstream-check`（即 `scripts/upstream_drift.py`）只读运行：对每个监控路径比较固定 SHA 与上游默认分支的文件 blob 或目录清单（不依赖 compare API，ChatCut 这类历史被重写的仓库也适用），并比对 HyperFrames 的 npm 最新版本与 `integrations/local-production/package.json` 中的锁定版本。`--offline` 只校验 watch 文件，并由 `tests/test_upstream_drift.py` 在常规测试中执行，本地文件重命名导致映射失效时会测试失败。脚本需要已登录的 `gh` 和网络，不进入 `validate-all`。
+
+### 复查流程
+
+触发：开始新一期 video harness 工作前、准备发布前、依赖升级或回归失败时；没有触发时可按月运行一次。
+
+1. 运行 `make upstream-check`，只处理标记 `REVIEW` 的项目。
+2. 对每个变化路径阅读实际 diff，归入以下一类：无影响（措辞、示例）/ 方法更新（改 `video-production.md` 等参考文档）/ 实现候选（进入 harness 计划，按正常测试与证据验收）/ 许可或边界变化（暂停该项吸收并重新评估）。
+3. 在本文件追加日期记录：路径、上游新 SHA、分类、结论与承接文件。文件有变化不等于需要吸收。
+4. 只有完成复查后，才把 watch 文件中的 `pinned_sha` 更新为已审阅的上游 SHA；已实现能力的状态只能凭对应提交和测试证据升级。npm 依赖升级另需 `npm test`、`npm run smoke` 与字体集成测试全部通过。
+5. AGPL 项目（OpenChatCut、OpenMontage）只吸收方法；Remotion 采用前先复核许可证条款。
+
+### 当前吸收状态（替代 09-20 初始处置）
+
+| 项目 | 状态 | 已承接到 | 方式 |
+| --- | --- | --- | --- |
+| HyperFrames | implemented | `integrations/local-production`：EditDocument v2 编译、渲染、lint 关卡；依赖固定 `@hyperframes/*@0.8.108` | 包依赖 + 方法 |
+| ChatCut Agent Plugin | implemented | 素材与实例分离（edit-document v2）、修改后重读并检查合成帧（render-qa、`qa.mjs`）、`video-production.md` 编辑循环 | 方法 |
+| OpenChatCut | implemented | 整批原子编辑、`--dry-run`、批次 `operations_sha256`、锁定轨道（`operations.mjs`、`project.mjs`）；轨道角色与自动闪避留待 P2 | 方法 |
+| OpenMontage | implemented | 代码强制阶段关卡、审批、交付承诺实算、先预留后结算的预算台账（`creative_craft_video.py`、production-plan） | 方法 |
+| Cerul | implemented | 选片证据按模态记录、保留原始分数和检索方法（production-plan `selection.evidence`）、`video-production.md` 选片方法；未接入索引引擎 | 方法 |
+| Remotion | candidate | 无；仅在 HyperFrames 无法满足具体需求且许可证适用时评估为模板引擎 | 对照 |
+| OpenCut | deferred | 无；可运行的 Editor API、MCP 或 headless 发布后重评 | 无 |
+
+`implemented` 表示已有本仓库实现与自动化测试，验证范围限于合成素材，不代表真实业务素材、创意质量或宿主生产已验收。上一节「供 AIOS/DataHub 评估的接口草案」现已部分落地为 local-production 编辑批次：操作名和粒度以 [Video Harness v1](content-production-architecture.md#video-harness-v1) 为准，`render_frames`/`verify` 对应 `qa`，`apply_script` 尚未实现。
+
+### 首次运行结果（2026-10-02）
+
+需复查：HyperFrames（编辑配方、CLI skill、lint/inspect 参考、SDK 类型、timeline 命令有变化；npm 最新版与锁定版同为 0.8.108）、ChatCut（basics 一行变化）、OpenChatCut（`reducerActions.ts`、工具 schema）、Remotion（`packages/skills`）、Cerul（`DESIGN.md`）。无变化：OpenMontage；OpenCut 的监控路径不变。
+
+已复查：ChatCut `codex/skills/chatcut-plugin-basics/SKILL.md` 的唯一变化是 `inspect_item` 改为每次最多 10 个 item，归类为无影响；其余项目尚未复查，固定 SHA 保持不变。

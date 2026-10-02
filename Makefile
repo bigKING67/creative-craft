@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: doctor lint test schema benchmark validate host-smoke package-check validate-all example
+.PHONY: doctor lint test schema benchmark validate host-smoke package-check validate-all example upstream-check
 
 doctor:
 	$(PYTHON) skills/creative-craft/scripts/creative_craft.py doctor
@@ -36,3 +36,7 @@ example:
 		--file examples/premium-haircare-launch/video-job.json
 	$(PYTHON) skills/creative-craft/scripts/creative_craft.py validate-project \
 		--root examples/premium-haircare-launch
+
+# Read-only upstream drift report for docs/upstream-watch.json (needs gh + network; not part of validate-all).
+upstream-check:
+	$(PYTHON) scripts/upstream_drift.py
