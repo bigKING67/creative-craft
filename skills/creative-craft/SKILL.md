@@ -190,6 +190,7 @@ to retain source times and separate observations from reuse suggestions.
 For sequences combining source footage and new shots, use the
 [mixed-production method](references/video-production.md#mixing-existing-footage-with-generated-shots)
 to define gaps, continuity references and acceptance before generation and placement.
+Gate multi-stage productions with the [production flow](references/video-production.md#production-flow).
 
 ### Existing-asset critique
 

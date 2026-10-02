@@ -382,6 +382,20 @@ uses of one source, captions and audio. Verify these behaviors on the actual hos
 
 These are acceptance criteria, not a claim that a host has passed them.
 
+## Production flow
+
+For a multi-beat production, keep state in `production.json`; a single trim or
+caption fix uses the editing loop above without it. Stages run
+`brief → reference → plan → select → generate → assemble → inspect ⇄ revise → export`;
+skipping needs a reason. `scripts/creative_craft.py` provides `video-init`,
+`video-record` (binds a project-relative file digest), `video-complete` (runs the
+gate), `video-approve`, `video-skip`, `video-ledger` and `video-status`. Gates
+check predecessors, approval (default `plan`), selected footage evidence, bound
+generation Job/Receipt, render-qa against the current revision digest, the revision
+round limit, and delivery promises on the exported revision. A modified bound file
+blocks completion. Passing a gate proves contract consistency only; the render-qa
+review of composited frames remains the visual evidence.
+
 ## Extension
 
 Specify:
