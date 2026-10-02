@@ -1,8 +1,8 @@
-import { getTemplate, graphicTexts, SAFE_MARGIN } from './templates.mjs';
+import { getTemplate, SAFE_MARGIN } from './templates.mjs';
 
-// Layout-based safe-area estimate for captions and graphics, as fractions of
-// the canvas. Mirrors the compiled CSS (composition.mjs / templates) instead of
-// measuring pixels: text width is estimated per character (full-width CJK and
+// Safe-area boxes for captions and graphics, as fractions of the canvas. Caption
+// boxes mirror the compiled CSS (composition.mjs) instead of measuring pixels:
+// text width is estimated per character (full-width CJK and
 // symbols 1 em, other characters 0.55 em, spaces 0.3 em), so a box is an
 // estimate, not a browser measurement.
 export const textEm = value => Array.from(value).reduce((sum, ch) => sum + (ch === ' ' ? 0.3 : /[ᄀ-ᇿ⺀-꓏가-힯豈-﫿︰-﹏＀-￯\u{20000}-\u{3ffff}]/u.test(ch) ? 1 : 0.55), 0);
@@ -24,12 +24,12 @@ export function captionBox(canvas, caption) {
   return { left: round(left / W), top: round(top / H), right: round((styled ? left + textWidth : 0.93 * W) / W), bottom: round((top + height) / H), lines };
 }
 
-// Graphic box: the template box (fractions); text that would not fit its box
-// at the estimated width is reported as truncated (CSS ellipsis keeps it inside).
-export function graphicBox(canvas, item) {
-  const { box } = getTemplate(item.template), em = Math.min(canvas.width, canvas.height) / 100;
-  const truncated = graphicTexts(item).filter(run => textEm(run.text) * run.font_em * em > box.width * canvas.width * 0.95).map(run => run.var);
-  return { left: box.left, top: box.top, right: round(box.left + box.width), bottom: round(box.top + box.height), truncated };
+// Graphic box: the template box (fractions), independent of the canvas. Its
+// position in the safe area is guaranteed when the template loads
+// (templates.mjs validateTemplate); no text-fit estimate is made here.
+export function graphicBox(item) {
+  const { box } = getTemplate(item.template);
+  return { left: box.left, top: box.top, right: round(box.left + box.width), bottom: round(box.top + box.height) };
 }
 
 export const insideSafeArea = b => b.left >= SAFE_MARGIN - 1e-9 && b.top >= SAFE_MARGIN - 1e-9 && b.right <= 1 - SAFE_MARGIN + 1e-9 && b.bottom <= 1 - SAFE_MARGIN + 1e-9;
