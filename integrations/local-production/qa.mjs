@@ -3,6 +3,7 @@ import path from 'node:path';
 import { digest, ffprobeJson, readProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
 import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
+import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
 
 // Technical checks on one actual rendered file of one revision. Automated
 // results never stand in for the composited-frame review, which starts pending.
@@ -127,9 +128,15 @@ export async function qaRender(root, renderDir, qaDir) {
     check('integrated-loudness', 'audio', Number.isNaN(lufs) ? 'unknown' : loud ? 'pass' : 'warn',
       Number.isNaN(lufs) ? 'ebur128 summary missing.' : `Integrated loudness ${Number.isFinite(lufs) ? lufs.toFixed(1) : '-inf'} LUFS ${loud ? 'is within' : 'is outside'} the -14 ±3 LUFS target.`,
       { measured: { lufs: Number.isFinite(lufs) ? lufs : null } });
+    // The renderer's AAC limiter evidence: how far HyperFrames lowered the whole
+    // mix to stay under -1 dBTP (RenderJob.audioLoweredDb, copied into the receipt).
+    const limiter = receipt.audio_limiter;
+    const lowered = limiter ? (limiter.engaged ? ` The render limiter lowered the mix by ${limiter.audio_lowered_db.toFixed(1)} dB (audioLoweredDb).` : ' The render limiter was not engaged (no audioLoweredDb).')
+      : ' Render receipt has no limiter record.';
     check('true-peak', 'audio', Number.isNaN(peak) ? 'unknown' : peak > -1 ? 'warn' : 'pass',
-      Number.isNaN(peak) ? 'ebur128 true peak missing.' : `True peak ${Number.isFinite(peak) ? peak.toFixed(1) : '-inf'} dBTP (limit -1 dBTP).`,
-      { measured: { true_peak_dbtp: Number.isFinite(peak) ? peak : null } });
+      Number.isNaN(peak) ? `ebur128 true peak missing.${lowered}` : `True peak ${Number.isFinite(peak) ? peak.toFixed(1) : '-inf'} dBTP (limit -1 dBTP).${lowered}`,
+      { measured: { true_peak_dbtp: Number.isFinite(peak) ? peak : null, audio_lowered_db: limiter ? limiter.audio_lowered_db : null,
+        limiter_engaged: limiter ? limiter.engaged : null, limiter_ceiling_dbtp: limiter ? limiter.ceiling_dbtp : null } });
   }
 
   // Composited-frame samples: item midpoints, both sides of each video cut, caption midpoints.
@@ -141,7 +148,7 @@ export async function qaRender(root, renderDir, qaDir) {
     seen.add(`${reason}:${frame}:${itemId ?? ''}`);
     wanted.push({ id, frame, reason, item_id: itemId });
   };
-  for (const item of doc.items.filter(i => i.kind === 'media')) want(`s-${item.id}-mid`, item.start_frame + Math.floor(item.frames / 2), 'item_mid', item.id);
+  for (const item of doc.items.filter(i => i.kind === 'media' || i.kind === 'graphic')) want(`s-${item.id}-mid`, item.start_frame + Math.floor(item.frames / 2), 'item_mid', item.id);
   const videoItems = doc.items.filter(i => i.kind === 'media' && doc.tracks.find(t => t.id === i.track_id).kind === 'video');
   const cuts = [...new Set(videoItems.flatMap(i => [i.start_frame, i.start_frame + i.frames]))].filter(f => f > 0 && f < total).sort((a, b) => a - b);
   for (const cut of cuts) { want(`s-cut${cut}-before`, cut - 1, 'cut_before'); want(`s-cut${cut}-after`, cut, 'cut_after'); }
@@ -170,6 +177,23 @@ export async function qaRender(root, renderDir, qaDir) {
     !captions.length ? 'No visible captions in this revision.' : missing.length ? `No frame could be sampled for ${missing.length} caption(s).`
       : `Sampled a composited frame at the midpoint of each of ${captions.length} caption(s) for review.`,
     captions.length ? { refs: captions.map(c => ({ time_seconds: round(captionSample.get(c.item.id).time, 6), item_id: c.item.id, ...(sampled.has(captionSample.get(c.item.id).id) ? { sample_id: captionSample.get(c.item.id).id } : {}) })) } : {});
+
+  // Safe area (5% from every edge) at the sampled caption and graphic frames.
+  // Method: boxes computed from the compiled layout (template box; caption block,
+  // wrap and line metrics from estimated text width), not detected in pixels.
+  const safeArea = (id, category, entries, sampleOf, label) => {
+    const outside = entries.filter(e => !insideSafeArea(e.box)), truncated = entries.filter(e => e.box.truncated?.length);
+    check(id, category, !entries.length ? 'not_applicable' : outside.length ? 'fail' : truncated.length ? 'warn' : 'pass',
+      !entries.length ? `No ${label} in this revision.` : outside.length ? `${outside.length} ${label} box(es) cross the 5% safe margin: ${outside.map(e => e.id).join(', ')}.`
+        : truncated.length ? `All ${label} boxes are inside the 5% safe margin; estimated text overflow (ellipsis) in ${truncated.map(e => e.id).join(', ')}.`
+          : `All ${entries.length} ${label} box(es) are inside the 5% safe margin (layout estimate).`,
+      entries.length ? { measured: { method: 'compiled-layout-estimate', margin: 0.05, boxes: entries.map(e => ({ item_id: e.id, ...e.box })) },
+        refs: entries.map(e => ({ time_seconds: round(sampleOf(e).time, 6), item_id: e.id, ...(sampled.has(sampleOf(e).id) ? { sample_id: sampleOf(e).id } : {}) })) } : {});
+  };
+  safeArea('caption-safe-area', 'captions', captions.map(c => ({ id: c.item.id, box: captionBox(doc.canvas, c.item) })), e => captionSample.get(e.id), 'caption');
+  const graphicItems = doc.items.filter(i => i.kind === 'graphic');
+  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(doc.canvas, i), frame: i.start_frame + Math.floor(i.frames / 2) })),
+    e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic');
 
   // Lint result recorded by the render receipt (render is blocked on errors).
   const lint = receipt.lint;
@@ -209,7 +233,8 @@ export async function qaRender(root, renderDir, qaDir) {
     verdict: statuses.includes('fail') ? 'fail' : statuses.includes('warn') ? 'pass_with_warnings' : 'pass',
     review: { status: 'pending', reviewer: null, decision: 'pending', findings: [] },
     unverified: ['human listening (dialogue, music balance, sync)', 'creative quality and edit choices',
-      'visual review of composited samples (pending agent/human review)', 'caption legibility and text accuracy'] };
+      'visual review of composited samples (pending agent/human review)', 'caption legibility and text accuracy',
+      'safe-area boxes are layout estimates, not pixel measurements'] };
   const temp = path.join(qaDir, '.qa.json');
   await fs.writeFile(temp, JSON.stringify(qa, null, 2) + '\n', { flag: 'wx' });
   await fs.rename(temp, path.join(qaDir, 'qa.json'));
