@@ -2108,6 +2108,8 @@ VIDEO_STAGES = (
 EDIT_DOCUMENT_MAX_SECONDS = 600
 SELECTION_EVIDENCE_TOLERANCE_SECONDS = 2.0
 _TIME_EPSILON = 1e-6
+# Matches Node edit-document.mjs: container durations from ffprobe are rounded.
+_ASSET_DURATION_TOLERANCE = 0.001
 
 
 def _is_number(value: Any) -> bool:
@@ -2281,7 +2283,7 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 ):
                     source_end = item["source_in_seconds"] + item["frames"] / fps
                     r.require(
-                        source_end <= asset["duration"] + _TIME_EPSILON,
+                        source_end <= asset["duration"] + _ASSET_DURATION_TOLERANCE,
                         f"{label} source range ends at {source_end:g}s beyond asset "
                         f"duration {asset['duration']:g}s",
                     )
@@ -2303,7 +2305,14 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 f"{label} caption item must be on a caption track",
             )
             r.require(nonempty(item.get("text")), f"{label} caption item requires text")
-            for key in ("asset_id", "source_in_seconds", "volume"):
+            for key in (
+                "asset_id",
+                "source_in_seconds",
+                "volume",
+                "fit",
+                "opacity",
+                "transform",
+            ):
                 r.require(key not in item, f"{label} caption item must not set {key}")
             link = item.get("link")
             if isinstance(link, dict):
@@ -2316,6 +2325,13 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                     target is not None and target.get("kind") == "media",
                     f"{label} link must reference a media item, got {link.get('item_id')!r}",
                 )
+                linked_asset = assets.get(str((target or {}).get("asset_id")))
+                if linked_asset is not None and _is_number(link.get("source_to")):
+                    r.require(
+                        link["source_to"]
+                        <= linked_asset["duration"] + _ASSET_DURATION_TOLERANCE,
+                        f"{label} link.source_to exceeds the linked asset duration",
+                    )
                 if _is_number(link.get("source_from")) and _is_number(
                     link.get("source_to")
                 ):

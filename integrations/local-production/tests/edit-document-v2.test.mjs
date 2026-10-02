@@ -177,16 +177,25 @@ test('dry-run returns a diff and writes nothing', async t => {
 });
 test('locked tracks refuse modification, removal and moves into them', async t => {
   const dir = await onDisk(t, v2Fixture());
-  await editBatch(dir, batch(1, [{ type: 'trim_item', item_id: 'talk2', tail_frames: 4 }, { type: 'edit_track', track_id: 'v_main', locked: true }]));
+  await editBatch(dir, batch(1, [{ type: 'trim_item', item_id: 'talk2', tail_frames: 4 }]));
+  await assert.rejects(editBatch(dir, batch(2, [{ type: 'trim_item', item_id: 'talk2', tail_frames: 4 }, { type: 'edit_track', track_id: 'v_main', locked: true }])),
+    /only operation/, 'a lock change cannot share a batch');
+  await editBatch(dir, batch(2, [{ type: 'edit_track', track_id: 'v_main', locked: true }]));
   for (const op of [{ type: 'trim_item', item_id: 'talk2', tail_frames: 4 }, { type: 'remove_item', item_id: 'talk1' },
     { type: 'set_item_props', item_id: 'talk1', props: { volume: 0 } }, { type: 'move_item', item_id: 'over', track_id: 'v_main' },
     { type: 'add_item', item: { id: 'extra', track_id: 'v_main', kind: 'media', asset_id: 'talk', start_frame: 96, frames: 4, source_in_seconds: 0, volume: 1 } },
     { type: 'split_item', item_id: 'talk1', at_frame: 10, new_item_id: 'x' }]) {
-    await assert.rejects(editBatch(dir, batch(2, [op])), /locked/, op.type);
+    await assert.rejects(editBatch(dir, batch(3, [op])), /locked/, op.type);
   }
-  await assert.rejects(editBatch(dir, batch(2, [{ type: 'revert_to', revision: 1 }])), /locked/, 'revert must not unlock-and-change');
-  assert.equal(await revisions(dir), 2);
-  await editBatch(dir, batch(2, [{ type: 'edit_track', track_id: 'v_main', locked: false }, { type: 'trim_item', item_id: 'talk2', tail_frames: 4 }]));
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'revert_to', revision: 1 }])), /locked/, 'revert must not unlock-and-change');
+  // Unlock-then-edit in one batch is the bypass the batch rule closes.
+  await assert.rejects(editBatch(dir, batch(3, [{ type: 'edit_track', track_id: 'v_main', locked: false }, { type: 'trim_item', item_id: 'talk2', tail_frames: 4 }])), /only operation/);
+  assert.equal(await revisions(dir), 3);
+  // Reverting to an unlocked revision with identical locked-track items keeps the lock.
+  await editBatch(dir, batch(3, [{ type: 'revert_to', revision: 2 }]));
+  assert.equal((await readProject(dir)).tracks.find(tr => tr.id === 'v_main').locked, true);
+  await editBatch(dir, batch(4, [{ type: 'edit_track', track_id: 'v_main', locked: false }]));
+  await editBatch(dir, batch(5, [{ type: 'trim_item', item_id: 'talk2', tail_frames: 4 }]));
   assert.equal((await readProject(dir)).items.find(i => i.id === 'talk2').frames, 40);
 });
 test('split assigns linked captions by source_from; trim/slip/move/ripple behave', async t => {
@@ -230,6 +239,10 @@ test('create accepts a v2 spec; add_asset dry-run probes without copying', async
   const clip = path.join(dir, 'clip.mp4'), extra = path.join(dir, 'extra.mp4'), root = path.join(dir, 'project');
   await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x72:rate=24:duration=1', '-pix_fmt', 'yuv420p', clip]);
   await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'smptebars=size=128x72:rate=24:duration=1', '-pix_fmt', 'yuv420p', extra]);
+  const unprovenanced = { project_id: 'spec2', title: 'v2 spec', canvas: { width: 128, height: 72, fps: 24 },
+    assets: [{ id: 'clip', path: clip, origin: { kind: 'generated' } }], tracks: [{ id: 'v_main', kind: 'video', locked: false }],
+    items: [{ id: 'one', track_id: 'v_main', kind: 'media', asset_id: 'clip', start_frame: 0, frames: 24, source_in_seconds: 0, volume: 0 }] };
+  await assert.rejects(createProject(root, unprovenanced), /provenance_ref/, 'create applies the add_asset provenance rule');
   const created = await createProject(root, { project_id: 'spec2', title: 'v2 spec', canvas: { width: 128, height: 72, fps: 24 },
     assets: [{ id: 'clip', path: clip }], tracks: [{ id: 'v_main', kind: 'video', locked: false }],
     items: [{ id: 'one', track_id: 'v_main', kind: 'media', asset_id: 'clip', start_frame: 0, frames: 24, source_in_seconds: 0, volume: 0 }] });

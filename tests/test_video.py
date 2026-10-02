@@ -16,6 +16,7 @@ from video_support import (
     generate_beat,
     production,
     production_plan,
+    record_export_render,
     render_qa,
     run_cli,
     stage,
@@ -55,6 +56,8 @@ class EditDocumentContractTests(unittest.TestCase):
             "linked-caption-with-timing": "linked caption must not set start_frame",
             "later-revision-without-parent": "revision > 1 requires parent_sha256",
             "audio-item-with-visual-field": "audio-track item must not set fit",
+            "caption-with-visual-field": "caption item must not set opacity",
+            "caption-link-beyond-asset": "link.source_to exceeds the linked asset duration",
         }
         paths = sorted((FIXTURES / "edit-document-v2/invalid").glob("*.json"))
         self.assertEqual(set(expected), {path.stem for path in paths})
@@ -189,6 +192,27 @@ class VideoGateTests(unittest.TestCase):
         actual, out, err = run_cli(*argv[:1], "--root", self.r, *argv[1:])
         self.assertEqual(code, actual, out + err)
         return out + err
+
+    def via_root(self, *argv: str) -> str:
+        # Adapts helpers that pass ("cmd", "--root", root, ...) to self.cli.
+        return self.cli(argv[0], *argv[3:])
+
+    def test_skip_requires_order_bound_plan_and_no_drift(self) -> None:
+        self.init("--approval-required", "none")
+        out = self.cli("video-skip", "--stage", "reference", "--reason", "n/a", code=1)
+        self.assertIn("preceding stage brief is not completed or skipped", out)
+        self.cli("video-skip", "--stage", "brief", "--reason", "brief given in chat")
+        self.cli("video-skip", "--stage", "reference", "--reason", "no reference")
+        write_doc(self.root, "plan.json", production_plan())
+        self.cli(
+            "video-record", "--stage", "plan", "--kind", "production-plan",
+            "--artifact", "plan.json",
+        )
+        out = self.cli("video-skip", "--stage", "select", "--reason", "n/a", code=1)
+        self.assertIn("preceding stage plan is not completed or skipped", out)
+        (self.root / "plan.json").write_text("{}", encoding="utf-8")
+        out = self.cli("video-skip", "--stage", "plan", "--reason", "n/a", code=1)
+        self.assertIn("artifact drift: plan.json is modified", out)
 
     def init(self, *extra: str) -> None:
         self.cli("video-init", "--production-id", "gates", *extra)
@@ -474,6 +498,25 @@ class VideoGateTests(unittest.TestCase):
             "--artifact",
             "rev/000001.json",
         )
+        out = self.cli("video-complete", "--stage", "export", code=1)
+        self.assertIn("record the delivered media file", out)
+        record_export_render(self.root, doc, sha, self.via_root, kind="preview")
+        out = self.cli("video-complete", "--stage", "export", code=1)
+        self.assertIn("must inspect an export render, not a preview", out)
+        record_export_render(self.root, doc, sha, self.via_root)
+        (self.root / "renders/other.bin").write_bytes(b"not the inspected render")
+        self.cli(
+            "video-record",
+            "--stage",
+            "export",
+            "--kind",
+            "media",
+            "--artifact",
+            "renders/other.bin",
+        )
+        out = self.cli("video-complete", "--stage", "export", code=1)
+        self.assertIn("is not the render inspected by export render-qa", out)
+        record_export_render(self.root, doc, sha, self.via_root)
         out = self.cli("video-complete", "--stage", "export", code=1)
         self.assertIn("delivery promise length failed: observed 20.0", out)
 

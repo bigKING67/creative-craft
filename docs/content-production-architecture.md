@@ -142,7 +142,7 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 
 ### 编辑操作（P0）
 
-一次调用提交一个批次：`{ base_revision, author, summary, operations[] }`。整批校验通过才发布新修订；`--dry-run` 只返回 diff（新增/删除/变更的 item、时长变化）不发布；基于过期修订提交直接拒绝，需重读。操作：`add_asset`、`add_track`、`edit_track`（lock/unlock/rename）、`add_item`、`remove_item`（可选同轨 ripple）、`move_item`（改轨或起点）、`trim_item`（入/出点，或 slip 只移源入点）、`split_item`（链接字幕随之拆分归属）、`replace_media`（保持时序，未给新字幕则移除旧链接字幕）、`set_item_props`（volume/fit/opacity/transform/text/style）、`revert_to`（以旧修订内容发布新修订，必须单独成批）。转场、变速、淡入淡出、音乐自动闪避、图形模板属于 P2。
+一次调用提交一个批次：`{ base_revision, author, summary, operations[] }`。整批校验通过才发布新修订；`--dry-run` 只返回 diff（新增/删除/变更的 item、时长变化）不发布；基于过期修订提交直接拒绝，需重读。操作：`add_asset`、`add_track`、`edit_track`（lock/unlock/rename）、`add_item`、`remove_item`（可选同轨 ripple）、`move_item`（改轨或起点）、`trim_item`（入/出点，或 slip 只移源入点）、`split_item`（链接字幕随之拆分归属）、`replace_media`（保持时序，未给新字幕则移除旧链接字幕）、`set_item_props`（volume/fit/opacity/transform/text/style）、`revert_to`（以旧修订内容发布新修订，必须单独成批；不解除当前锁定，也不能改动当前锁定轨道的内容）。修改轨道锁定状态的 `edit_track` 必须单独成批，避免“先解锁再修改”藏在同一批次中。转场、变速、淡入淡出、音乐自动闪避、图形模板属于 P2。
 
 ### 检查（P0）
 
@@ -150,12 +150,12 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 
 ### 阶段与关卡（P1）
 
-阶段：`brief → reference → plan → select → generate → assemble → inspect ⇄ revise → export`，可显式跳过（须给理由）。关卡由 Python CLI 执行，不依赖提示词：
+阶段：`brief → reference → plan → select → generate → assemble → inspect ⇄ revise → export`，可显式跳过（须给理由）；跳过与完成同样受前序顺序和产物漂移约束，`select/generate` 在绑定计划前不可跳过。关卡由 Python CLI 执行，不依赖提示词：
 
 - 前序未完成或未跳过，后续不能完成；需审批的阶段（默认仅 `plan`，宿主可配置为空以自动执行）在审批前停在 `awaiting_approval`。
 - `plan`：产物通过 production-plan 校验。`select`：每个 `footage` 拍都有选定源区间与证据，`tbd` 拍阻断；仅有候选证据的标为 candidate 并在状态中可见。`generate`：有 `generate` 拍时须绑定 Job/Receipt，否则不可完成（可改计划并记录决策）。
 - `assemble`/`revise`：绑定 EditDocument v2 修订文件 digest。`inspect`：render-qa 必须绑定当前修订 digest；`verdict = fail` 或评审 `revise/reject` 进入 `revise`；`revise` 轮次超过上限（默认 3）进入 `blocked` 交人处理，不强制放行。
-- `export`：导出修订必须等于最近一次检查通过（`verdict ≠ fail` 且评审 `accept`）的修订；可机器检查的交付承诺（时长范围、含字幕、生成镜头占比上限）对该修订实算，不满足则阻断。
+- `export`：导出修订必须等于最近一次检查通过（`verdict ≠ fail` 且评审 `accept`）的修订；导出阶段还须绑定实际交付文件及其 `render.kind = export` 的 render-qa（同一修订、`render.sha256` 等于交付文件、`verdict ≠ fail`），预览检查不能代替导出文件检查；可机器检查的交付承诺（时长范围、含字幕、生成镜头占比上限）对该修订实算，不满足则阻断。
 - 预算台账先预留后结算；`cap` 模式下预留超过上限即拒绝；结果不明的付费任务不得自动重发。
 
 简单的局部修改（单次裁切、换一句字幕）走执行层的“读取—编辑—检查”快路径，不需要建立 production 状态。

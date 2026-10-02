@@ -50,7 +50,7 @@
       ],
       "approval": {
         "by": "producer",
-        "at": "2026-10-02T06:18:23Z",
+        "at": "2026-10-02T06:40:11Z",
         "note": "beats agreed"
       },
       "note": "approved by producer"
@@ -118,6 +118,16 @@
       "status": "completed",
       "artifacts": [
         {
+          "kind": "media",
+          "path": "renders/r2-export.synthetic",
+          "sha256": "c915cee84c13d4e3730b68f79beec7cfbdec6e439ae70d5eea301f486018d33b"
+        },
+        {
+          "kind": "render-qa",
+          "path": "qa/r2-export.json",
+          "sha256": "9f3f970ad6b7a3bb557c25579d2c7f5412da1114b7d6e52dec32721e154a7bce"
+        },
+        {
           "kind": "edit-document",
           "path": "edit/revisions/000002.json",
           "sha256": "e6e962b76567b3b2209a61b412626e6283a99719680d18c1a40e77146777ca96"
@@ -132,121 +142,133 @@
   "ledger": [],
   "events": [
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "production",
       "action": "init",
       "detail": "production talk-broll created"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "brief",
       "action": "record",
       "detail": "brief brief.md 27c9aaa49d1e"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "brief",
       "action": "complete",
       "detail": "completed: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "reference",
       "action": "skip",
       "detail": "Founder footage is the only reference."
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "plan",
       "action": "record",
       "detail": "production-plan plan.json cbd1faa65411"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "plan",
       "action": "complete",
       "detail": "awaiting_approval: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "plan",
       "action": "approve",
       "detail": "approved by producer: beats agreed"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "select",
       "action": "complete",
       "detail": "completed: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "generate",
       "action": "skip",
       "detail": "All beats use existing footage."
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "assemble",
       "action": "record",
       "detail": "edit-document edit/revisions/000001.json 637507489112"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "assemble",
       "action": "complete",
       "detail": "completed: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "inspect",
       "action": "record",
       "detail": "render-qa qa/r1.json 733996ddf587"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "inspect",
       "action": "complete",
       "detail": "revise: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "revise",
       "action": "record",
       "detail": "edit-document edit/revisions/000002.json e6e962b76567"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "inspect",
       "action": "reopen",
       "detail": "revision round 1 completed"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "revise",
       "action": "complete",
       "detail": "completed: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "inspect",
       "action": "record",
       "detail": "render-qa qa/r2.json 22324ad2a573"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "inspect",
       "action": "complete",
       "detail": "accepted: ok"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
+      "stage": "export",
+      "action": "record",
+      "detail": "media renders/r2-export.synthetic c915cee84c13"
+    },
+    {
+      "at": "2026-10-02T06:40:11Z",
+      "stage": "export",
+      "action": "record",
+      "detail": "render-qa qa/r2-export.json 9f3f970ad6b7"
+    },
+    {
+      "at": "2026-10-02T06:40:11Z",
       "stage": "export",
       "action": "record",
       "detail": "edit-document edit/revisions/000002.json e6e962b76567"
     },
     {
-      "at": "2026-10-02T06:18:23Z",
+      "at": "2026-10-02T06:40:11Z",
       "stage": "export",
       "action": "complete",
       "detail": "completed: ok"

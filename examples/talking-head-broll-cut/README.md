@@ -6,7 +6,8 @@ beat uses existing footage; `reference` is skipped with a recorded reason.
 
 **All data is synthetic.** Media digests in the edit revisions are placeholders, no
 render was produced, and both `qa/*.json` files are fabricated render-qa records
-that are not real render or review evidence. The example shows the contracts,
+that are not real render or review evidence. `renders/r2-export.synthetic` is a placeholder for the
+delivered file; `qa/r2-export.json` binds it to the export gate. The example shows the contracts,
 digest bindings and gate decisions only.
 
 ```bash

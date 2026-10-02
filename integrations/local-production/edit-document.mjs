@@ -28,6 +28,21 @@ export function validateCanvas(canvas) {
   if (![24, 30, 60].includes(fps) || !integer(width, 64, 3840) || !integer(height, 64, 3840) || width % 2 || height % 2) fail('Invalid canvas');
 }
 
+// Shared by v1 and v2 validation: identity, content address and probe fields.
+export function validateAssetFields(asset, extraKeys = []) {
+  keys(asset, ['id', 'file', 'sha256', 'duration', 'video', 'audio', 'width', 'height', ...extraKeys]);
+  if (!id(asset.id) || !hex64(asset.sha256) ||
+      asset.file !== `assets/${asset.sha256}.media` || !number(asset.duration, 0.001, 1800) ||
+      typeof asset.video !== 'boolean' || typeof asset.audio !== 'boolean' ||
+      !integer(asset.width, 0, 32768) || !integer(asset.height, 0, 32768)) fail('Invalid asset');
+}
+
+// Assets entering a project (create or add_asset): generated media must be traceable.
+export function validateNewAssetOrigin(origin) {
+  validateOrigin(origin);
+  if (origin.kind === 'generated' && !origin.provenance_ref) fail('Generated assets require origin.provenance_ref');
+}
+
 export function validateOrigin(origin) {
   keys(origin, ['kind', 'label', 'provenance_ref']);
   if (!['import', 'generated', 'render'].includes(origin.kind) || ('label' in origin && !text(origin.label)) ||
@@ -55,11 +70,8 @@ export function validateV2(doc) {
       !Array.isArray(doc.items) || doc.items.length > 2000) fail('Invalid project collections');
   const assets = new Map();
   for (const asset of doc.assets) {
-    keys(asset, ['id', 'file', 'sha256', 'duration', 'video', 'audio', 'width', 'height', 'origin']);
-    if (!id(asset.id) || assets.has(asset.id) || !hex64(asset.sha256) ||
-        asset.file !== `assets/${asset.sha256}.media` || !number(asset.duration, 0.001, 1800) ||
-        typeof asset.video !== 'boolean' || typeof asset.audio !== 'boolean' ||
-        !integer(asset.width, 0, 32768) || !integer(asset.height, 0, 32768)) fail('Invalid asset');
+    validateAssetFields(asset, ['origin']);
+    if (assets.has(asset.id)) fail('Invalid asset');
     validateOrigin(asset.origin);
     assets.set(asset.id, asset);
   }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fail, id, integer, keys, number, text, validateOrigin } from './edit-document.mjs';
+import { fail, id, integer, keys, number, text, validateNewAssetOrigin } from './edit-document.mjs';
 import { outputFrames, round9 } from './timeline.mjs';
 
 // Canonical JSON: object keys sorted recursively, no whitespace. The batch's
@@ -32,8 +32,7 @@ export async function applyOperations(base, operations, { importAsset, imports }
       keys(op, ['type', 'id', 'path', 'origin']);
       if (!id(op.id) || doc.assets.some(a => a.id === op.id) || typeof op.path !== 'string') fail(`Invalid or duplicate asset: ${op.id}`);
       const origin = op.origin ?? { kind: 'import' };
-      validateOrigin(origin);
-      if (origin.kind === 'generated' && !origin.provenance_ref) fail('Generated assets require origin.provenance_ref');
+      validateNewAssetOrigin(origin);
       const imported = await importAsset(op.path);
       imports.push(imported);
       doc.assets.push({ id: op.id, ...imported.asset, origin: { ...origin } });

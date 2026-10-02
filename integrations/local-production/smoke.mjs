@@ -119,12 +119,14 @@ await assert.rejects(editBatch(v2, { ...addBroll, summary: 'stale' }), /Revision
 await editBatch(v2, { base_revision: 2, author: 'human', summary: 'Lock picture', operations: [{ type: 'edit_track', track_id: 'v_main', locked: true }] });
 await assert.rejects(editBatch(v2, { base_revision: 3, author: 'agent', summary: 'Trim locked', operations: [{ type: 'trim_item', item_id: 'talk1', tail_frames: 6 }] }), /locked/);
 assert.equal(await revisionCount(), 3, 'locked edit must not publish');
-await editBatch(v2, { base_revision: 3, author: 'agent', summary: 'Unlock and split', operations: [{ type: 'edit_track', track_id: 'v_main', locked: false },
-  { type: 'split_item', item_id: 'talk2', at_frame: 72, new_item_id: 'talk2b' }] });
-await editBatch(v2, { base_revision: 4, author: 'agent', summary: 'Back to the B-roll cut', operations: [{ type: 'revert_to', revision: 2 }] });
+await assert.rejects(editBatch(v2, { base_revision: 3, author: 'agent', summary: 'Unlock and split', operations: [{ type: 'edit_track', track_id: 'v_main', locked: false },
+  { type: 'split_item', item_id: 'talk2', at_frame: 72, new_item_id: 'talk2b' }] }), /only operation/, 'unlock-then-edit must not share a batch');
+await editBatch(v2, { base_revision: 3, author: 'human', summary: 'Unlock picture', operations: [{ type: 'edit_track', track_id: 'v_main', locked: false }] });
+await editBatch(v2, { base_revision: 4, author: 'agent', summary: 'Split', operations: [{ type: 'split_item', item_id: 'talk2', at_frame: 72, new_item_id: 'talk2b' }] });
+await editBatch(v2, { base_revision: 5, author: 'agent', summary: 'Back to the B-roll cut', operations: [{ type: 'revert_to', revision: 2 }] });
 const reverted = await readProject(v2), target = await readProject(v2, 2);
 assert.deepEqual([reverted.items, reverted.tracks], [target.items, target.tracks]);
-const multi = await renderProject(v2, path.join(base, 'multitrack-export'), { revision: 5 });
+const multi = await renderProject(v2, path.join(base, 'multitrack-export'), { revision: 6 });
 const multitrackSignals = await verifyMultitrack(base, 'multitrack-export');
 summary.multitrack = { revisions: await revisionCount(), render: multi.status, lint: multi.lint, signals: multitrackSignals };
 

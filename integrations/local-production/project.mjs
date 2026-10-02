@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { bindCaptionFont, installCaptionFont, planCaptionFont, validateCaptionFont, verifyCaptionFont, activeCaptions } from './caption-font.mjs';
-import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCanvas, validateCaptionStyle, validateOrigin,
+import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCanvas, validateCaptionStyle, validateAssetFields, validateNewAssetOrigin,
   validateV2, migrateV1 } from './edit-document.mjs';
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
 
@@ -33,11 +33,16 @@ export async function safePath(value) {
   return absolute;
 }
 
-export async function probe(file) {
+// Single ffprobe invocation shared by import probing and render QA.
+export async function ffprobeJson(file) {
   const { stdout } = await run(process.env.CREATIVE_FFPROBE || 'ffprobe',
     ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file],
     { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
-  const result = JSON.parse(stdout);
+  return JSON.parse(stdout);
+}
+
+export async function probe(file) {
+  const result = await ffprobeJson(file);
   const video = result.streams.find(s => s.codec_type === 'video');
   const audio = result.streams.find(s => s.codec_type === 'audio');
   const duration = Number(result.format.duration);
@@ -60,11 +65,8 @@ export function validate(project) {
       !Array.isArray(project.audio) || project.audio.length > 32) fail('Invalid project collections');
   const assets = new Map();
   for (const asset of project.assets) {
-    keys(asset, ['id', 'file', 'sha256', 'duration', 'video', 'audio', 'width', 'height']);
-    if (!id(asset.id) || assets.has(asset.id) || !/^[a-f0-9]{64}$/.test(asset.sha256) ||
-        asset.file !== `assets/${asset.sha256}.media` || !number(asset.duration, 0.001, 1800) ||
-        typeof asset.video !== 'boolean' || typeof asset.audio !== 'boolean' ||
-        !integer(asset.width, 0, 32768) || !integer(asset.height, 0, 32768)) fail('Invalid asset');
+    validateAssetFields(asset);
+    if (assets.has(asset.id)) fail('Invalid asset');
     assets.set(asset.id, asset);
   }
   const ids = new Set();
@@ -161,7 +163,7 @@ export async function createProject(root, spec, { legacyV1 = false } = {}) {
     keys(item, v1 ? ['id', 'path'] : ['id', 'path', 'origin']);
     if (!id(item.id)) fail('Invalid import');
     const origin = item.origin ?? { kind: 'import' };
-    if (!v1) validateOrigin(origin);
+    if (!v1) validateNewAssetOrigin(origin);
     const imported = await importAsset(item.path);
     imported.asset = { id: item.id, ...imported.asset, ...(v1 ? {} : { origin }) };
     imports.push(imported);
@@ -230,9 +232,12 @@ async function revertContent(root, base, op) {
   const target = asV2(await readProject(root, op.revision));
   for (const track of base.tracks.filter(t => t.locked)) {
     const on = doc => JSON.stringify(doc.items.filter(i => i.track_id === track.id));
-    if (on(base) !== on(target)) fail(`Track is locked: ${track.id}`);
+    if (!target.tracks.some(t => t.id === track.id) || on(base) !== on(target)) fail(`Track is locked: ${track.id}`);
   }
-  const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks: target.tracks, items: target.items };
+  // Lock state is current editorial intent, not history: a revert never unlocks.
+  const locked = new Set(base.tracks.filter(t => t.locked).map(t => t.id));
+  const tracks = target.tracks.map(t => ({ ...t, locked: t.locked || locked.has(t.id) }));
+  const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks, items: target.items };
   if (target.caption_font && !next.caption_font) next.caption_font = target.caption_font;
   return next;
 }
@@ -256,6 +261,10 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
     validateV2(migration);
     base = migration;
     baseSha = sha256(serialize(migration));
+  }
+  // A lock change is its own revision, so unlock-then-edit cannot hide in one batch.
+  if (batch.operations.length > 1 && batch.operations.some(op => op?.type === 'edit_track' && 'locked' in op)) {
+    fail('Changing a track lock must be the only operation in its batch');
   }
   const imports = [];
   const next = batch.operations.some(op => op?.type === 'revert_to')

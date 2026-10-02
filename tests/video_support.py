@@ -131,6 +131,9 @@ def render_qa(
     decision: str = "accept",
     status: str = "pass",
     review_status: str = "done",
+    kind: str = "preview",
+    render_file: str | None = None,
+    render_sha: str = "d" * 64,
 ) -> dict[str, Any]:
     verdict = {"pass": "pass", "warn": "pass_with_warnings", "fail": "fail"}[status]
     seconds = cc.edit_document_duration_frames(doc) / FPS
@@ -154,9 +157,9 @@ def render_qa(
         "revision": doc["revision"],
         "revision_sha256": doc_sha,
         "render": {
-            "kind": "preview",
-            "file": f"renders/r{doc['revision']}.mp4",
-            "sha256": "d" * 64,
+            "kind": kind,
+            "file": render_file or f"renders/r{doc['revision']}.mp4",
+            "sha256": render_sha,
             "width": 540,
             "height": 960,
             "fps": FPS,
@@ -533,6 +536,7 @@ def build_talking_head_production(
         "qa/r2.json",
     )
     ok("video-complete", "--root", r, "--stage", "inspect")
+    record_export_render(root, doc2, sha2, ok)
     ok(
         "video-record",
         "--root",
@@ -548,7 +552,31 @@ def build_talking_head_production(
     return {"doc1": sha1, "doc2": sha2}
 
 
+def record_export_render(
+    root: Path, doc: dict[str, Any], doc_sha: str, ok: Any, *, kind: str = "export"
+) -> str:
+    """Bind a placeholder delivered file and its export render-qa to the export stage."""
+    media = root / "renders" / f"r{doc['revision']}-export.synthetic"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(f"synthetic export of revision {doc['revision']}\n".encode())
+    media_sha = cc.sha256_file(media)
+    qa = render_qa(
+        doc,
+        doc_sha,
+        kind=kind,
+        render_file=media.relative_to(root).as_posix(),
+        render_sha=media_sha,
+    )
+    qa_rel = f"qa/r{doc['revision']}-export.json"
+    write_doc(root, qa_rel, qa)
+    r = str(root)
+    for kind_name, rel in (("media", media.relative_to(root).as_posix()), ("render-qa", qa_rel)):
+        ok("video-record", "--root", r, "--stage", "export", "--kind", kind_name, "--artifact", rel)
+    return media_sha
+
+
 __all__ = [
+    "record_export_render",
     "FPS",
     "ROOT",
     "build_talking_head_production",

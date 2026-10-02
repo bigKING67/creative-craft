@@ -31,7 +31,7 @@ Chrome 路径示例仅适用于对应 macOS 安装；其他主机指定自己的
 共享合同为 `skills/creative-craft/schemas/edit-document-v2.schema.json`；语义规则由 `edit-document.mjs` 的 `validateV2` 执行，并以 `tests/fixtures/edit-document-v2/{valid,invalid}` 与 Python 核心保持一致（invalid 文件名即被违反的规则）。
 
 - **素材（assets）与时间线实例（items）分离**；同一素材可多处引用。素材按 SHA-256 内容寻址复制到 `assets/<sha256>.media`，记录 `origin.kind = import | generated | render`（生成镜头须带 `provenance_ref`）。
-- **轨道（tracks）** `video | audio | caption`，数组顺序即视频叠放顺序（靠前在下）；`locked` 轨道上的 item 不可被任何操作修改、删除或移入。
+- **轨道（tracks）** `video | audio | caption`，数组顺序即视频叠放顺序（靠前在下）；`locked` 轨道上的 item 不可被任何操作修改、删除或移入。修改锁定状态的 `edit_track` 必须单独成批（不能与其他操作同批，堵住“先解锁再修改”）；`revert_to` 保留当前锁定，且不能改动当前锁定轨道的内容。v2 `create` 与 `add_asset` 同样要求 `origin.kind = generated` 的素材带 `provenance_ref`。
 - **输出时间**为 canvas.fps 下的整数帧，半开区间 `[start_frame, start_frame + frames)`；**源时间**为秒。同一轨道 media item 不可重叠，允许空隙（空隙为黑场/静音）。
 - **media item** 必须有 `asset_id/start_frame/frames/source_in_seconds/volume`；视频轨要求素材有画面，音频轨要求有声音；`source_in_seconds + frames/fps ≤ asset.duration`。视频轨 item 可带 `fit`（默认 contain）、`opacity`、`transform {x, y, scale}`：x/y 是 item 中心占画布的比例，scale 是 item 框占画布宽高的比例（0.05–1）。音频轨 item 不接受画面属性。
 - **caption item** 只能在字幕轨。`link {item_id, source_from, source_to}` 形式按所链接 media item 的**源时间**换算输出时间：显示区间 = link 源区间 ∩ 该 item 当前源窗口，随 item 移动、裁切自动生效，**不存输出时间**（带 link 时不得有 start_frame/frames）。无 link 时必须给 `start_frame/frames`。

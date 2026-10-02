@@ -377,10 +377,26 @@ def _gate_export(
             f"(revision {accepted['revision']})"
         )
         return
+    media = _latest(data, ("export",), "media")
+    export_qa_art = _latest(data, ("export",), "render-qa")
+    if media is None or export_qa_art is None:
+        gate.block("record the delivered media file and its export render-qa in the export stage")
+        return
     try:
         doc = _read_contract(root, edit)
+        export_qa = _read_contract(root, export_qa_art)
     except (ValueError, OSError) as exc:
         gate.block(str(exc))
+        return
+    if export_qa["render"]["kind"] != "export":
+        gate.block("export render-qa must inspect an export render, not a preview")
+    if export_qa["revision_sha256"] != edit["sha256"]:
+        gate.block("export render-qa was produced for a different revision")
+    if export_qa["render"]["sha256"] != media["sha256"]:
+        gate.block(f"delivered file {media['path']} is not the render inspected by export render-qa")
+    if export_qa["verdict"] == "fail":
+        gate.block("export render-qa verdict is fail")
+    if gate.reasons:
         return
     promises = evaluate_promises(plan, doc)
     gate.info["delivery_promises"] = promises
@@ -391,10 +407,15 @@ def _gate_export(
             )
 
 
-def evaluate_gate(root: Path, data: dict[str, Any], stage_id: str) -> Gate:
+def evaluate_gate(
+    root: Path,
+    data: dict[str, Any],
+    stage_id: str,
+    drift: list[dict[str, Any]] | None = None,
+) -> Gate:
     """Evaluate a stage gate without mutating the production."""
     gate = Gate()
-    for item in drift_report(root, data):
+    for item in drift_report(root, data) if drift is None else drift:
         gate.block(f"artifact drift: {item['path']} is {item['state']}")
     for prior in VIDEO_STAGES[: VIDEO_STAGES.index(stage_id)]:
         if _stage(data, prior)["status"] not in DONE and not (
@@ -562,7 +583,16 @@ def skip_stage(root: Path, data: dict[str, Any], stage_id: str, reason: str) -> 
     if stage_id in ALWAYS_REQUIRED:
         raise VideoError(f"stage {stage_id} cannot be skipped")
     gate = Gate()
+    for item in drift_report(root, data):
+        gate.block(f"artifact drift: {item['path']} is {item['state']}")
+    for prior in VIDEO_STAGES[: VIDEO_STAGES.index(stage_id)]:
+        if _stage(data, prior)["status"] not in DONE:
+            gate.block(f"preceding stage {prior} is not completed or skipped")
     plan = _plan(root, data, gate)
+    if gate.reasons:
+        raise VideoError("cannot skip: " + "; ".join(gate.reasons))
+    if stage_id in {"select", "generate"} and plan is None:
+        raise VideoError(f"cannot skip {stage_id} before a production plan is bound")
     kinds = {beat["source_kind"] for beat in (plan or {}).get("beats", [])}
     if stage_id == "generate" and "generate" in kinds:
         raise VideoError(
@@ -711,7 +741,7 @@ def production_status(root: Path, data: dict[str, Any]) -> dict[str, Any]:
             "approval": stage["approval"],
         }
         if stage["status"] not in DONE:
-            gate = evaluate_gate(root, data, stage["id"])
+            gate = evaluate_gate(root, data, stage["id"], drift)
             entry["gate"] = {
                 "outcome": gate.outcome,
                 "reasons": gate.reasons,

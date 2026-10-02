@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
-import { digest, readProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
+import { digest, ffprobeJson, readProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
 import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 
@@ -35,8 +35,7 @@ function segments(log, prefix, duration) {
 }
 
 async function probeRender(file) {
-  const { stdout } = await run(ffprobe(), ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
-  const result = JSON.parse(stdout);
+  const result = await ffprobeJson(file);
   const video = result.streams.find(s => s.codec_type === 'video') ?? fail('Rendered file has no video stream');
   const [num, den] = String(video.avg_frame_rate || video.r_frame_rate).split('/').map(Number);
   const duration = Number(video.duration) || Number(result.format.duration);
