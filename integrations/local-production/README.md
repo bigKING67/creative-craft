@@ -1,6 +1,6 @@
 # Local production MVP
 
-可选的本地制作模块：已有/生成素材 → 版本化多轨工程（EditDocument v2）→ 有界批次编辑 → 预览 MP4 → 技术检查（QA）→ 修改 → 导出。它是 Creative Craft 的执行工具（Video Harness v1 的 P0 执行层），不包含自然语言规划器、阶段关卡、DataHub UI、素材检索或 Seedance 调用。现有 Python CLI 和轻量 Skill 安装保持不变；本模块目前只随源码 checkout 使用，不在根 npm/Skill 发布包中。
+可选的本地制作模块：已有/生成素材 → 版本化多轨工程（EditDocument v2）→ 有界批次编辑 → 预览 MP4 → 技术检查（QA）→ 修改 → 导出。它是 Creative Craft 的执行工具（Video Harness v1 的 P0 执行层，0.3.0 起含 P2 包装与音频：变速、淡入淡出、交叉淡化、音乐自动闪避、带类型变量的图形模板），不包含自然语言规划器、阶段关卡、DataHub UI、素材检索或 Seedance 调用。现有 Python CLI 和轻量 Skill 安装保持不变；本模块目前只随源码 checkout 使用，不在根 npm/Skill 发布包中。
 
 ## 安装和运行
 
@@ -39,6 +39,17 @@ Chrome 路径示例仅适用于对应 macOS 安装；其他主机指定自己的
 - **成片时长** = 所有 media item 与非 link 字幕的最大结束帧，1 帧至 10 分钟。
 - 每个修订带 `change {author: agent|human|system|migration, summary, operations_sha256}`。
 
+### P2 字段：包装与音频
+
+均为可选字段，旧文档继续合法。规则见 `docs/content-production-architecture.md`「P2 语义规则」，Node 与 Python 各实现一次。
+
+- **变速** `speed`（media，0.1–10，缺省 1）：源区间 = `source_in_seconds + frames/fps × speed`，须在素材时长 +0.001 s 内；link 字幕输出时间 = item 起点 + (源时间 − 源入点) / speed。
+- **淡变** `fade_in_frames` / `fade_out_frames`（media、graphic）：非负整数帧，二者之和 ≤ `frames`。画面为透明度，声音为音量包络。
+- **转场** `transition_in: {kind: "crossfade", frames}`（media）：同轨 item 不得重叠，唯一例外是后一 item 声明 crossfade、起点严格晚于紧邻前一 item、且重叠帧数恰好等于 `frames`（不超过两者各自长度）；重叠检查覆盖所有在前 item，不只相邻的；声明 crossfade 却无重叠同样无效。
+- **自动闪避** 轨道 `duck: {under_track_id, depth_db (−24…−3), attack_frames (0–60), release_frames (0–120)}`：只在 audio 轨；参照轨必须存在、不是自身、是 video 或 audio 轨，且自身不带 duck（只有一层）。
+- **图形** item `kind: "graphic"`：只在 video 轨，只接受 `id, track_id, kind, template, vars, start_frame, frames, fade_in_frames, fade_out_frames, opacity`；参与同轨不重叠与成片时长；`vars` 值只能是 1–200 字符字符串、有限数字或布尔值。模板存在性与变量类型由 Node 校验（见下文“图形模板”）。
+- caption 不得带 speed、淡变或转场字段。
+
 ## 创建工程
 
 `create` 按 spec 格式决定工程格式：v2 spec（`tracks/items`）产出 v2 工程。v2 spec（媒体路径相对于命令 cwd）：
@@ -72,7 +83,7 @@ node cli.mjs read /absolute/new-project
 node cli.mjs preview /absolute/new-project /absolute/new-preview 1
 ```
 
-旧 v1 spec（`clips/audio`，片段按数组顺序连续拼接、字幕 `from/to` 为源秒）仍创建 `local-edit.v1` 工程，与 0.1.0 行为一致，宿主原有的 `edit <project> <revision> operations.json` 流程不变；首次提交 v2 编辑批次时按下文迁移规则升级（`tests/host-compat.test.mjs` 覆盖这条宿主路径）。创建会 ffprobe 输入、复制素材并记录 SHA-256，不修改源文件；工程目录必须不存在。暂不支持变速、转场、淡入淡出、音乐自动闪避、图形模板（P2）或自动语音分句。
+旧 v1 spec（`clips/audio`，片段按数组顺序连续拼接、字幕 `from/to` 为源秒）仍创建 `local-edit.v1` 工程，与 0.1.0 行为一致，宿主原有的 `edit <project> <revision> operations.json` 流程不变；首次提交 v2 编辑批次时按下文迁移规则升级（`tests/host-compat.test.mjs` 覆盖这条宿主路径）。创建会 ffprobe 输入、复制素材并记录 SHA-256，不修改源文件；工程目录必须不存在。P2 字段（变速、转场、淡变、闪避、图形）只在 v2 工程中可用；不支持自动语音分句。
 
 ## Agent 有界编辑（批次 v2）
 
@@ -103,14 +114,14 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 | --- | --- | --- |
 | `add_asset` | `id, path, origin?` | 工程创建后补导入（含生成镜头）；默认 `origin.kind = import` |
 | `add_track` | `track, index?` | 插入位置即叠放顺序，默认置顶；`locked` 缺省 false |
-| `edit_track` | `track_id, locked?, name?` | 锁定/解锁/改名 |
-| `add_item` | `item` | 完整 item；不能放进锁定轨道 |
+| `edit_track` | `track_id, locked?, name?, duck?` | 锁定/解锁/改名；`duck` 为对象时设置、为 null 时清除自动闪避（锁定轨道不能改 duck） |
+| `add_item` | `item` | 完整 item（含 `kind: "graphic"`）；不能放进锁定轨道 |
 | `remove_item` | `item_id, ripple?` | 同时删除链接到它的字幕；`ripple` 把同轨后续 item 前移 |
 | `move_item` | `item_id, track_id?, start_frame?` | 只能移到同类轨道；link 字幕只能改轨，不能改起点 |
 | `trim_item` | `item_id, head_frames?, tail_frames?, slip_seconds?` | 正数剪掉头/尾、负数延长；剪头同步推进源入点；`slip_seconds` 只移源入点、时序不变 |
 | `split_item` | `item_id, at_frame, new_item_id` | 在输出帧处切开，后半段取新 id 并顺延源入点 |
 | `replace_media` | `item_id, asset_id, source_in_seconds?, captions?` | 保持时序；未给 `captions` 时移除旧 link 字幕；`captions` 为 `{id, track_id, text, style?, source_from, source_to}` |
-| `set_item_props` | `item_id, props` | `volume/fit/opacity/transform/text/style`；值为 null 表示移除（volume/text 不可移除） |
+| `set_item_props` | `item_id, props` | `volume/fit/opacity/transform/text/style/speed/fade_in_frames/fade_out_frames/transition_in/vars`；值为 null 表示移除（volume/text/vars 不可移除） |
 | `revert_to` | `revision` | 以旧修订内容发布新修订，**必须单独成批** |
 
 规则：
@@ -120,8 +131,31 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 - **锁定轨道**：锁定轨道上的 item 不能被修改、删除或作为移动目标；`split/replace_media/remove_item` 需要改动的 link 字幕所在轨道也必须未锁定。link 字幕的存储数据不变，只随其 media item 的位置自然换算，这不算修改。`revert_to` 若会改变当前任一锁定轨道上的 item 也被拒绝。
 - **split 的字幕归属（确定规则）**：link 字幕归属到**源区间起点 `source_from` 落在哪一半**（`source_from ≥ 切点源时间` 归后半，否则留在前半）。不复制字幕：跨越切点的字幕只在其所属那一半内显示相交部分，切点之后的部分不再显示；如需两半都显示，在后半段另加一条 link 字幕。
 - **trim/move**：link 字幕按源时间自动跟随，不存输出时间；裁掉的源区间内的字幕自然不再显示。
+- **P2 下的 split/trim/move（确定规则）**：
+  - 变速：split 两半都保留 `speed`；后半源入点 = 原源入点 + 前半帧数/fps × speed。`trim_item` 剪头同样按 `head_frames/fps × speed` 推进源入点；`slip_seconds` 是源秒，不乘 speed。
+  - 淡变与转场：split 后**前半保留 `fade_in_frames` 与 `transition_in`，后半保留 `fade_out_frames`**，新切点是硬切（前半去掉 fade_out，后半去掉 fade_in 与 transition_in）。原 item 若是下一个 item crossfade 的前驱，重叠落在后半上，后半长度须 ≥ 转场帧数。
+  - trim/move 不自动改写淡变与转场：结果必须仍满足规则（淡变之和 ≤ 长度；crossfade 重叠恰好等于帧数），否则整批拒绝；需要时在同一批次里用 `set_item_props` 调整或删除 `transition_in`/淡变。
+  - split 遇到淡变长于所在半段时整批拒绝（例如 fade_in 10 帧、在第 5 帧切），不做截断。
+- **duck 变更不是锁定变更**：`edit_track` 只有改 `locked` 时必须单独成批；设置/清除 `duck` 可与其他操作同批。
 - `change.operations_sha256` = 批次 `operations` 规范化 JSON（对象键递归排序、无空白、UTF-8）的 SHA-256。批次 `author` 只能是 agent/human/system（`migration` 保留给迁移）。
 - 字幕字体：批次首次引入字幕时绑定固定字体（见下）；已绑定的工程每次编辑都校验新字幕字形覆盖。
+
+## 图形模板
+
+模板是执行层资源，位于 `templates/<id>.json`（`schema_version: creative-craft.graphic-template.v1`、整数 `version`、`box`、带类型变量、固定 `html`/`css`），加载时逐项校验，不合格的模板直接使模块加载失败：
+
+- `box`（画布比例）必须完整位于 5% 安全区内（left/top ≥ 0.05，right/bottom ≤ 0.95）。
+- 变量类型：`string`（`max_length` 1–200、`font_em`、`weight`，可选 `optional`）、`color`（`#rrggbb`）、`boolean`、`number`（`min/max`）；可选变量可带 `default`。按最坏情况（每个字符 1 em 全角）校验 `max_length × font_em ≤ 100 × box.width × 0.95`，保证最长文本也能放进模板框。
+- `html` 只能含 `<span class="…">`（HyperFrames lint 会把计时元素内嵌套的块结构标为 warning），每个字符串变量以 `{{name}}` 恰好出现一次；`html`/`css` 禁止 script、事件属性、`url(`、`@import`、`src/href` 等；CSS 每条规则必须以 `.gfx-<id>` 作用域开头。
+- 编译：字符串值 HTML 转义后填入；颜色/数字写成根元素内联 CSS 自定义属性（`--accent:#2f9e8f`）；布尔写成固定 `data-<name>="true|false"`。不接受任意 HTML、URL 或脚本。根元素字号 = 画布短边 / 100 px（1 em = 短边 1%），各平台比例下同一模板文本相对尺寸一致；文本 `nowrap + ellipsis`，最坏情况仍在框内。
+- 字体：图形与字幕共用已绑定的字幕字体（`.caption,.gfx` 同一 `@font-face`），存在 graphic item 时与字幕一样触发字体绑定、字形覆盖检查和运行时字重加载门槛。没有字体绑定却已有系统字体字幕的旧工程不能加图形（否则会改变原字幕字体），须新建工程。
+
+首批模板：
+
+| id | 位置（box） | 变量 |
+| --- | --- | --- |
+| `lower-third` v1 | 左下 0.06/0.70，宽 0.62 × 高 0.20 | `title` 字符串 ≤16（3.6 em, 700）、`subtitle` 可选 ≤24（2.4 em, 400）、`accent` 可选颜色（默认 #e3b341） |
+| `title-card` v1 | 居中 0.10/0.30，宽 0.80 × 高 0.40 | `title` ≤12（6 em, 900）、`subtitle` 可选 ≤24（3 em）、`background`/`text_color` 可选颜色、`panel` 可选布尔（false 时面板透明） |
 
 ## v1 工程兼容与迁移
 
@@ -132,6 +166,15 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 ## 渲染与 lint 关卡
 
 渲染必须使用新的、工程目录外的输出目录；失败目录也不自动覆盖。输出 `project.json`、`index.html`、复制的素材、`captions.vtt`、`video.mp4` 和 `receipt.json`。多轨编译：视频轨按数组顺序叠放（显式 z-index，字幕始终在画面之上），每条轨道独立 `data-track-index` 通道；视频 item 的素材含音频且 volume>0 时输出独立 `<audio>`；音频轨 item 输出 `<audio>`；link 与非 link 字幕均生成 WebVTT。
+
+**P2 编译映射**（按已安装的 `@hyperframes/*` 0.8.108 dist 实测，而非文档推断）：
+
+- 变速：`<video>`/`<audio>` 写 `data-playback-rate="<speed>"`（core `readPlaybackRate` 读取并限制在 0.1–10；engine 抽帧按 `sourceTimeAt` 换算画面源时间，混音用 `atempo` 变速不变调）。`data-media-start` 仍是源入点。
+- 音量：所有随时间变化的音量（淡入淡出、crossfade 两侧、闪避）合成为每个 `<audio>` 上**一条** `data-automation` volume lane，此时不再写 `data-volume`，也不生成任何 GSAP 音量补间，因此不会出现 `audio_volume_double_automation`。实测语法：`data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0},{"t":0.333333,"v":1},…]}]}'`（HTML 属性内转义为 `&quot;`）；`t` 为**相对该元素 data-start 的秒数**（clip-local），`v` 为**绝对线性增益**（替代而非乘以 data-volume；engine `volumeLaneKeyframes` 把首点之前保持首值、末点之后保持末值，再逐样本乘入 PCM），点间线性插值，每条最多 512 点（超出即编译失败）。音量恒定的 item 仍只写 `data-volume`。
+- 包络计算：增益 = volume × 淡入斜坡 × 淡出斜坡 × crossfade 入（后一段 0→1）× crossfade 出（前一段 1→0，线性）× 闪避；在所有斜坡端点精确相乘，端点之间线性。闪避：参照轨上有声 media（volume>0 且素材有音频）的输出区间；相邻区间若“释放 + 下一次起音”会相接则合并；每段在说话开始前 attack 帧内降到 `10^(depth_db/20)`（时间线已知，提前起音），说话结束后 release 帧内回到 1；0 帧按 1 ms 斜坡处理以免爆音。
+- 画面：有淡变/转场的视频与图形以 `opacity:0` 编写，再按包络生成首尾相接的 `tl.fromTo("#id",{opacity:a},{opacity:b,duration,ease:"none",immediateRender:false},t)`；首段之后的恒定段不再生成补间（完成的补间保持终值）；起点与 clip 边界一样提前 1 ns，时长再缩 2 ns，避免相邻补间被 lint 判为重叠。crossfade 时前一段保持不透明，后一段在上层 0→1，所以重叠中点是 50/50 混合。
+- 同轨 crossfade 的两段处于重叠，会在 HyperFrames 中被判为同一 `data-track-index` 上的重复音轨，所以链式 crossfade 的 item 在两个“卷”之间交替：视频 `n`/`n+40`、声音 `100+n`/`140+n`，叠放（z-index）不变，后一段在 DOM 中位于前一段之后。
+- 回执新增 `audio_limiter: {ceiling_dbtp: -1, engaged, audio_lowered_db, source: "RenderJob.audioLoweredDb"}`：producer 的 AAC 真峰值限幅只在需要压低整段混音时在 RenderJob 上写 `audioLoweredDb`（缺省即未触发，记为 0）。
 
 编译 HTML 后用 `@hyperframes/lint` 的 `lintHyperframeHtml` 检查，按 `shouldBlockRender(strictErrors=true, strictAll=false, …)` 判定：存在 error 级发现即中止，回执 `failed`、不产出视频；结果（版本、计数、发现）写入 `receipt.lint`。v2 字幕带 `class="clip"`，编译结果无 lint 警告；v1 编译保持原样（字幕缺 clip 类会产生 warning，不阻断）。
 
@@ -149,26 +192,31 @@ node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir
 
 - **structure**：时长与修订帧数相差 ≤1 帧（取视频流时长）、分辨率（导出=画布，预览=缩放尺寸）、帧率、音轨（工程有可听 item 而无音轨为 fail）。
 - **video**：ffmpeg `blackdetect`（d=0.5, pix_th=0.10）与 `freezedetect`（-60dB, d=2）。与时间线空隙重叠的部分视为预期黑场/静止，只有落在有画面区间内的 >0.5 s 黑场、>2 s 静止记 warn。
-- **audio**：`silencedetect`（-50dB, d=2）只统计工程有声音区间内的 >2 s 静音（warn）；`ebur128=peak=true` 积分响度超出 -14±3 LUFS 记 warn，真峰值 > -1 dBTP 记 warn。无音轨时为 unknown/not_applicable。
+- **audio**：`silencedetect`（-50dB, d=2）只统计工程有声音区间内的 >2 s 静音（warn）；`ebur128=peak=true` 积分响度超出 -14±3 LUFS 记 warn，真峰值 > -1 dBTP 记 warn。真峰值检查的 `measured` 同时引用回执的限幅证据：`audio_lowered_db`、`limiter_engaged`、`limiter_ceiling_dbtp`（旧回执无记录时为 null，observation 注明）。无音轨时为 unknown/not_applicable。
 - **captions**：每条可见字幕在显示区间中点采样合成帧，帧存在记 pass（不判断文字是否可读）。
+- **安全区**（`caption-safe-area`，category captions；`graphic-safe-area`，category video）：在字幕采样帧与图形中点采样帧上检查元素框是否距四边 ≥5%。方法是**按编译布局计算**，不是像素检测：图形取模板框；字幕按编译 CSS 推算（默认样式：7%–93% 宽、底边 8%、行高 1.35、8 px 内边距；显式样式：以 centerY 为中心、行高 1.1、加描边），文本宽度按字符估算（全角 CJK/符号 1 em、其他 0.55 em、空格 0.3 em）推算换行行数。越界 → fail；图形文本估算会被省略号截断 → warn。`measured.boxes` 记录每个框。局限：字宽为估算，不是浏览器实测；不检测画面内容本身（如素材里已有的贴边文字）；模板框已保证在安全区内，所以图形检查主要防止模板或画布变化引入回归。
 - **lint**：引用渲染回执的 lint 结果（error→fail，warning→warn，旧回执无结果→unknown）。
 
-采样合成后的成片帧（不是源素材帧）：每个 media item 中点、每个视频剪辑点前后各一帧、每条字幕中点，PNG 写入 `frames/` 并记 SHA-256；采样按帧号精确定位（`-ss` 提前 1/4 帧，避免落到下一帧）。用 ffmpeg `tile` 把采样（超过 40 张时均匀抽取）拼成 `contact-sheet.png`；每个剪辑点前后各 1 秒导出 `clips/cut-<帧号>.mp4` 供听看。
+采样合成后的成片帧（不是源素材帧）：每个 media 与 graphic item 中点、每个视频剪辑点前后各一帧、每条字幕中点，PNG 写入 `frames/` 并记 SHA-256；采样按帧号精确定位（`-ss` 提前 1/4 帧，避免落到下一帧）。用 ffmpeg `tile` 把采样（超过 40 张时均匀抽取）拼成 `contact-sheet.png`；每个剪辑点前后各 1 秒导出 `clips/cut-<帧号>.mp4` 供听看。
 
 `verdict`：任一 fail → fail；否则有 warn → pass_with_warnings；否则 pass。`review` 初始为 `{status:"pending", reviewer:null, decision:"pending", findings:[]}`，由 Agent 或人工依据采样填写；`unverified` 固定声明人工听检、创意质量、合成画面评审与字幕可读性未验证。自动检查只反映技术信号：不检测音画同步、字幕与语音是否对应、画面内容是否正确，也不替代对合成画面的评审。
 
 ## 验证与限制
 
-`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
+`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：12 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck）、安全区布局估算；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
 
 `npm run smoke` 用自有测试图案和测试音（无客户素材），输出在根 `dist/local-production/<timestamp>/`：
 
 1. v1 旧流程（以 `createProject(…, { legacyV1: true })` 建立 v1 工程，仅供兼容验证）：五个版本、旧 CLI `edit` 形式、画面/音调信号核对、静音导出与独立音轨。
 2. 对该 v1 工程提交 v2 批次：迁移修订 + 编辑修订，迁移修订导出与 v1 导出逐帧比对。
 3. v2 多轨：主轨 + 补导入 B-roll（transform 叠放）+ 音乐轨 + link 字幕 + 非 link 字幕；dry-run 不发布不复制、过期修订拒绝、锁定轨道拒绝、split、revert_to；导出后核对 B-roll 框内为 B-roll、框外为主画面、开始前不可见，以及主轨音调与 660 Hz 音乐同时存在。
-4. CLI `qa` 生成 `qa.json`；以带 jsonschema 的 Python（`CREATIVE_PYTHON`，默认仓库根 `.venv/bin/python`）按 Draft 2020-12 校验 qa.json 与所有 v2 修订文件，缺少 Python/jsonschema 时 smoke 直接失败。再复制该导出、剥离音轨并改写回执摘要，模拟“声称完成但丢音轨”的导出器，QA 必须给出 `verdict = fail`。
+4. CLI `qa` 生成 `qa.json`。再复制该导出、剥离音轨并改写回执摘要，模拟“声称完成但丢音轨”的导出器，QA 必须给出 `verdict = fail`。
+5. P2 品牌包装（`packaging/`，24 fps 1280×720）：标题卡（0–36 帧）+ 下三分之一（76–116 帧）、两段主画面 crossfade（口播 0–72 淡入，色条 60–120 以 12 帧 crossfade 进入）、一段 1.5× 变速（口播源 2.5 s 起）带淡出、音乐轨在主画面轨下 −12 dB 闪避并淡入淡出、变速段上的 link 字幕。断言：lint 0 error/0 warning 且无 `audio_volume_double_automation`、三个 `<audio>` 全为 volume lane、VTT 中变速字幕为 5.667→6.333 s。信号检查：变速段第 132 帧与源 3.25 s 的画面 MAE 远小于与 1× 位置 3.0 s；crossfade 中点（第 66 帧）与两源平均帧的 MAE 远小于与任一单源；淡入首帧为黑、淡出末帧亮度降到 20% 以下；660 Hz 音乐能量在口播区间相对非口播区间约为 depth_db（±2 dB）；音乐淡入首窗明显更低；标题卡与下三分之一区域与下层画面显著不同且含白字与深色底。导出 QA 的 `graphic-safe-area`/`caption-safe-area`/lint 为 pass，`true-peak` 引用 `audio_lowered_db`。人为失败：新增一条 fontHeight 0.08、centerY 0.9 的两行字幕，预览 QA 必须在 `caption-safe-area` 上 fail。
+6. 以带 jsonschema 的 Python（`CREATIVE_PYTHON`，默认仓库根 `.venv/bin/python`）按 Draft 2020-12 校验全部 v2 修订文件（含品牌包装工程）与 4 份 qa.json，缺少 Python/jsonschema 时 smoke 直接失败。
 
 合成样例不能证明真实口播语义、品牌一致性、商业表现或专业剪辑效果；样例响度（约 -19.7 LUFS）落在目标外，QA 如实给出 pass_with_warnings。输入时长上限 30 分钟，成片上限 10 分钟是当前合同限制，尚非长时长性能验收结果；QA 对每个采样单独调用 ffmpeg，长工程/大量 item 时耗时随采样数线性增长。无生成、云凭据、上传、发布、自动剪辑决策；用户/Agent 自行给出合法选片和已获授权素材。
+
+P2 的已知限制：闪避依据参照轨上**有声 item 的区间**，不是语音活动检测（item 内部的停顿同样被压低）；crossfade 的音量为线性互补斜坡（相关信号恒幅，不相关信号中点约低 3 dB），不是等功率曲线；包络在斜坡端点精确、端点之间线性，两个斜坡同时变化时略偏离精确乘积；smoke 样例真峰值约 −19.9 dBTP，限幅器未触发，`audio_limiter.engaged = true` 的路径只按 producer 源码确认字段位置，尚无真实触发样例；安全区为布局估算（见上）。
 
 ### 可选的源字幕样式
 
