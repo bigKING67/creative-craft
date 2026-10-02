@@ -23,6 +23,14 @@ Gated video production on top of the existing contracts (see
   is fetched and digest-checked instead of committed;
 - `docs/upstream-watch.json` and `make upstream-check` for read-only upstream drift
   review.
+- P2 packaging and audio (local-production 0.3.0): constant speed changes,
+  fades, crossfades, music ducking under a reference track, `lower-third` and
+  `title-card` graphic templates with typed variables, edit-time checks of the
+  512-point volume automation limit, limiter evidence (`audioLoweredDb`) and
+  caption/graphic safe-area checks in QA;
+- optional `policy.export_requires_human_review`: an accepted inspection waits
+  for a named `video-approve --stage inspect` sign-off. The local CLI records who
+  signed; verifying that the signer is a person is left to the host.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in

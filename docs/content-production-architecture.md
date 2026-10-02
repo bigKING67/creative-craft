@@ -140,7 +140,7 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 - 字段按类型互斥：media item 不得带 `text/style/link`；caption item 不得带 `asset_id/source_in_seconds/volume`；音频轨 item 不得带 `fit/opacity/transform`；link 字幕不得带 `start_frame/frames`。`revision > 1` 必须有 `parent_sha256`，`revision = 1` 必须为 null。字幕之间允许重叠。
 - 以上规则在 Node（`integrations/local-production/edit-document.mjs`）与 Python（`creative_craft_contracts.py`）各实现一次，由 `tests/fixtures/edit-document-v2/` 共享样例强制一致；新增规则必须同时补样例。
 
-### P2 语义规则：包装与音频（2026-10-02，实施中）
+### P2 语义规则：包装与音频（2026-10-02，已实现：合成素材验证）
 
 在 EditDocument v2 上增加可选字段，旧文档继续合法；Node 与 Python 同步实现，`tests/fixtures/edit-document-v2/valid/p2-packaging.json` 与对应 `invalid/` 样例强制一致。
 
