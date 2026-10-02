@@ -134,6 +134,7 @@ def render_qa(
     kind: str = "preview",
     render_file: str | None = None,
     render_sha: str = "d" * 64,
+    reviewer_kind: str = "agent",
 ) -> dict[str, Any]:
     verdict = {"pass": "pass", "warn": "pass_with_warnings", "fail": "fail"}[status]
     seconds = cc.edit_document_duration_frames(doc) / FPS
@@ -192,7 +193,7 @@ def render_qa(
         "review": {
             "status": review_status,
             "reviewer": "synthetic-agent" if review_status == "done" else None,
-            "reviewer_kind": "agent",
+            "reviewer_kind": reviewer_kind,
             "decision": decision if review_status == "done" else "pending",
             "findings": findings,
         },
@@ -382,7 +383,7 @@ def stage(root: Path, stage_id: str) -> dict[str, Any]:
 
 
 def build_talking_head_production(
-    root: Path, *, generated: bool = False
+    root: Path, *, generated: bool = False, human_review: bool = False
 ) -> dict[str, str]:
     """Run the full gated flow through the CLI and return the bound file paths."""
     r = str(root)
@@ -393,7 +394,8 @@ def build_talking_head_production(
             raise AssertionError(f"{argv} failed: {out}{err}")
         return out
 
-    ok("video-init", "--root", r, "--production-id", "talk-broll")
+    policy = ["--export-requires-human-review"] if human_review else []
+    ok("video-init", "--root", r, "--production-id", "talk-broll", *policy)
     (root / "brief.md").write_text(
         "# Brief (synthetic)\n15 s vertical cut with B-roll and captions.\n",
         encoding="utf-8",
@@ -523,7 +525,9 @@ def build_talking_head_production(
         "edit/revisions/000002.json",
     )
     ok("video-complete", "--root", r, "--stage", "revise")
-    write_doc(root, "qa/r2.json", render_qa(doc2, sha2, decision="accept"))
+    reviewer_kind = "human" if human_review else "agent"
+    qa2 = render_qa(doc2, sha2, decision="accept", reviewer_kind=reviewer_kind)
+    write_doc(root, "qa/r2.json", qa2)
     ok(
         "video-record",
         "--root",

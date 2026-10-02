@@ -372,6 +372,15 @@ def _gate_export(
     if accepted is None:
         gate.block("no inspection passed with an accept review")
         return
+    reviewer_kind = accepted["review"].get("reviewer_kind")
+    if data["policy"].get("export_requires_human_review") and reviewer_kind != "human":
+        gate.block(
+            "policy.export_requires_human_review: the accepted inspection "
+            f"(revision {accepted['revision']}) was reviewed by "
+            f"{reviewer_kind or 'an unspecified reviewer kind'}; record a render-qa "
+            "whose review.reviewer_kind is human and complete inspect again"
+        )
+        return
     if accepted["revision_sha256"] != edit["sha256"]:
         gate.block(
             f"exported revision {edit['path']} differs from the last accepted inspection "
@@ -964,6 +973,8 @@ def cmd_video_init(args: argparse.Namespace) -> int:
                 [] if args.approval_required == ["none"] else args.approval_required
             )
         policy["max_revision_rounds"] = args.max_revision_rounds
+        if args.export_requires_human_review:
+            policy["export_requires_human_review"] = True
         policy["budget"] = {
             "currency": args.currency,
             "cap": args.budget_cap,
@@ -1091,6 +1102,11 @@ def register_video_commands(sub: Any) -> None:
         help="stages that need approval (default: plan); pass 'none' to disable",
     )
     init.add_argument("--max-revision-rounds", type=int, default=3)
+    init.add_argument(
+        "--export-requires-human-review",
+        action="store_true",
+        help="export only after an inspection accepted by a human reviewer",
+    )
     init.add_argument(
         "--budget-mode", choices=["observe", "warn", "cap"], default="observe"
     )

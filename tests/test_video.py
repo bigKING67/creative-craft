@@ -423,8 +423,10 @@ class VideoGateTests(unittest.TestCase):
     def init(self, *extra: str) -> None:
         self.cli("video-init", "--production-id", "gates", *extra)
 
-    def plan_ready(self, plan: dict | None = None, *, approve: bool = False) -> None:
-        self.init(*([] if approve else ["--approval-required", "none"]))
+    def plan_ready(
+        self, plan: dict | None = None, *, approve: bool = False, init: tuple = ()
+    ) -> None:
+        self.init(*([] if approve else ["--approval-required", "none"]), *init)
         self.cli("video-skip", "--stage", "brief", "--reason", "brief given in chat")
         self.cli("video-skip", "--stage", "reference", "--reason", "no references")
         write_doc(self.root, "plan.json", plan or production_plan())
@@ -438,8 +440,8 @@ class VideoGateTests(unittest.TestCase):
             "plan.json",
         )
 
-    def assembled(self) -> str:
-        self.plan_ready()
+    def assembled(self, *init: str) -> str:
+        self.plan_ready(init=init)
         self.cli("video-complete", "--stage", "plan")
         self.cli("video-complete", "--stage", "select")
         self.cli("video-skip", "--stage", "generate", "--reason", "footage only")
@@ -924,8 +926,40 @@ class VideoGateTests(unittest.TestCase):
         )
         self.assertTrue(all(event["at"] for event in production(self.root)["events"]))
 
+    def test_export_human_review_policy_blocks_agent_accepted_inspection(self) -> None:
+        sha = self.assembled("--export-requires-human-review")
+        self.assertIs(True, production(self.root)["policy"]["export_requires_human_review"])
+        doc = edit_document(1)
+        self.inspect("qa/r1.json", render_qa(doc, sha, decision="accept"))
+        self.cli(
+            "video-record",
+            "--stage",
+            "export",
+            "--kind",
+            "edit-document",
+            "--artifact",
+            "rev/000001.json",
+        )
+        record_export_render(self.root, doc, sha, self.via_root)
+        out = self.cli("video-complete", "--stage", "export", code=1)
+        self.assertIn("policy.export_requires_human_review", out)
+        self.assertIn("reviewed by agent", out)
+        self.assertNotIn("delivery promise", out)
+
+    def test_export_human_review_policy_defaults_off(self) -> None:
+        self.init()
+        self.assertNotIn("export_requires_human_review", production(self.root)["policy"])
+
 
 class VideoEndToEndTests(unittest.TestCase):
+    def test_human_review_policy_exports_after_human_accepted_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_talking_head_production(root, human_review=True)
+            data = production(root)
+            self.assertIs(True, data["policy"]["export_requires_human_review"])
+            self.assertEqual("completed", stage(root, "export")["status"])
+
     def test_talking_head_broll_captions_with_one_revision_round(self) -> None:
         for generated in (False, True):
             with (
