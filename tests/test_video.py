@@ -50,6 +50,10 @@ class EditDocumentContractTests(unittest.TestCase):
             "source-range-exceeds-asset": "beyond asset duration",
             "unknown-asset": "unknown asset",
             "unknown-track": "unknown track",
+            "media-with-caption-field": "media item must not set text",
+            "caption-with-media-field": "caption item must not set volume",
+            "linked-caption-with-timing": "linked caption must not set start_frame",
+            "later-revision-without-parent": "revision > 1 requires parent_sha256",
         }
         paths = sorted((FIXTURES / "edit-document-v2/invalid").glob("*.json"))
         self.assertEqual(set(expected), {path.stem for path in paths})
