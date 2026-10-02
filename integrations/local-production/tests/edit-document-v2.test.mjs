@@ -27,7 +27,14 @@ const reasons = { 'audio-only-asset-on-video-track': /has no video/, 'caption-li
   'duplicate-item-id': /Duplicate item id/, 'first-revision-with-parent': /parent digest/,
   'free-caption-missing-timing': /requires start_frame\/frames/, 'media-missing-source-in': /requires asset_id/,
   'same-track-overlap': /Overlapping/, 'source-range-exceeds-asset': /exceeds asset/, 'unknown-asset': /Unknown asset/,
-  'unknown-track': /Unknown track/ };
+  'unknown-track': /Unknown track/,
+  // P2 packaging and audio.
+  'caption-with-speed': /cannot carry speed, fades or transitions/, 'crossfade-overlap-mismatch': /overlap its predecessor .* by exactly 12/,
+  'crossfade-without-overlap': /Crossfade talk1 must overlap/, 'duck-on-video-track': /only allowed on audio tracks/,
+  'duck-under-self': /cannot duck under itself/, 'duck-under-unknown-track': /Duck under unknown track/,
+  'fades-exceed-item': /Fades exceed item length/, 'graphic-on-caption-track': /must be on a video track/,
+  'graphic-var-not-primitive': /Graphic var title must be a string/, 'graphic-with-media-field': /cannot carry media\/caption fields: volume/,
+  'overlap-without-crossfade': /without crossfade: talk1, talk2/, 'speed-source-exceeds-asset': /exceeds asset \(speed-scaled\): talk2/ };
 test('shared fixtures: every invalid document is rejected', async () => {
   const names = (await fs.readdir(path.join(fixtures, 'invalid'))).filter(n => n.endsWith('.json'));
   assert.ok(names.length >= 12);
