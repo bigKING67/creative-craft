@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from creative_craft_video import plan_structure_changes
+from creative_craft_video import evaluate_promises, plan_structure_changes
 from support import ROOT, cc, load, write_json
 from video_support import (
     build_talking_head_production,
@@ -33,10 +33,11 @@ def errors(data: dict) -> list[str]:
 
 
 class EditDocumentContractTests(unittest.TestCase):
-    def test_shared_valid_fixture_passes(self) -> None:
-        self.assertEqual(
-            [], errors(load("tests/fixtures/edit-document-v2/valid/multitrack.json"))
-        )
+    def test_shared_valid_fixtures_pass(self) -> None:
+        for name in ("multitrack", "p2-packaging"):
+            with self.subTest(name):
+                path = f"tests/fixtures/edit-document-v2/valid/{name}.json"
+                self.assertEqual([], errors(load(path)))
 
     def test_every_shared_invalid_fixture_is_rejected_for_its_rule(self) -> None:
         expected = {
@@ -59,6 +60,18 @@ class EditDocumentContractTests(unittest.TestCase):
             "audio-item-with-visual-field": "audio-track item must not set fit",
             "caption-with-visual-field": "caption item must not set opacity",
             "caption-link-beyond-asset": "link.source_to exceeds the linked asset duration",
+            "caption-with-speed": "caption item must not set speed",
+            "crossfade-overlap-mismatch": "does not match its 10-frame overlap",
+            "crossfade-without-overlap": "declares a crossfade without overlapping",
+            "duck-on-video-track": "duck is only allowed on audio tracks",
+            "duck-under-self": "duck must not reference its own track",
+            "duck-under-unknown-track": "duck references unknown track",
+            "fades-exceed-item": "fade_in_frames + fade_out_frames exceed frames",
+            "graphic-on-caption-track": "graphic item must be on a video track",
+            "graphic-var-not-primitive": "vars.title must be a string of 1-200",
+            "graphic-with-media-field": "graphic item must not set volume",
+            "overlap-without-crossfade": "overlap without a matching crossfade",
+            "speed-source-exceeds-asset": "source range ends at 22s beyond asset",
         }
         paths = sorted((FIXTURES / "edit-document-v2/invalid").glob("*.json"))
         self.assertEqual(set(expected), {path.stem for path in paths})
@@ -87,6 +100,198 @@ class EditDocumentContractTests(unittest.TestCase):
         frames = cc.edit_document_item_frames(doc)
         self.assertEqual((0, 90), frames["cap1"])
         self.assertEqual((300, 390), frames["cap2"])
+
+
+P2_FIXTURE = "tests/fixtures/edit-document-v2/valid/p2-packaging.json"
+
+
+def p2_doc() -> dict:
+    return load(P2_FIXTURE)
+
+
+def p2_item(doc: dict, item_id: str) -> dict:
+    return next(item for item in doc["items"] if item["id"] == item_id)
+
+
+class EditDocumentP2Tests(unittest.TestCase):
+    """P2 packaging/audio rules beyond the one-rule shared fixtures."""
+
+    def assert_error(self, doc: dict, fragment: str) -> None:
+        found = errors(doc)
+        self.assertTrue(any(fragment in message for message in found), found)
+
+    def test_crossfade_only_with_the_immediately_previous_item(self) -> None:
+        doc = p2_doc()
+        doc["items"].append(
+            {
+                "id": "talk3",
+                "track_id": "v_main",
+                "kind": "media",
+                "asset_id": "talk",
+                "start_frame": 255,
+                "frames": 30,
+                "source_in_seconds": 0,
+                "volume": 1,
+                "transition_in": {"kind": "crossfade", "frames": 5},
+            }
+        )
+        self.assertEqual([], errors(doc))
+        p2_item(doc, "talk3").update(
+            start_frame=145, frames=155, transition_in={"kind": "crossfade", "frames": 115}
+        )
+        self.assert_error(doc, "items talk1 and talk3 overlap without a matching crossfade")
+
+    def test_audio_crossfade_and_fades_at_the_limit_are_valid(self) -> None:
+        doc = p2_doc()
+        p2_item(doc, "bed")["frames"] = 260
+        doc["items"].append(
+            {
+                "id": "bed2",
+                "track_id": "a_music",
+                "kind": "media",
+                "asset_id": "music",
+                "start_frame": 250,
+                "frames": 30,
+                "source_in_seconds": 10,
+                "volume": 0.2,
+                "transition_in": {"kind": "crossfade", "frames": 10},
+            }
+        )
+        p2_item(doc, "talk1").update(fade_in_frames=100, fade_out_frames=50)
+        self.assertEqual([], errors(doc))
+
+    def test_field_exclusivity_for_media_caption_and_graphic(self) -> None:
+        cases = [
+            ("talk1", {"template": "lower-third"}, "media item must not set template"),
+            ("title", {"fade_in_frames": 2}, "caption item must not set fade_in_frames"),
+            (
+                "title",
+                {"transition_in": {"kind": "crossfade", "frames": 2}},
+                "caption item must not set transition_in",
+            ),
+            ("cap1", {"speed": 2}, "caption item must not set speed"),
+            ("lower", {"speed": 2}, "graphic item must not set speed"),
+            ("lower", {"transform": {"x": 0, "y": 0, "scale": 1}}, "graphic item must not set transform"),
+            (
+                "lower",
+                {"transition_in": {"kind": "crossfade", "frames": 2}},
+                "graphic item must not set transition_in",
+            ),
+            ("lower", {"text": "x"}, "graphic item must not set text"),
+        ]
+        for item_id, patch, fragment in cases:
+            with self.subTest(fragment):
+                doc = p2_doc()
+                p2_item(doc, item_id).update(patch)
+                self.assert_error(doc, fragment)
+        doc = p2_doc()
+        del p2_item(doc, "lower")["template"]
+        self.assert_error(doc, "graphic item requires template")
+        doc = p2_doc()
+        p2_item(doc, "lower")["track_id"] = "a_music"
+        self.assert_error(doc, "graphic item must be on a video track")
+
+    def test_graphic_vars_are_bounded_primitives(self) -> None:
+        for value, ok in (
+            ("", False),
+            ("x" * 200, True),
+            ("x" * 201, False),
+            (True, True),
+            (3.5, True),
+            (float("nan"), False),
+            ([1], False),
+            (None, False),
+        ):
+            with self.subTest(value=value if not isinstance(value, str) else len(value)):
+                doc = p2_doc()
+                p2_item(doc, "lower")["vars"]["subtitle"] = value
+                found = [m for m in errors(doc) if "vars.subtitle" in m]
+                self.assertEqual(ok, not found, found)
+
+    def test_graphics_follow_same_track_overlap_and_count_toward_duration(self) -> None:
+        doc = p2_doc()
+        p2_item(doc, "lower")["frames"] = 400
+        self.assertEqual([], errors(doc))
+        self.assertEqual(400, cc.edit_document_duration_frames(doc))
+        doc["items"].append(
+            {
+                "id": "card",
+                "track_id": "v_gfx",
+                "kind": "graphic",
+                "template": "title-card",
+                "vars": {"title": "Hi"},
+                "start_frame": 80,
+                "frames": 30,
+            }
+        )
+        self.assert_error(doc, "items lower and card overlap without a matching crossfade")
+
+    def test_duck_targets_one_level_of_video_or_audio(self) -> None:
+        doc = p2_doc()
+        doc["tracks"][3]["duck"]["under_track_id"] = "c_sub"
+        self.assert_error(doc, "duck must reference a video or audio track")
+        doc = p2_doc()
+        doc["tracks"].insert(
+            3,
+            {
+                "id": "a_vo",
+                "kind": "audio",
+                "locked": False,
+                "duck": {
+                    "under_track_id": "v_main",
+                    "depth_db": -6,
+                    "attack_frames": 0,
+                    "release_frames": 0,
+                },
+            },
+        )
+        self.assertEqual([], errors(doc))
+        doc["tracks"][4]["duck"]["under_track_id"] = "a_vo"
+        self.assert_error(doc, "duck target a_vo must not have its own duck")
+
+    def test_speed_scales_source_range_and_linked_captions(self) -> None:
+        doc = p2_doc()
+        doc["items"].append(
+            {
+                "id": "cap2",
+                "track_id": "c_sub",
+                "kind": "caption",
+                "text": "x",
+                "link": {"item_id": "talk2", "source_from": 11.5, "source_to": 13.0},
+            }
+        )
+        self.assertEqual([], errors(doc))
+        frames = cc.edit_document_item_frames(doc)
+        # talk2: start 140, source_in 10 s, speed 1.5 -> 1.5 s of source per 30 frames.
+        self.assertEqual((170, 200), frames["cap2"])
+        self.assertEqual((0, 75), frames["cap1"])
+        p2_item(doc, "talk1")["speed"] = 0.5
+        # 2.0-4.5 s at half speed spans 150 frames, clipped to the item's source end.
+        self.assertEqual((0, 150), cc.edit_document_item_frames(doc)["cap1"])
+        p2_item(doc, "talk2")["frames"] = 201
+        self.assert_error(doc, "beyond asset duration")
+
+    def test_generated_share_counts_media_only_and_crossfades_as_either(self) -> None:
+        plan = {
+            "delivery_promises": [
+                {"id": "gen", "check": {"kind": "max_generated_share", "max": 0.5}}
+            ]
+        }
+        doc = p2_doc()
+        # Generated B-roll 60-120 of 270 frames; the graphic above it does not occlude.
+        self.assertAlmostEqual(60 / 270, cc.edit_document_generated_share(doc))
+        generated = copy.deepcopy(doc["assets"][1])
+        generated.update(id="gen_talk", duration=20)
+        doc["assets"].append(generated)
+        p2_item(doc, "talk2")["asset_id"] = "gen_talk"
+        # B-roll 60 + talk2 140-260 (crossfade 140-150 counts as generated) = 180.
+        self.assertAlmostEqual(180 / 270, cc.edit_document_generated_share(doc))
+        p2_item(doc, "talk2")["asset_id"] = "talk"
+        p2_item(doc, "talk1")["asset_id"] = "gen_talk"
+        # talk1 0-150 including the crossfade it hands over to talk2.
+        self.assertAlmostEqual(150 / 270, cc.edit_document_generated_share(doc))
+        [promise] = evaluate_promises(plan, doc)
+        self.assertEqual((0.5556, False), (promise["observed"], promise["passed"]))
 
 
 class RenderQaContractTests(unittest.TestCase):

@@ -2129,19 +2129,34 @@ def _indexed_ids(r: Result, values: Any, label: str) -> dict[str, dict[str, Any]
     return indexed
 
 
+def media_speed(item: dict[str, Any]) -> float:
+    """Playback rate of a media item (P2 ``speed``; 1 when absent)."""
+    return float(item.get("speed", 1))
+
+
+def media_source_end(item: dict[str, Any], fps: int) -> float:
+    """Source time (seconds) consumed by a media item: in + frames / fps * speed."""
+    return float(item["source_in_seconds"]) + item["frames"] / fps * media_speed(item)
+
+
 def linked_caption_frames(
     caption: dict[str, Any], target: dict[str, Any], fps: int
 ) -> tuple[int, int] | None:
-    """Output frames of a linked caption, clipped to its media item's source range."""
+    """Output frames of a linked caption, clipped to its media item's source range.
+
+    Source seconds map to output frames through the item's speed, so a caption
+    on a 2x item occupies half as many output frames as its source span.
+    """
     link = caption.get("link", {})
+    speed = media_speed(target)
     source_in = float(target["source_in_seconds"])
-    source_out = source_in + target["frames"] / fps
+    source_out = media_source_end(target, fps)
     start = max(float(link["source_from"]), source_in)
     end = min(float(link["source_to"]), source_out)
     if end <= start:
         return None
-    first = target["start_frame"] + round((start - source_in) * fps)
-    last = target["start_frame"] + round((end - source_in) * fps)
+    first = target["start_frame"] + round((start - source_in) / speed * fps)
+    last = target["start_frame"] + round((end - source_in) / speed * fps)
     return (first, last) if last > first else None
 
 
@@ -2165,7 +2180,7 @@ def edit_document_item_frames(data: dict[str, Any]) -> dict[str, tuple[int, int]
 
 
 def edit_document_duration_frames(data: dict[str, Any]) -> int:
-    """Output length: the maximum end of media items and unlinked captions."""
+    """Output length: the maximum end of media, graphic and unlinked caption items."""
     ends = [
         item["start_frame"] + item["frames"]
         for item in data.get("items", [])
@@ -2175,7 +2190,7 @@ def edit_document_duration_frames(data: dict[str, Any]) -> int:
 
 
 def edit_document_generated_share(data: dict[str, Any]) -> float:
-    """Share of output frames whose topmost visible video item uses a generated asset."""
+    """Share of output frames whose topmost video media uses a generated asset."""
     duration = edit_document_duration_frames(data)
     if duration <= 0:
         return 0.0
@@ -2207,10 +2222,120 @@ def edit_document_generated_share(data: dict[str, Any]) -> float:
             if item["start_frame"] <= start < item["start_frame"] + item["frames"]
         ]
         if covering:
-            top = max(covering, key=lambda item: order[item["track_id"]])
-            if top["asset_id"] in generated:
+            # Graphics are overlays and never occlude media. Inside a crossfade
+            # both items on the top track are visible; the span counts as
+            # generated when either is (upper bound for a maximum-share promise).
+            top_order = max(order[item["track_id"]] for item in covering)
+            if any(
+                item["asset_id"] in generated
+                for item in covering
+                if order[item["track_id"]] == top_order
+            ):
                 generated_frames += min(end, duration) - start
     return generated_frames / duration
+
+
+_GRAPHIC_FIELDS = frozenset(
+    {
+        "id",
+        "track_id",
+        "kind",
+        "template",
+        "vars",
+        "start_frame",
+        "frames",
+        "fade_in_frames",
+        "fade_out_frames",
+        "opacity",
+    }
+)
+_GRAPHIC_VAR_MAX_LENGTH = 200
+
+
+def _graphic_var_ok(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    if _is_number(value):
+        return math.isfinite(value)
+    return isinstance(value, str) and 1 <= len(value) <= _GRAPHIC_VAR_MAX_LENGTH
+
+
+def _check_fades(r: Result, label: str, item: dict[str, Any]) -> None:
+    fades = [item.get(key, 0) for key in ("fade_in_frames", "fade_out_frames")]
+    if isinstance(item.get("frames"), int) and all(
+        isinstance(value, int) for value in fades
+    ):
+        r.require(
+            sum(fades) <= item["frames"],
+            f"{label} fade_in_frames + fade_out_frames exceed frames {item['frames']}",
+        )
+
+
+def _check_ducking(r: Result, data: dict[str, Any], tracks: dict[str, Any]) -> None:
+    for index, track in enumerate(data.get("tracks", [])):
+        duck = track.get("duck") if isinstance(track, dict) else None
+        if not isinstance(duck, dict):
+            continue
+        label = f"tracks[{index}] ({track.get('id')})"
+        r.require(
+            track.get("kind") == "audio",
+            f"{label} duck is only allowed on audio tracks",
+        )
+        under = duck.get("under_track_id")
+        target = tracks.get(str(under))
+        if under == track.get("id"):
+            r.errors.append(f"{label} duck must not reference its own track")
+        elif target is None:
+            r.errors.append(f"{label} duck references unknown track {under!r}")
+        else:
+            r.require(
+                target.get("kind") in {"video", "audio"},
+                f"{label} duck must reference a video or audio track",
+            )
+            r.require(
+                "duck" not in target,
+                f"{label} duck target {under} must not have its own duck (one level only)",
+            )
+
+
+def _check_same_track_timing(
+    r: Result, by_track: dict[str, list[tuple[int, int, str, dict[str, Any]]]]
+) -> None:
+    """Same-track items must not overlap, except a declared crossfade whose frames
+    equal the overlap with the immediately preceding item."""
+    for track_id, spans in by_track.items():
+        spans.sort(key=lambda span: (span[0], span[1]))
+        for index, (start, end, item_id, item) in enumerate(spans):
+            transition = item.get("transition_in")
+            crossfade = (
+                transition.get("frames") if isinstance(transition, dict) else None
+            )
+            overlaps_previous = False
+            for previous_index in range(index):
+                previous_start, previous_end, previous_id, _ = spans[previous_index]
+                if previous_end <= start:
+                    continue
+                overlap = min(previous_end, end) - start
+                adjacent = previous_index == index - 1 and previous_start < start
+                if adjacent:
+                    overlaps_previous = True
+                if adjacent and crossfade is not None:
+                    r.require(
+                        overlap == crossfade,
+                        f"track {track_id} item {item_id} crossfade of {crossfade} "
+                        f"frames does not match its {overlap}-frame overlap with "
+                        f"{previous_id}",
+                    )
+                else:
+                    r.errors.append(
+                        f"track {track_id} items {previous_id} and {item_id} "
+                        "overlap without a matching crossfade"
+                    )
+            if crossfade is not None and not overlaps_previous:
+                r.errors.append(
+                    f"track {track_id} item {item_id} declares a crossfade "
+                    "without overlapping the previous item"
+                )
 
 
 def validate_edit_document(data: dict[str, Any]) -> Result:
@@ -2230,7 +2355,8 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
     assets = _indexed_ids(r, data.get("assets"), "assets")
     tracks = _indexed_ids(r, data.get("tracks"), "tracks")
     items = _indexed_ids(r, data.get("items"), "items")
-    by_track: dict[str, list[tuple[int, int, str]]] = {}
+    _check_ducking(r, data, tracks)
+    by_track: dict[str, list[tuple[int, int, str, dict[str, Any]]]] = {}
     for index, item in enumerate(data.get("items", [])):
         label = f"items[{index}] ({item.get('id')})"
         track = tracks.get(str(item.get("track_id")))
@@ -2239,7 +2365,9 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 f"{label} references unknown track {item.get('track_id')!r}"
             )
         track_kind = track.get("kind") if track else None
+        timed = False
         if item.get("kind") == "media":
+            timed = True
             for key in (
                 "asset_id",
                 "start_frame",
@@ -2248,7 +2376,7 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 "volume",
             ):
                 r.require(key in item, f"{label} media item requires {key}")
-            for key in ("text", "style", "link"):
+            for key in ("text", "style", "link", "template", "vars"):
                 r.require(key not in item, f"{label} media item must not set {key}")
             if track_kind == "audio":
                 for key in ("fit", "opacity", "transform"):
@@ -2259,6 +2387,7 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 track_kind != "caption",
                 f"{label} media item cannot be on a caption track",
             )
+            _check_fades(r, label, item)
             asset = assets.get(str(item.get("asset_id")))
             if "asset_id" in item and asset is None:
                 r.errors.append(
@@ -2278,27 +2407,36 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 if (
                     _is_number(item.get("source_in_seconds"))
                     and isinstance(item.get("frames"), int)
+                    and _is_number(item.get("speed", 1))
                     and fps
                     and _is_number(asset.get("duration"))
                 ):
-                    source_end = item["source_in_seconds"] + item["frames"] / fps
+                    source_end = media_source_end(item, fps)
                     r.require(
                         source_end <= asset["duration"] + _ASSET_DURATION_TOLERANCE,
                         f"{label} source range ends at {source_end:g}s beyond asset "
                         f"duration {asset['duration']:g}s",
                     )
-            if (
-                track is not None
-                and isinstance(item.get("start_frame"), int)
-                and isinstance(item.get("frames"), int)
-            ):
-                by_track.setdefault(track["id"], []).append(
-                    (
-                        item["start_frame"],
-                        item["start_frame"] + item["frames"],
-                        item["id"],
+        elif item.get("kind") == "graphic":
+            timed = True
+            r.require(
+                track_kind == "video",
+                f"{label} graphic item must be on a video track",
+            )
+            for key in ("template", "vars", "start_frame", "frames"):
+                r.require(key in item, f"{label} graphic item requires {key}")
+            for key in sorted(set(item) - _GRAPHIC_FIELDS):
+                r.errors.append(f"{label} graphic item must not set {key}")
+            variables = item.get("vars")
+            if isinstance(variables, dict):
+                for name, value in variables.items():
+                    r.require(
+                        _graphic_var_ok(value),
+                        f"{label} vars.{name} must be a string of 1-"
+                        f"{_GRAPHIC_VAR_MAX_LENGTH} characters, a finite number "
+                        "or a boolean",
                     )
-                )
+            _check_fades(r, label, item)
         elif item.get("kind") == "caption":
             r.require(
                 track_kind == "caption",
@@ -2312,6 +2450,12 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 "fit",
                 "opacity",
                 "transform",
+                "speed",
+                "fade_in_frames",
+                "fade_out_frames",
+                "transition_in",
+                "template",
+                "vars",
             ):
                 r.require(key not in item, f"{label} caption item must not set {key}")
             link = item.get("link")
@@ -2347,6 +2491,7 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                             key in target
                             for key in ("start_frame", "frames", "source_in_seconds")
                         )
+                        and _is_number(target.get("speed", 1))
                         and link["source_to"] > link["source_from"]
                     ):
                         r.warn(
@@ -2358,15 +2503,21 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                     r.require(
                         key in item, f"{label} caption without link requires {key}"
                     )
-    for track_id, spans in by_track.items():
-        spans.sort()
-        for (_, previous_end, previous_id), (start, _, item_id) in itertools.pairwise(
-            spans
+        if (
+            timed
+            and track is not None
+            and isinstance(item.get("start_frame"), int)
+            and isinstance(item.get("frames"), int)
         ):
-            r.require(
-                start >= previous_end,
-                f"track {track_id} media items {previous_id} and {item_id} overlap",
+            by_track.setdefault(track["id"], []).append(
+                (
+                    item["start_frame"],
+                    item["start_frame"] + item["frames"],
+                    str(item.get("id")),
+                    item,
+                )
             )
+    _check_same_track_timing(r, by_track)
     if r.ok and fps:
         duration = edit_document_duration_frames(data)
         r.require(duration >= 1, "edit duration must be at least one frame")
