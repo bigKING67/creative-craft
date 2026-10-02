@@ -18,6 +18,8 @@ def run(*args: str) -> None:
 def main() -> int:
     run(str(CLI), "doctor")
     run(str(CLI), "validate-project", "--root", str(ROOT / "examples/premium-haircare-launch"))
+    # Exits non-zero on digest drift between production.json and its bound artifacts.
+    run(str(CLI), "video-status", "--root", str(ROOT / "examples/talking-head-broll-cut"))
 
     artifact_dirs = [
         ROOT / "skills" / "creative-craft" / "templates",
@@ -35,6 +37,7 @@ def main() -> int:
                     [sys.executable, str(CLI), "validate", "--file", str(path)],
                     cwd=ROOT,
                     capture_output=True,
+                    check=False,
                 ).returncode
                 if rejected == 0:
                     raise SystemExit(f"expected validation to reject {path.relative_to(ROOT)}")
