@@ -51,6 +51,7 @@ CONTRACT_KINDS = {
 ALWAYS_REQUIRED = {"assemble", "inspect", "revise", "export"}
 RECEIPT_OK = {"succeeded", "partial"}
 REVISION_OPEN = {"in_progress", "blocked"}
+ROUNDS_CEILING = 20  # video-production schema maximum for max_revision_rounds
 
 
 class VideoError(ValueError):
@@ -407,6 +408,72 @@ def _gate_export(
             )
 
 
+_PLAN_TOP_LEVEL = ("intended_use", "output", "delivery_promises", "brief_ref")
+_BEAT_FIELDS = (
+    "role",
+    "purpose",
+    "duration_seconds",
+    "source_kind",
+    "requirement",
+    "hard_constraints",
+    "locked",
+)
+
+
+def plan_structure_changes(
+    approved: dict[str, Any], current: dict[str, Any]
+) -> list[str]:
+    """Differences a later stage made to the approved plan's structure.
+
+    Filling selections and generation references is the job of select/generate,
+    and a tbd beat may resolve to a concrete source kind. Everything else, plus
+    the selection of a beat that was locked with one, is structural.
+    """
+    changes = [
+        f"{key} changed"
+        for key in _PLAN_TOP_LEVEL
+        if approved.get(key) != current.get(key)
+    ]
+    before = {beat["id"]: beat for beat in approved["beats"]}
+    after = {beat["id"]: beat for beat in current["beats"]}
+    if list(before) != list(after):
+        changes.append(
+            f"beats changed from {list(before)} to {list(after)} (added, removed or reordered)"
+        )
+    for beat_id in before.keys() & after.keys():
+        old, new = before[beat_id], after[beat_id]
+        for key in _BEAT_FIELDS:
+            if key == "source_kind" and old[key] == "tbd":
+                continue
+            if old.get(key) != new.get(key):
+                changes.append(f"beat {beat_id} {key} changed")
+        if old.get("locked") and old.get("selection") and old["selection"] != new.get(
+            "selection"
+        ):
+            changes.append(f"locked beat {beat_id} selection changed")
+    return sorted(changes)
+
+
+def _check_plan_changes(root: Path, data: dict[str, Any], gate: Gate) -> None:
+    approved_art = _latest(data, ("plan",), "production-plan")
+    if approved_art is None or data["plan"] is None:
+        return
+    if data["plan"]["sha256"] == approved_art["sha256"]:
+        return
+    try:
+        approved = _read_contract(root, approved_art)
+        current = _read_contract(
+            root, {"kind": "production-plan", "path": data["plan"]["path"]}
+        )
+    except (ValueError, OSError) as exc:
+        gate.block(f"cannot compare with the approved plan: {exc}")
+        return
+    changes = plan_structure_changes(approved, current)
+    if changes:
+        gate.info["plan_changes"] = changes
+        gate.info["approval_reason"] = "plan structure changed after the plan stage"
+
+
 def evaluate_gate(
     root: Path,
     data: dict[str, Any],
@@ -424,6 +491,8 @@ def evaluate_gate(
             gate.block(f"preceding stage {prior} is not completed or skipped")
     stage = _stage(data, stage_id)
     plan = _plan(root, data, gate)
+    if stage_id in {"select", "generate"}:
+        _check_plan_changes(root, data, gate)
     if stage_id in {"brief", "reference"}:
         if not stage["artifacts"]:
             gate.block(f"record at least one {stage_id} artifact or skip the stage")
@@ -477,7 +546,10 @@ def evaluate_gate(
         gate.outcome = "blocked"
     elif (
         gate.outcome == "completed"
-        and stage_id in data["policy"]["approval_required"]
+        and (
+            stage_id in data["policy"]["approval_required"]
+            or "approval_reason" in gate.info
+        )
         and stage["approval"] is None
     ):
         gate.outcome = "awaiting_approval"
@@ -511,6 +583,31 @@ def _finish_stage(data: dict[str, Any], stage_id: str, note: str) -> None:
             "reopen",
             f"revision round {data['revision_rounds']} completed",
         )
+
+
+MAX_ROUNDS_PER_EXTENSION = 3
+
+
+def extend_revision_rounds(
+    data: dict[str, Any], by: str, reason: str, rounds: int
+) -> str:
+    """Human decision to continue after the revision-round limit blocked revise."""
+    revise = _stage(data, "revise")
+    limit = data["policy"]["max_revision_rounds"]
+    if revise["status"] != "blocked" or data["revision_rounds"] < limit:
+        raise VideoError("revise is not blocked by the revision-round limit")
+    if not nonempty(by) or not nonempty(reason):
+        raise VideoError("--by and --reason are required to extend revision rounds")
+    if not 1 <= rounds <= MAX_ROUNDS_PER_EXTENSION:
+        raise VideoError(f"--rounds must be 1-{MAX_ROUNDS_PER_EXTENSION}")
+    new_limit = limit + rounds
+    if new_limit > ROUNDS_CEILING:
+        raise VideoError(f"revision rounds cannot exceed {ROUNDS_CEILING}")
+    data["policy"]["max_revision_rounds"] = new_limit
+    note = f"round limit {limit} -> {new_limit} by {by.strip()}: {reason.strip()}"
+    revise.update(status="in_progress", approval=None, note=note)
+    _event(data, "revise", "extend-rounds", note)
+    return note
 
 
 def complete_stage(root: Path, data: dict[str, Any], stage_id: str) -> Gate:
@@ -642,6 +739,17 @@ def record_artifact(
             )
         data["current_revision"] = revision
     if kind == "production-plan":
+        approved = _latest(data, ("plan",), "production-plan")
+        if (
+            stage_id != "plan"
+            and approved is not None
+            and approved["path"] == relative
+            and approved["sha256"] != artifact["sha256"]
+        ):
+            raise VideoError(
+                f"{relative} is the approved plan and must stay unchanged; "
+                "write plan changes to a new file"
+            )
         data["plan"] = {"path": relative, "sha256": artifact["sha256"]}
     stage["artifacts"].append(artifact)
     if stage["status"] in {"pending", "blocked", "awaiting_approval"}:
@@ -759,6 +867,13 @@ def production_status(root: Path, data: dict[str, Any]) -> dict[str, Any]:
         gate = next(stage["gate"] for stage in stages if stage["id"] == current)
         if status == "awaiting_approval":
             next_action = f"video-approve --stage {current} --by <approver>"
+        elif current == "revise" and status == "blocked" and (
+            data["revision_rounds"] >= data["policy"]["max_revision_rounds"]
+        ):
+            next_action = (
+                "human decision: accept the current cut, change the plan, or "
+                "video-extend-rounds --by <name> --reason <why>"
+            )
         elif gate["outcome"] == "blocked":
             next_action = f"resolve {current}: " + "; ".join(gate["reasons"])
         else:
@@ -911,6 +1026,16 @@ def cmd_video_approve(args: argparse.Namespace) -> int:
     return _run(args, action)
 
 
+def cmd_video_extend_rounds(args: argparse.Namespace) -> int:
+    def action(root: Path, data: dict[str, Any]) -> tuple[int, str]:
+        del root
+        return 0, "revise: " + extend_revision_rounds(
+            data, args.by, args.reason, args.rounds
+        )
+
+    return _run(args, action)
+
+
 def cmd_video_skip(args: argparse.Namespace) -> int:
     def action(root: Path, data: dict[str, Any]) -> tuple[int, str]:
         skip_stage(root, data, args.stage, args.reason)
@@ -980,6 +1105,16 @@ def register_video_commands(sub: Any) -> None:
     approve.add_argument("--by", required=True)
     approve.add_argument("--note")
     approve.set_defaults(func=cmd_video_approve)
+
+    extend = sub.add_parser(
+        "video-extend-rounds",
+        help="human decision to allow more revision rounds after the limit blocked revise",
+    )
+    extend.add_argument("--root", required=True)
+    extend.add_argument("--by", required=True)
+    extend.add_argument("--reason", required=True)
+    extend.add_argument("--rounds", type=int, default=1)
+    extend.set_defaults(func=cmd_video_extend_rounds)
 
     skip = sub.add_parser(
         "video-skip", help="explicitly skip an optional stage with a reason"

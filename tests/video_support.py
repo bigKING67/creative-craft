@@ -576,7 +576,6 @@ def record_export_render(
 
 
 __all__ = [
-    "record_export_render",
     "FPS",
     "ROOT",
     "build_talking_head_production",
@@ -585,6 +584,7 @@ __all__ = [
     "generate_beat",
     "production",
     "production_plan",
+    "record_export_render",
     "render_qa",
     "run_cli",
     "stage",

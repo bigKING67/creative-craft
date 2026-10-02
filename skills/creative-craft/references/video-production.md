@@ -393,7 +393,10 @@ gate), `video-approve`, `video-skip`, `video-ledger` and `video-status`. Gates
 check predecessors, approval (default `plan`), selected footage evidence, bound
 generation Job/Receipt, render-qa against the current revision digest, the revision
 round limit, and delivery promises on the exported revision. A modified bound file
-blocks completion. Passing a gate proves contract consistency only; the render-qa
+blocks completion. Write plan changes after approval to a new file; structural
+changes (beats, timing, roles, promises) send select/generate to approval. When the
+round limit blocks revise, a person decides: accept, change the plan, or
+`video-extend-rounds --by --reason`. Passing a gate proves contract consistency only; the render-qa
 review of composited frames remains the visual evidence.
 
 ## Extension

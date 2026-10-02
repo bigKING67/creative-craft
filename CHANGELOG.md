@@ -2,6 +2,33 @@
 
 All notable changes are documented here.
 
+## Unreleased — Video Harness v1
+
+Gated video production on top of the existing contracts (see
+`docs/content-production-architecture.md#video-harness-v1`):
+
+- shared `edit-document.v2` (multi-track, engine-independent edit truth) and
+  `render-qa.v1` contracts, with cross-language semantic fixtures enforcing that
+  the Node and Python validators agree;
+- `production-plan.v1` and `video-production.v1` with `video-*` CLI stage gates:
+  approval, footage evidence, bound generation Job/Receipt, render-qa bound to the
+  current revision, revision-round limit with an explicit human extension, export
+  bound to the delivered file and its export render-qa, delivery promises computed
+  on the exported revision, approved-plan protection, and a reserve-then-settle
+  budget ledger;
+- optional `integrations/local-production` 0.2.0: v2 edit batches (11 operations,
+  dry-run, stale-revision rejection, locked tracks, single-batch lock changes),
+  v1 migration, multi-track compilation, HyperFrames lint gate, ffmpeg-based QA
+  with composited samples; HyperFrames pinned to 0.8.108; the caption font binary
+  is fetched and digest-checked instead of committed;
+- `docs/upstream-watch.json` and `make upstream-check` for read-only upstream drift
+  review.
+
+The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
+growth is scripts and schemas that agents do not load into context. All media in
+tests, smoke runs and the example is synthetic: this proves contracts and the
+technical pipeline, not creative quality or production acceptance.
+
 ## 0.3.2 — unreleased candidate
 
 Practical copy guidance and creative judgment improvements:

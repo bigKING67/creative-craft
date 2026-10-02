@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from creative_craft_video import plan_structure_changes
 from support import ROOT, cc, load, write_json
 from video_support import (
     build_talking_head_production,
@@ -298,17 +299,26 @@ class VideoGateTests(unittest.TestCase):
             self.cli("video-complete", "--stage", "select", code=1),
         )
         self.cli("video-skip", "--stage", "select", "--reason", "x", code=1)
+        approved = (self.root / "plan.json").read_bytes()
         write_doc(self.root, "plan.json", production_plan())
-        self.cli(
-            "video-record",
-            "--stage",
-            "select",
-            "--kind",
-            "production-plan",
-            "--artifact",
-            "plan.json",
+        out = self.cli(
+            "video-record", "--stage", "select", "--kind", "production-plan",
+            "--artifact", "plan.json", code=1,
         )
-        self.cli("video-complete", "--stage", "select")
+        self.assertIn("approved plan and must stay unchanged", out)
+        (self.root / "plan.json").write_bytes(approved)
+        write_doc(self.root, "plan-select.json", production_plan())
+        self.cli(
+            "video-record", "--stage", "select", "--kind", "production-plan",
+            "--artifact", "plan-select.json",
+        )
+        # Dropping the tbd beat changes the approved structure: needs approval.
+        out = self.cli("video-complete", "--stage", "select")
+        self.assertIn("awaiting_approval", out)
+        status = json.loads(self.cli("video-status", "--json"))
+        select = next(s for s in status["stages"] if s["id"] == "select")
+        self.assertIn("added, removed or reordered", " ".join(select["gate"]["plan_changes"]))
+        self.cli("video-approve", "--stage", "select", "--by", "editor", "--note", "drop open beat")
         status = json.loads(self.cli("video-status", "--json"))
         self.assertEqual(["broll"], status["candidates"])
         self.assertEqual("generate", status["current_stage"])
@@ -570,6 +580,47 @@ class VideoGateTests(unittest.TestCase):
         self.assertIn(
             "revision round limit 1 reached",
             self.cli("video-complete", "--stage", "revise", code=1),
+        )
+        status = json.loads(self.cli("video-status", "--json"))
+        self.assertIn("video-extend-rounds", status["next_action"])
+        self.cli("video-extend-rounds", "--by", "lead", "--reason", "x", "--rounds", "4", code=1)
+        out = self.cli(
+            "video-extend-rounds", "--by", "lead", "--reason", "client asked for one more pass"
+        )
+        self.assertIn("round limit 1 -> 2 by lead", out)
+        data = production(self.root)
+        self.assertEqual(2, data["policy"]["max_revision_rounds"])
+        self.assertEqual(("revise", "extend-rounds"), (data["events"][-1]["stage"], data["events"][-1]["action"]))
+        self.cli("video-complete", "--stage", "revise")
+        self.assertEqual(2, production(self.root)["revision_rounds"])
+        self.cli("video-extend-rounds", "--by", "lead", "--reason", "again", code=1)
+
+    def test_extend_rounds_requires_a_limit_block(self) -> None:
+        self.assembled()
+        out = self.cli("video-extend-rounds", "--by", "lead", "--reason", "early", code=1)
+        self.assertIn("not blocked by the revision-round limit", out)
+
+    def test_plan_structure_changes(self) -> None:
+        base = production_plan()
+        base["beats"].append({**base["beats"][0], "id": "open", "source_kind": "tbd", "selection": None})
+        same = copy.deepcopy(base)
+        same["beats"][0]["selection"] = None
+        same["beats"][-1]["source_kind"] = "footage"
+        self.assertEqual([], plan_structure_changes(base, same))
+        moved = copy.deepcopy(base)
+        moved["beats"][0]["duration_seconds"] += 1
+        moved["delivery_promises"] = []
+        self.assertEqual(
+            [f"beat {base['beats'][0]['id']} duration_seconds changed", "delivery_promises changed"],
+            plan_structure_changes(base, moved),
+        )
+        locked = copy.deepcopy(base)
+        locked["beats"][0]["locked"] = True
+        relocked = copy.deepcopy(locked)
+        relocked["beats"][0]["selection"] = None
+        self.assertIn(
+            f"locked beat {base['beats'][0]['id']} selection changed",
+            plan_structure_changes(locked, relocked),
         )
 
     def test_unskippable_stages(self) -> None:

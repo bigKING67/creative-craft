@@ -153,8 +153,8 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 阶段：`brief → reference → plan → select → generate → assemble → inspect ⇄ revise → export`，可显式跳过（须给理由）；跳过与完成同样受前序顺序和产物漂移约束，`select/generate` 在绑定计划前不可跳过。关卡由 Python CLI 执行，不依赖提示词：
 
 - 前序未完成或未跳过，后续不能完成；需审批的阶段（默认仅 `plan`，宿主可配置为空以自动执行）在审批前停在 `awaiting_approval`。
-- `plan`：产物通过 production-plan 校验。`select`：每个 `footage` 拍都有选定源区间与证据，`tbd` 拍阻断；仅有候选证据的标为 candidate 并在状态中可见。`generate`：有 `generate` 拍时须绑定 Job/Receipt，否则不可完成（可改计划并记录决策）。
-- `assemble`/`revise`：绑定 EditDocument v2 修订文件 digest。`inspect`：render-qa 必须绑定当前修订 digest；`verdict = fail` 或评审 `revise/reject` 进入 `revise`；`revise` 轮次超过上限（默认 3）进入 `blocked` 交人处理，不强制放行。
+- `plan`：产物通过 production-plan 校验。`select`：每个 `footage` 拍都有选定源区间与证据，`tbd` 拍阻断；仅有候选证据的标为 candidate 并在状态中可见。已审批的计划文件不可覆盖，select/generate 阶段的计划修改须另存新文件；与 plan 阶段计划相比，除填写 selection、generation_ref 及 tbd 改为具体来源外的结构变化（增删或重排拍、作用、时长、约束、锁定拍的选片、交付承诺、输出规格）会使该阶段转为待审批并列出差异。`generate`：有 `generate` 拍时须绑定 Job/Receipt，否则不可完成（可改计划并记录决策）。
+- `assemble`/`revise`：绑定 EditDocument v2 修订文件 digest。`inspect`：render-qa 必须绑定当前修订 digest；`verdict = fail` 或评审 `revise/reject` 进入 `revise`；`revise` 轮次超过上限（默认 3）进入 `blocked` 交人处理，不强制放行；人工决定继续时用 `video-extend-rounds --by --reason [--rounds 1–3]`，提高 `policy.max_revision_rounds`（上限 20）并写入事件。
 - `export`：导出修订必须等于最近一次检查通过（`verdict ≠ fail` 且评审 `accept`）的修订；导出阶段还须绑定实际交付文件及其 `render.kind = export` 的 render-qa（同一修订、`render.sha256` 等于交付文件、`verdict ≠ fail`），预览检查不能代替导出文件检查；可机器检查的交付承诺（时长范围、含字幕、生成镜头占比上限）对该修订实算，不满足则阻断。
 - 预算台账先预留后结算；`cap` 模式下预留超过上限即拒绝；结果不明的付费任务不得自动重发。
 
