@@ -130,6 +130,7 @@ class DoctorTests(unittest.TestCase):
             )
             package_path = copied / "package.json"
             package = json.loads(package_path.read_text(encoding="utf-8"))
+            package["creativeCraft"]["releaseStatus"] = "released"
             package["creativeCraft"]["publishedInstallTag"] = "v0.2.6"
             write_json(package_path, package)
 

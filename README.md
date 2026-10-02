@@ -35,10 +35,12 @@ default response shape.
 
 ## Status
 
-Version **`0.3.0`** makes Quick Craft the default Agent path, moves the
-evidence-bound runtime behind an explicit Traceable Project mode, narrows
-automatic routing, and adds a repository-only text A/B evaluation harness. It
-also includes first-class
+The working tree is an unreleased **`0.3.2` candidate**. It adds
+direction-gated refinement and Grok discovery evidence without changing public
+artifact contracts or adding a Provider adapter. Version **`0.3.0`** made Quick
+Craft the default Agent path, moved the evidence-bound runtime behind an
+explicit Traceable Project mode, narrowed automatic routing, and added a
+repository-only text A/B evaluation harness. It also includes first-class
 `creative-craft.copy-sheet.v1` authority, public-copy approval gates, a v2
 copy-bound Project Manifest, modular portable runtime/test boundaries, safe
 atomic writes, indexed `uniqueItems` validation, and evidence-backed Agent
@@ -339,6 +341,17 @@ host can clone the repository and use the atomic installer:
 python3 scripts/install_skill.py --target /path/to/host/skills
 ```
 
+For a local Codex/Grok setup where both hosts discover the shared Agents Skill
+root, install one canonical copy:
+
+```bash
+python3 scripts/install_skill.py --target ~/.agents/skills
+```
+
+Grok Build discovery is documented under `adapters/grok/`. The `0.3.2`
+candidate verifies Skill discovery without a model call, but does not yet claim
+Grok Tier 1 runtime behavior.
+
 The installer stages on the target filesystem, validates the copy, writes
 `INSTALL_PROVENANCE.json`, atomically swaps it into place, and preserves the
 previous installation as a backup when `--force` is used. Claude and Cursor
@@ -549,7 +562,7 @@ python3 skills/creative-craft/scripts/creative_craft.py hash \
 
 The repository includes a maintainer-only text evaluation harness. It compares
 a no-Skill baseline, a selected committed comparison revision, and the worktree
-candidate across seven creative cases, then uses blind scoring and four routing
+candidate across nine creative cases, then uses blind scoring and four routing
 cases. The internal `baseline` and `current` evidence keys remain stable for old
 report readability; they do not identify installed Skill copies:
 
@@ -561,10 +574,15 @@ python3 scripts/evaluate_agent_quality.py route --run-dir dist/evals/agent-quali
 python3 scripts/evaluate_agent_quality.py report --run-dir dist/evals/agent-quality/<run>
 ```
 
-Runs use a temporary `0700` `CODEX_HOME`, symlink only the existing Codex auth
-file without reading or copying it, install no global Skill, use an empty
-workspace, and invoke Codex with ephemeral/read-only/ignore-config flags. When
-the local Codex uses a custom model provider, the harness extracts only an
+Runs use temporary `0700` Codex and user homes, isolate `CODEX_HOME`,
+`HOME`/`USERPROFILE`, XDG, shell-profile, and platform application-data roots,
+symlink only the existing Codex auth file without reading or copying it, install
+no global Skill, use an empty workspace, and invoke Codex with
+ephemeral/read-only/ignore-config flags. Event evidence must prove that the
+no-Skill baseline read no Creative Craft entrypoint and that comparison and
+candidate calls read only their digest-bound isolated copies; otherwise the run
+fails before more judging or routing calls are spent. When the local Codex uses
+a custom model provider, the harness extracts only an
 allowlist of non-secret transport fields (`name`, `base_url`, `wire_api`, auth
 mode, and WebSocket support) and passes them as explicit CLI overrides; it never
 copies the user config.
@@ -578,7 +596,9 @@ This live evaluation is intentionally outside CI because it incurs model cost.
 It is text-only: no image or video Provider is called, and a blind model judge
 is not a substitute for real output inspection or human creative approval. Each
 variant has one generated sample and one blind judgment per case, so repeated
-runs may vary.
+runs may vary. A selected-case canary can be reported without routing evidence,
+but it remains `PARTIAL`; only the complete quality and routing suites can pass
+the release-oriented acceptance gate.
 
 ## Relationship to the Craft family
 
@@ -607,7 +627,7 @@ independent gates:
 - host portability;
 - delivery completeness.
 
-Version `0.3.0` proves copy-bound contract validation, named-owner
+Released version `0.3.0` proves copy-bound contract validation, named-owner
 public-delivery gating, legacy v1 readability, modular installed runtime, safe
 write boundaries, measured near-linear `uniqueItems` scaling, and improved
 Agent creative output through synthetic fixtures, package gates, and an
@@ -615,6 +635,9 @@ isolated text evaluation. It still does not claim that
 unobserved image or video output is production quality, that real Golden Evals
 are complete, that owner approval exists for the fictional example, or that
 Provider network adapters exist.
+
+The unreleased `0.3.2` candidate adds direction-gated refinement and Grok
+discovery evidence. It does not change those Provider-output limitations.
 
 Maintainers build one release candidate from a clean commit after installing
 `requirements-dev.txt`:

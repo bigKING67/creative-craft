@@ -1,5 +1,14 @@
 # Video production
 
+For authorized local assembly of existing footage, a source checkout offers the
+optional `integrations/local-production/` module. Read its `README.md` from the
+repository root before execution: read the project, submit revision-bound edits,
+render a new preview, and inspect the actual output. It supports basic cuts,
+reordering, source-timed captions and audio; it is not bundled into the installed
+Skill and does not call video-generation providers. Do not install or invoke it
+for treatment-only requests. Check the actual host integration before claiming
+that an editor or any particular operation is available.
+
 Video production is the coordination of story, performance, blocking, camera,
 motion, sound, references, continuity, and editability over time.
 
@@ -75,6 +84,132 @@ Example:
 
 Each beat should state only feasible concurrent actions. Preserve enough time
 for transitions and physical completion.
+
+## Evidence-grounded footage selection
+
+Use this method when finding existing footage for a brief or storyboard. Query
+the host's available search tools; these instructions do not provide an index,
+retrieval API or permission to access another asset library.
+
+Translate each beat into a footage request: narrative role, observable subject
+or action, desired duration, framing, audio needs and necessary usage constraints.
+Separate hard requirements from preferences. Use visual, transcript or on-screen
+text search only where supported; report keyword-only or transcript-only coverage
+instead of calling it full multimodal retrieval.
+
+For shortlisted candidates, retain the source asset identity/version, source-time
+range with units, and a playable locator when exposed by the host. Attach the
+supporting evidence and its time, the selection reason, and unresolved conditions.
+Keep these evidence types distinct:
+
+| Evidence | What it can support | What still needs checking |
+| --- | --- | --- |
+| ASR transcript | Words reportedly spoken in that interval | Recognition accuracy, speaker and actual visual action |
+| OCR or sampled frame | Text or appearance at that sampled time | Persistence, motion and the rest of the interval |
+| Inspected video/audio interval | Observed action, sequence, timing and sound within the inspected range | Uninspected ranges and intended-use fit |
+| Model inference or reuse suggestion | A candidate interpretation or creative use | Confirmation from the source; it is not an observation |
+
+Search scores rank candidates within the host's retrieval method; they are not
+quality probabilities and may not be comparable across models or search modes.
+Keep per-modality scores and the contributing evidence for each hit rather than
+one opaque number, and note the retrieval method or model version with the
+shortlist. Hard constraints such as scope, usage rights or source should be
+applied before ranking; if the host can only filter an already truncated top-k,
+report that matching candidates may have been missed.
+Merge overlapping hits from the same source into a review candidate while
+retaining their evidence times. An index window is not an exact cut boundary.
+Inspect the candidate with surrounding context before choosing in/out points:
+avoid severed speech, unfinished actions and misleading changes of meaning.
+
+For spoken footage, keep detected shot ranges separate from utterance ranges.
+A scene change can occur mid-sentence, and an ASR segment can contain an
+incomplete thought. Preserve the complete meaning, including qualifications and
+negations; verify proposed speech boundaries by listening with surrounding
+context. OCR subtitles and silence detection can nominate boundaries but cannot
+prove speech completeness. Without listening, label the cut a candidate rather
+than an approved speech edit.
+
+Where the host supports independent audio/video editing, continuous source
+speech may span several picture cuts. Keep its source timing and caption alignment
+explicit; check visible lip sync and whether covering footage misleadingly appears
+to demonstrate the spoken claim. If independent tracks are unsupported, retain
+a longer synchronized source interval or revise the sequence. Do not promise
+split audio edits that the host cannot execute, or truncate a statement merely
+to fit a preset duration.
+
+Select for the beat's purpose, continuity and editability, not similarity alone.
+Record the useful mechanism (for example, a clear product reveal or a concise
+spoken hook) and how it will serve the new sequence. Do not label a clip
+high-performing from visual appeal alone; performance claims need linked outcome
+data and its evaluation context. Check source availability, identity and relevant
+usage restrictions again before inserting it into the project. If the source
+changed, treat old analysis as stale and request refreshed evidence.
+
+For example, a frame at 12.4 s showing a hand and a bottle can nominate source
+12–16 s for review. It cannot prove that the bottle is opened in that interval.
+Confirm the action in playback before using it for an opening-action beat.
+
+When no candidate fits, name the missing beat and required continuity references
+for a generation brief or reshoot; absence from search does not prove absence
+from the library. A generation brief is not an executed provider job. For small
+requests, a compact shortlist with evidence and reasons suffices.
+
+Host acceptance should cover Chinese visual/transcript/OCR queries according to
+supported modalities, overlapping hits, direct source-time playback, stale source
+analysis, inaccessible assets and no-match results. Confirm that the selected
+cut supports its stated reason. Method documentation alone does not pass these
+runtime checks.
+
+## Mixing existing footage with generated shots
+
+Use generation for a defined narrative or visual need within the selected
+direction. First map the sequence to usable existing clips and remaining gaps.
+For each gap, compare a local edit, a different existing clip, generation and a
+reshoot against the required result. A deliberately new creative beat can justify
+generation even when footage exists; state that purpose. Do not regenerate the
+whole sequence to fill one missing shot.
+
+Build the missing-shot brief from the video job fields above, emphasizing:
+
+- **Role and slot:** what the shot contributes, intended timeline position,
+  usable duration and any extra handles needed for cutting;
+- **References:** source identities and exact frame/time selections, each with
+  a role such as product geometry, character, lighting or camera language;
+- **Continuity:** preceding end state and following start state, screen direction,
+  subject scale, gaze, movement, lighting and sound that must carry across cuts;
+- **Allowed invention:** what may change and what must stay faithful; references
+  are not evidence that an invented product action or performance claim is true;
+- **Acceptance:** a visible start/action/end state, boundary requirements and
+  specific failure conditions, including label, identity and audio drift.
+
+For Seedance or another provider, verify the current chosen model and access
+surface before execution. Reference types, duration, audio and extension/editing
+features depend on that surface; a brief must not promise unsupported controls.
+Reuse existing execution and budget authorization where applicable. If the
+available route or cost exceeds it, finish the brief and pause only that call.
+Record provider job identity and reported cost when exposed; label estimates and
+unknown cost explicitly. Follow the existing refinement and ambiguous-retry rules
+in [iteration-and-versioning.md](iteration-and-versioning.md).
+
+Treat a completed generation as a candidate asset. Inspect the actual video and
+sound against the brief before placement. Preserve the reference lineage and
+generation method separately from the original footage; do not overwrite source
+assets or describe generated scenes as observed source evidence. If the output
+misses the requirement, make a bounded revision or choose another production
+method rather than silently weakening acceptance.
+
+Insert an accepted candidate through the
+[project-editing loop](#editing-an-existing-project), using the latest project
+revision and retaining unrelated manual changes. If the generated duration differs
+from the slot, choose a supported trim or explicit timing adjustment and check
+its downstream effect. Inspect the assembled sequence across both joins: a good
+standalone generation may still break motion, narrative or sound continuity.
+
+Host acceptance requires an existing-footage sequence plus at least one actual
+generated shot, traceable references/job/output, a bounded replacement preserving
+manual edits, and audiovisual inspection of the assembled result. A placeholder,
+mock provider response or written brief proves planning only. This method does
+not itself supply a provider connector or establish that any host passed.
 
 ## Reference map
 
@@ -190,6 +325,62 @@ PRESERVE
 ```
 
 A localized edit should not become an implicit full redesign.
+
+### Editing an existing project
+
+Use this loop when authorized to change an editable video project. A treatment
+or critique alone does not require executing it. Discover the host's actual
+tools and supported operations; this guidance does not supply an editing API.
+
+1. **Read the current project.** Identify its revision, affected tracks and clip
+   instances, source assets and source in/out points. Output-timeline time is
+   different from source-media time; repeated uses of one asset are distinct
+   instances. Preserve the user's latest manual edits and explicit locks.
+   Read in layers: a project overview first, then only the affected timeline
+   range, tracks or instances. A field the host omitted is unknown, not empty.
+2. **Bound the change.** State the intended result and affected instances/ranges.
+   Include necessary ripple, caption and audio adjustments in the scope; do not
+   silently shift later clips. Prefer a supported local edit to regenerating
+   footage. If the operation is unavailable, report that limit and the feasible
+   alternative without inventing a tool or claiming execution.
+3. **Apply against the read revision.** Follow the conflict and retry rules in
+   [iteration-and-versioning.md](iteration-and-versioning.md#shared-project-revisions).
+   Continue within existing authorization without adding approval at every step.
+   Use the host's validate or preview mode when one exists, and submit one
+   intended change as a single batch so it can be reviewed or undone as a unit.
+   Keep cost-bearing or irreversible operations, such as generation, export and
+   deletion, out of a reversible draft; run them only after the edit is accepted.
+4. **Re-read and inspect.** Confirm the resulting revision, source bounds,
+   duration, ordering, preserved tracks and caption/audio alignment. Preview the
+   changed interval including both cut boundaries; listen when sound is affected.
+   For a ripple edit, also inspect displaced downstream content. Bind the preview
+   to the resulting revision so an older render cannot pass as the new result.
+   Structurally, check for unintended same-track overlaps or gaps, edits on
+   locked tracks, and wrong layer order where an upper track covers lower video.
+   Inspect composed timeline frames: source-media frames support selection but
+   do not prove trims, layers, captions or effects in the composition.
+
+A successful edit response or render job proves neither visual quality nor
+audio correctness. Report structural checks, actual audiovisual inspection and
+unverified aspects separately. For a simple local cut, the host state and a brief
+result note suffice; do not require a new manifest or a full production dossier.
+
+### Host acceptance scenarios
+
+When validating an editing integration, use an isolated project with repeated
+uses of one source, captions and audio. Verify these behaviors on the actual host:
+
+- a human moves a clip; the Agent reads that revision, edits the intended
+  instance and preserves the human change;
+- another edit lands between read and write; the stale write is rejected or
+  safely prevented, then the Agent reassesses the latest project;
+- a source becomes unavailable or changes identity; the affected edit/render
+  reports the mismatch instead of substituting a different source silently;
+- an unsupported operation returns a clear limit without claiming a change;
+- the resulting preview matches the saved revision, including cut boundaries,
+  Chinese captions when present, and affected audio.
+
+These are acceptance criteria, not a claim that a host has passed them.
 
 ## Extension
 

@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +42,10 @@ SCORE_LIMITS = {
     "scope_proportionality": 15,
     "clarity_usefulness": 10,
 }
+SKILL_ENTRYPOINT_PATTERN = re.compile(
+    r"(?:[A-Za-z]:[\\/]|/)[^\"'\s]*?creative-craft[\\/]SKILL\.md"
+)
+SKILL_SOURCE_CONTRACT_VERSION = 1
 
 
 class EvalError(RuntimeError):
@@ -311,6 +317,103 @@ def validate_config_files() -> None:
             raise EvalError(f"invalid output schema: {name}")
 
 
+def build_isolated_environment(
+    *, codex_home: Path, user_home: Path
+) -> dict[str, str]:
+    """Keep Codex auth/transport access while isolating user-level discovery."""
+    isolated_roots = {
+        "HOME": user_home,
+        "USERPROFILE": user_home,
+        "ZDOTDIR": user_home,
+        "XDG_CONFIG_HOME": user_home / ".config",
+        "XDG_DATA_HOME": user_home / ".local" / "share",
+        "XDG_CACHE_HOME": user_home / ".cache",
+        "APPDATA": user_home / "AppData" / "Roaming",
+        "LOCALAPPDATA": user_home / "AppData" / "Local",
+    }
+    for path in set(isolated_roots.values()):
+        path.mkdir(parents=True, exist_ok=True)
+    (user_home / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
+
+    environment = os.environ.copy()
+    environment["CODEX_HOME"] = str(codex_home)
+    environment.update({name: str(path) for name, path in isolated_roots.items()})
+    environment.pop("HOMEDRIVE", None)
+    environment.pop("HOMEPATH", None)
+    return environment
+
+
+def _nested_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for child in value for item in _nested_strings(child)]
+    if isinstance(value, dict):
+        return [item for child in value.values() for item in _nested_strings(child)]
+    return []
+
+
+def observed_skill_entrypoints(events_file: Path) -> set[str]:
+    """Extract absolute Creative Craft entrypoint paths from Codex NDJSON events."""
+    observed: set[str] = set()
+    for line_number, line in enumerate(
+        events_file.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise EvalError(
+                f"invalid Codex event JSON at {events_file.name}:{line_number}"
+            ) from error
+        for value in _nested_strings(event):
+            for match in SKILL_ENTRYPOINT_PATTERN.findall(value):
+                observed.add(str(Path(match).resolve()).replace("\\", "/"))
+    return observed
+
+
+def verify_skill_source_events(
+    events_file: Path,
+    *,
+    expected_entrypoint: Path | None,
+    requirement: str,
+) -> dict[str, Any]:
+    if requirement not in {"forbidden", "required", "optional"}:
+        raise EvalError(f"invalid Skill source requirement: {requirement}")
+    if (requirement == "forbidden") != (expected_entrypoint is None):
+        raise EvalError("Skill source requirement does not match the installed fixture")
+
+    observed = observed_skill_entrypoints(events_file)
+    expected = (
+        None
+        if expected_entrypoint is None
+        else str(expected_entrypoint.resolve()).replace("\\", "/")
+    )
+    if requirement == "forbidden" and observed:
+        raise EvalError(
+            "Skill source contract failed: Creative Craft was read when forbidden"
+        )
+    if expected is not None:
+        unexpected = observed - {expected}
+        if unexpected:
+            raise EvalError(
+                "Skill source contract failed: Creative Craft was read outside the "
+                "isolated fixture"
+            )
+        if requirement == "required" and expected not in observed:
+            raise EvalError(
+                "Skill source contract failed: isolated Creative Craft was not read"
+            )
+    return {
+        "version": SKILL_SOURCE_CONTRACT_VERSION,
+        "status": "passed",
+        "requirement": requirement,
+        "expected_location": "none" if expected is None else "isolated_fixture",
+        "observed_entrypoint_count": len(observed),
+    }
+
+
 def build_codex_command(
     codex_bin: str,
     *,
@@ -400,6 +503,8 @@ def run_codex(
     reasoning: str,
     timeout_seconds: int,
     provider_transport: dict[str, Any] | None,
+    expected_skill_digest: str | None = None,
+    skill_read_requirement: str | None = None,
 ) -> dict[str, Any]:
     validate_auth_path(auth_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -410,13 +515,30 @@ def run_codex(
     with tempfile.TemporaryDirectory(prefix="creative-craft-agent-eval-") as directory:
         isolated = Path(directory)
         codex_home = isolated / "codex-home"
+        user_home = isolated / "user-home"
         workspace = isolated / "workspace"
         codex_home.mkdir(mode=0o700)
+        user_home.mkdir(mode=0o700)
         workspace.mkdir()
         (codex_home / "skills").mkdir()
         os.symlink(auth_file, codex_home / "auth.json")
+        installed_skill: Path | None = None
+        installed_digest: str | None = None
         if skill_source is not None:
-            copy_skill(skill_source, codex_home / "skills" / "creative-craft")
+            installed_skill = codex_home / "skills" / "creative-craft"
+            copy_skill(skill_source, installed_skill)
+            installed_digest = skill_digest(installed_skill)
+            if (
+                expected_skill_digest is not None
+                and installed_digest != expected_skill_digest
+            ):
+                raise EvalError("isolated Skill digest does not match the bound source")
+        elif expected_skill_digest is not None:
+            raise EvalError("a Skill digest was supplied without a Skill fixture")
+
+        requirement = skill_read_requirement
+        if requirement is None:
+            requirement = "required" if installed_skill is not None else "forbidden"
 
         isolated_output = isolated / "last-message.txt"
         command = build_codex_command(
@@ -427,8 +549,9 @@ def run_codex(
             output_schema=output_schema,
             provider_transport=provider_transport,
         )
-        environment = os.environ.copy()
-        environment["CODEX_HOME"] = str(codex_home)
+        environment = build_isolated_environment(
+            codex_home=codex_home, user_home=user_home
+        )
         try:
             result = subprocess.run(
                 command,
@@ -454,11 +577,21 @@ def run_codex(
             )
         if not isolated_output.is_file():
             raise EvalError("Codex call succeeded without a final response file")
+        source_contract = verify_skill_source_events(
+            events_file,
+            expected_entrypoint=(
+                None if installed_skill is None else installed_skill / "SKILL.md"
+            ),
+            requirement=requirement,
+        )
+        source_contract["expected_sha256"] = expected_skill_digest
+        source_contract["installed_sha256"] = installed_digest
         output_file.write_text(isolated_output.read_text(encoding="utf-8"), encoding="utf-8")
 
     return {
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "returncode": 0,
+        "skill_source_contract": source_contract,
     }
 
 
@@ -485,7 +618,10 @@ not infer their source. Judge the delivered work, not writing length or process
 theater. Use integer scores and the exact JSON schema supplied by the caller.
 
 Rubric (100 total):
-- strategic_fit 0-20: understands objective, audience, tension, proposition;
+- strategic_fit 0-20: understands objective, audience, tension, proposition,
+  and whether the direction is selected or reopened. Reward returning to
+  exploration when high-impact feedback changes direction; also reward bounded
+  action without needless re-approval when the direction is explicit;
 - distinctiveness 0-15: non-generic mechanism and real route separation;
 - execution_readiness 0-20: concrete, coherent, makeable production detail;
 - evidence_honesty 0-10: no invented facts, output claims, or performance claims;
@@ -608,24 +744,94 @@ def record_call(
     result: dict[str, Any] | None,
     status: str,
 ) -> None:
-    manifest.setdefault("calls", []).append(
-        {
-            "number": len(manifest.get("calls", [])) + 1,
-            "kind": kind,
-            "case_id": case_id,
-            "variant": variant,
-            "status": status,
-            "elapsed_seconds": None if result is None else result["elapsed_seconds"],
-            "command": public_command_receipt(
-                kind=kind,
-                model=model,
-                reasoning=reasoning,
-                has_schema=has_schema,
-                has_skill=has_skill,
-            ),
-        }
-    )
+    call = {
+        "number": len(manifest.get("calls", [])) + 1,
+        "kind": kind,
+        "case_id": case_id,
+        "variant": variant,
+        "status": status,
+        "elapsed_seconds": None if result is None else result["elapsed_seconds"],
+        "command": public_command_receipt(
+            kind=kind,
+            model=model,
+            reasoning=reasoning,
+            has_schema=has_schema,
+            has_skill=has_skill,
+        ),
+    }
+    if result is not None and "skill_source_contract" in result:
+        call["skill_source_contract"] = result["skill_source_contract"]
+    manifest.setdefault("calls", []).append(call)
     save_manifest(run_dir, manifest)
+
+
+def verify_quality_source_contracts(manifest: dict[str, Any]) -> None:
+    """Fail closed before spending more calls on contaminated quality evidence."""
+    if manifest.get("skill_source_contract_version") != SKILL_SOURCE_CONTRACT_VERSION:
+        raise EvalError("quality evidence has no supported Skill source contract")
+    expected_digests = {
+        "baseline": None,
+        "current": manifest.get("current_skill_sha256"),
+        "candidate": manifest.get("candidate_skill_sha256"),
+    }
+    if not all(
+        isinstance(expected_digests[variant], str)
+        for variant in ("current", "candidate")
+    ):
+        raise EvalError("quality evidence is missing a bound Skill digest")
+
+    indexed: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for call in manifest.get("calls", []):
+        if call.get("kind") != "quality" or call.get("status") != "passed":
+            continue
+        key = (call.get("case_id"), call.get("variant"))
+        indexed.setdefault(key, []).append(call)
+
+    for case_id in manifest.get("quality_case_ids", []):
+        for variant in VARIANTS:
+            matches = indexed.get((case_id, variant), [])
+            if len(matches) != 1:
+                raise EvalError(
+                    f"quality evidence has no unique passed call for {case_id}/{variant}"
+                )
+            contract = matches[0].get("skill_source_contract")
+            if not isinstance(contract, dict) or contract.get("status") != "passed":
+                raise EvalError(
+                    f"quality evidence has no passed Skill source contract for "
+                    f"{case_id}/{variant}"
+                )
+            if contract.get("version") != SKILL_SOURCE_CONTRACT_VERSION:
+                raise EvalError(
+                    f"quality evidence has an unsupported Skill source contract for "
+                    f"{case_id}/{variant}"
+                )
+            expected_requirement = "forbidden" if variant == "baseline" else "required"
+            if contract.get("requirement") != expected_requirement:
+                raise EvalError(
+                    f"quality evidence has the wrong Skill source requirement for "
+                    f"{case_id}/{variant}"
+                )
+            expected_digest = expected_digests[variant]
+            if contract.get("expected_sha256") != expected_digest:
+                raise EvalError(
+                    f"quality evidence has the wrong Skill digest for {case_id}/{variant}"
+                )
+            if contract.get("installed_sha256") != expected_digest:
+                raise EvalError(
+                    f"quality evidence did not install the bound Skill for "
+                    f"{case_id}/{variant}"
+                )
+            observed = contract.get("observed_entrypoint_count")
+            if variant == "baseline" and observed != 0:
+                raise EvalError(f"baseline Skill source contract failed for {case_id}")
+            if variant != "baseline" and not isinstance(observed, int):
+                raise EvalError(
+                    f"quality evidence has no Skill read count for {case_id}/{variant}"
+                )
+            if variant != "baseline" and observed < 1:
+                raise EvalError(
+                    f"isolated Skill was not read for {case_id}/{variant}"
+                )
 
 
 def run_quality(args: argparse.Namespace) -> int:
@@ -663,6 +869,7 @@ def run_quality(args: argparse.Namespace) -> int:
         "git_head": git_value("rev-parse", "HEAD"),
         "current_revision": revision,
         "candidate_skill_sha256": candidate_digest,
+        "skill_source_contract_version": SKILL_SOURCE_CONTRACT_VERSION,
         "variants": list(VARIANTS),
         "quality_case_ids": [case["id"] for case in cases],
         "routing_case_ids": [],
@@ -674,12 +881,18 @@ def run_quality(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="creative-craft-head-snapshot-") as directory:
             current_skill = Path(directory) / "creative-craft"
             export_git_skill(revision, current_skill)
-            manifest["current_skill_sha256"] = skill_digest(current_skill)
+            current_digest = skill_digest(current_skill)
+            manifest["current_skill_sha256"] = current_digest
             save_manifest(run_dir, manifest)
             skill_sources = {
                 "baseline": None,
                 "current": current_skill,
                 "candidate": SKILL_ROOT,
+            }
+            skill_digests = {
+                "baseline": None,
+                "current": current_digest,
+                "candidate": candidate_digest,
             }
             for case in cases:
                 for variant in VARIANTS:
@@ -698,6 +911,7 @@ def run_quality(args: argparse.Namespace) -> int:
                             reasoning=args.reasoning,
                             timeout_seconds=args.timeout,
                             provider_transport=provider_transport,
+                            expected_skill_digest=skill_digests[variant],
                         )
                     except Exception:
                         record_call(
@@ -732,6 +946,12 @@ def run_quality(args: argparse.Namespace) -> int:
         save_manifest(run_dir, manifest)
         raise
 
+    try:
+        verify_quality_source_contracts(manifest)
+    except Exception:
+        manifest["status"] = "run_failed"
+        save_manifest(run_dir, manifest)
+        raise
     manifest["status"] = "outputs_complete"
     save_manifest(run_dir, manifest)
     print(run_dir.relative_to(ROOT))
@@ -777,6 +997,7 @@ def run_judges(args: argparse.Namespace) -> int:
     run_dir = open_run_dir(args.run_dir)
     manifest = load_manifest(run_dir)
     verify_recorded_runtime(manifest, model=args.model, reasoning=args.reasoning)
+    verify_quality_source_contracts(manifest)
     provider_transport = load_provider_transport(args.provider_config.expanduser())
     provider_id = "default" if provider_transport is None else provider_transport["id"]
     if provider_id != manifest.get("provider_id"):
@@ -868,6 +1089,7 @@ def run_routes(args: argparse.Namespace) -> int:
     run_dir = open_run_dir(args.run_dir)
     manifest = load_manifest(run_dir)
     verify_recorded_runtime(manifest, model=args.model, reasoning=args.reasoning)
+    verify_quality_source_contracts(manifest)
     verify_candidate_unchanged(manifest)
     provider_transport = load_provider_transport(args.provider_config.expanduser())
     provider_id = "default" if provider_transport is None else provider_transport["id"]
@@ -895,6 +1117,8 @@ def run_routes(args: argparse.Namespace) -> int:
                 reasoning=args.reasoning,
                 timeout_seconds=args.timeout,
                 provider_transport=provider_transport,
+                expected_skill_digest=manifest["candidate_skill_sha256"],
+                skill_read_requirement="optional",
             )
             route_result = validate_route_result(read_json(output_file), case["id"])
         except Exception:
@@ -946,6 +1170,16 @@ def scores_by_variant(case_result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {label_map[score["label"]]: score for score in case_result["scores"]}
 
 
+def load_route_index(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "routing" / "index.json"
+    if not path.is_file():
+        return {"schema_version": 1, "cases": {}}
+    payload = read_json(path)
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise EvalError("unsupported or invalid routing index")
+    return payload
+
+
 def compute_report(
     quality_cases: list[dict[str, Any]],
     judge_index: dict[str, Any],
@@ -964,6 +1198,7 @@ def compute_report(
     quick_current_scope = 0
     quick_count = 0
     traceable_integrity = True
+    traceable_count = 0
 
     indexed = judge_index.get("cases", {})
     for case in quality_cases:
@@ -992,6 +1227,7 @@ def compute_report(
             quick_candidate_scope += candidate["scope_proportionality"]
             quick_current_scope += current["scope_proportionality"]
         else:
+            traceable_count += 1
             traceable_integrity = traceable_integrity and candidate[
                 "traceability_integrity"
             ]
@@ -1001,24 +1237,37 @@ def compute_report(
             "summary": indexed[case_id]["summary"],
         }
 
+    quality_ids = {case["id"] for case in quality_cases}
+    full_quality_ids = {case["id"] for case in load_cases()}
+    quality_suite_complete = quality_ids == full_quality_ids
     routing_cases = route_index.get("cases", {})
-    routing_all_correct = bool(routing_cases) and all(
+    full_routing_ids = {case["id"] for case in load_routing_cases()}
+    routing_suite_complete = set(routing_cases) == full_routing_ids
+    routing_all_correct = routing_suite_complete and all(
         result.get("passed") is True for result in routing_cases.values()
     )
+    beats_baseline_minimum = math.ceil(len(quality_cases) * 5 / 7)
+    not_lower_current_minimum = math.ceil(len(quality_cases) * 4 / 7)
     checks = {
-        "candidate_beats_baseline_at_least_5_of_7": candidate_beats_baseline >= 5,
+        "quality_suite_complete": quality_suite_complete,
+        "candidate_beats_baseline_threshold": (
+            candidate_beats_baseline >= beats_baseline_minimum
+        ),
         "candidate_clear_losses_at_most_1": candidate_clear_losses <= 1,
         "candidate_aggregate_not_below_current": (
             aggregates["candidate"]["total"] >= aggregates["current"]["total"]
         ),
-        "candidate_not_lower_current_at_least_4_of_7": (
-            candidate_not_lower_current >= 4
+        "candidate_not_lower_current_threshold": (
+            candidate_not_lower_current >= not_lower_current_minimum
         ),
         "quick_scope_proportionality_improves": (
             quick_count > 0 and quick_candidate_scope > quick_current_scope
         ),
         "no_evidence_honesty_regression": evidence_honesty_no_regression,
-        "traceable_case_retains_gates": traceable_integrity,
+        "traceable_case_retains_gates": (
+            traceable_count > 0 and traceable_integrity
+        ),
+        "routing_suite_complete": routing_suite_complete,
         "routing_all_correct": routing_all_correct,
     }
     return {
@@ -1030,6 +1279,8 @@ def compute_report(
             "candidate_beats_baseline": candidate_beats_baseline,
             "candidate_clear_losses": candidate_clear_losses,
             "candidate_not_lower_current": candidate_not_lower_current,
+            "candidate_beats_baseline_minimum": beats_baseline_minimum,
+            "candidate_not_lower_current_minimum": not_lower_current_minimum,
             "routing_cases": len(routing_cases),
             "routing_passed": sum(
                 result.get("passed") is True for result in routing_cases.values()
@@ -1042,7 +1293,8 @@ def compute_report(
             "Text-only Codex evaluation; no image or video provider was called.",
             "A blind model judge is comparative evidence, not human creative approval.",
             "Each variant has one generated sample and one blind judgment per case; repeated runs may vary.",
-            "Routing calls test description-level selection in an isolated CODEX_HOME.",
+            "Codex calls isolate CODEX_HOME and user-level discovery roots, then verify Skill reads from event evidence.",
+            "A subset run or a run without the complete routing suite is reported as PARTIAL.",
             "Results apply only to the recorded model, reasoning level, prompts, and source hashes.",
         ],
     }
@@ -1106,11 +1358,12 @@ def render_report(report: dict[str, Any], manifest: dict[str, Any]) -> str:
 def write_report(args: argparse.Namespace) -> int:
     run_dir = open_run_dir(args.run_dir)
     manifest = load_manifest(run_dir)
+    verify_quality_source_contracts(manifest)
     quality_cases = [
         case for case in load_cases() if case["id"] in manifest["quality_case_ids"]
     ]
     judge_index = read_json(run_dir / "judgments" / "index.json")
-    route_index = read_json(run_dir / "routing" / "index.json")
+    route_index = load_route_index(run_dir)
     report = compute_report(quality_cases, judge_index, route_index)
     report["generated_at"] = utc_now()
     write_json(run_dir / "report.json", report)

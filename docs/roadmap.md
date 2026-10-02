@@ -117,12 +117,34 @@ evidence:
 - a shorter, more discriminating Skill entrypoint that excludes content
   calendars, KOL planning, brand strategy, media buying, UI/UX, and software
   review;
-- a repository-only isolated Codex A/B/C text evaluation harness covering seven
+- a repository-only isolated Codex A/B/C text evaluation harness covering nine
   creative cases, blind weighted judging, and four description-routing cases.
 
 The fictional Copy Sheet is reviewed for internal contract testing only. The
 text harness incurs model cost and is intentionally outside CI; it does not call
 an image/video Provider or constitute a real Creative Golden Eval.
+
+## 0.3.1 — direction-gated refinement and Grok discovery candidate
+
+Implemented as an unreleased, backward-compatible candidate:
+
+- distinguish local/technical defects from feedback that reopens a creative
+  direction;
+- keep unresolved high-impact direction choices exploratory and bound automatic
+  refinement to selected directions, existing execution authority, measurable
+  improvement, and a two-pass maximum;
+- preserve the best prior candidate and stop when a revision does not improve,
+  feedback reopens the direction, or cost/authorization runs out;
+- document deterministic fallbacks for exact pixel preservation;
+- add Grok discovery documentation and an optional no-model-call host smoke;
+- add paired Agent-evaluation cases for unlocked direction change and locked
+  local correction without embedding the expected production decision in the
+  prompt;
+- isolate all user-level Skill discovery roots, verify observed Skill reads
+  against digest-bound fixtures, and support honest `PARTIAL` subset reports.
+
+This milestone does not satisfy the real Provider-output evidence planned below
+and does not promote Grok to a runtime-verified Tier 1 host.
 
 ## 0.3.x — real provider-output creative evals
 

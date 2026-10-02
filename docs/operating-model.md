@@ -41,6 +41,8 @@ Are routes distinct, feasible, and comparable?
 ### G3 — direction lock
 
 Are message, visual, narrative, sound, references, and invariants explicit?
+Has the decision owner selected the direction, or explicitly delegated that
+selection? A technically polished candidate does not satisfy this gate.
 
 ### G4 — production job readiness
 
@@ -69,7 +71,10 @@ A one-image edit normally needs only:
 - source rights.
 
 This does not require a project Manifest or lifecycle artifacts. If an actual
-output is produced, inspection and delivery honesty still apply.
+output is produced, inspection and delivery honesty still apply. Quick Craft
+uses the same semantic direction gate without creating a formal approval
+artifact: unresolved high-impact direction choices stay exploratory, while a
+selected direction may receive bounded local refinement.
 
 ## Learning loop
 

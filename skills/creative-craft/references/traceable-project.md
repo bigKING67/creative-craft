@@ -28,6 +28,10 @@ and surface semantics, rights, and lifecycle evidence.
 
 ## State and approval boundaries
 
+Read [copy-sheet-contract.md](copy-sheet-contract.md) before creating,
+reviewing, binding, or approving a formal Copy Sheet. It preserves the copy
+authority, evidence, render-method, and approval requirements of this mode.
+
 - Manifest v2 uses `copy_policy=required`. Each Image/Video Job binds one Copy
   Sheet plus explicit copy-unit references.
 - A draft Copy Sheet supports exploration only. A reviewed Copy Sheet can

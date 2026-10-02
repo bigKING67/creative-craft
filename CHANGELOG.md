@@ -2,6 +2,51 @@
 
 All notable changes are documented here.
 
+## 0.3.2 — unreleased candidate
+
+Practical copy guidance and creative judgment improvements:
+
+- separate everyday copy development from the unchanged formal Copy Sheet
+  contract, keeping Quick Craft direct;
+- connect supported product features to a concrete reason to choose or use,
+  including desired activities rather than only storage or operation;
+- add eight fictional teaching contrasts with explicit limits on user acceptance,
+  and preserve expressive variety rather than prescribe a headline formula;
+- explicitly route a headline plus body text through copy-development guidance;
+- add repository-only Chinese diagnostic and human-feedback materials without
+  including evaluation logs in the installed Skill.
+
+One new-product first draft received user willingness to use; a backpack
+headline was accepted after collaborative revision. These are bounded examples,
+not evidence of stable creative improvement. Reference reading passed one
+focused recheck, not a repeatability test. This candidate includes the existing
+0.3.1 work below and is not a public release.
+
+## 0.3.1 — unreleased candidate
+
+Direction-gated refinement and Grok discovery portability:
+
+- distinguish bounded output defects from feedback that reopens shot scale,
+  subject hierarchy, visual world, narrative mechanism, or product role;
+- keep unresolved high-impact choices exploratory and allow at most two
+  targeted refinement passes only after direction selection and execution
+  authorization;
+- stop on no material improvement, reopened direction, conflicting evidence,
+  or cost/authorization limits, while preserving the best prior candidate;
+- clarify that generative masks are not pixel locks and route exact preservation
+  to deterministic compositing, retouch, or pixel restoration with verification;
+- add Grok Skill discovery documentation and an optional, no-model-call host
+  smoke while keeping Codex and Pi as the only runtime-verified Tier 1 hosts;
+- extend the isolated Agent quality suite with paired unlocked-direction and
+  locked-direction refinement cases without increasing its 40-call ceiling;
+- isolate user-level Skill discovery roots, bind observed entrypoint reads to
+  the intended fixture digest before later calls, and report quality-only
+  canaries as `PARTIAL` without requiring unrelated routing results.
+
+This candidate changes Agent behavior and host discovery evidence only. It adds
+no Provider adapter, real image/video Golden Eval, public release, or new
+versioned artifact contract.
+
 ## 0.3.0 — 2026-08-26
 
 Agent-first creative quality, copy authority, and modular runtime release:
