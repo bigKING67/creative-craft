@@ -62,6 +62,10 @@ export function validateTemplate(name, template) {
   }
   if (typeof template.html !== 'string' || typeof template.css !== 'string' || FORBIDDEN.test(template.html) || FORBIDDEN.test(template.css) ||
       template.css.includes('<')) fail(`Graphic template ${name} contains forbidden markup`);
+  // Only inline <span> markup with class attributes: one timeline row per graphic
+  // (HyperFrames lint flags nested block structure inside a timed element).
+  const tags = [...template.html.matchAll(/<\/?([a-zA-Z0-9-]+)([^>]*)>/g)];
+  if (tags.some(([, tag, attrs]) => tag !== 'span' || !/^(\s+class="[a-z0-9 -]+")?$/.test(attrs))) fail(`Graphic template ${name}: html may only contain <span class="…"> elements`);
   const holes = [...template.html.matchAll(/\{\{([^}]*)\}\}/g)].map(m => m[1]);
   const strings = Object.keys(template.vars).filter(k => template.vars[k].type === 'string');
   if (holes.length !== strings.length || holes.some(h => !strings.includes(h)) || new Set(holes).size !== holes.length) fail(`Graphic template ${name}: each string var must appear exactly once in html`);

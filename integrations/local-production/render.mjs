@@ -47,7 +47,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     started_at: new Date().toISOString(), assets: project.assets.map(({ id, sha256 }) => ({ id, sha256 })),
     inspection: { structure: 'pending', decode: 'pending', visual: 'unverified', listening: 'unverified' } };
   receipt.caption_font = project.caption_font ? { ...project.caption_font, integrity: 'passed',
-    glyph_coverage: 'passed', runtime_load: compiled.cues.length ? 'pending' : 'not_required', source_match: 'unverified' } :
+    glyph_coverage: 'passed', runtime_load: compiled.cues.length || compiled.graphics ? 'pending' : 'not_required', source_match: 'unverified' } :
     { profile: 'legacy-system-fonts', runtime_load: 'unverified', source_match: 'unverified' };
   const writeReceipt = async () => {
     const temp = path.join(destination, '.receipt.json');
@@ -80,7 +80,13 @@ export async function renderProject(root, destination, { revision, preview = fal
     const output = path.join(destination, 'video.mp4');
     await executeRenderJob(job, destination, output, (state, message) => onProgress({ status: state.status, progress: state.progress, message }), signal);
     if (job.status !== 'complete' || job.warnings.length) throw new Error(`Unqualified render outcome: ${job.status}`);
-    if (project.caption_font && compiled.cues.length) receipt.caption_font.runtime_load = 'passed';
+    if (project.caption_font && (compiled.cues.length || compiled.graphics)) receipt.caption_font.runtime_load = 'passed';
+    // HyperFrames' AAC true-peak limiter lowers the whole mix when it would pass
+    // -1 dBTP and reports the attenuation on the job (absent = not engaged).
+    if (expectsAudio(project, compiled.frames)) {
+      const lowered = Number.isFinite(job.audioLoweredDb) ? job.audioLoweredDb : 0;
+      receipt.audio_limiter = { ceiling_dbtp: -1, engaged: lowered > 0, audio_lowered_db: lowered, source: 'RenderJob.audioLoweredDb' };
+    }
     const media = await probe(output);
     if (!media.video || media.width !== width || media.height !== height || media.audio !== expectsAudio(project, compiled.frames) ||
         Math.abs(media.duration - compiled.duration) > Math.max(0.1, 2 / project.canvas.fps)) throw new Error('Output media does not match the project');

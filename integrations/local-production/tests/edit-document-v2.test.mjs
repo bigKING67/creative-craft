@@ -159,6 +159,70 @@ test('P2 cross-language rules: graphic field whitelist, duck target kind, crossf
   cases['overlap is checked against every earlier item, not only the adjacent one'][0](scanned);
   assert.throws(() => validateV2(scanned), /overlaps more than its predecessor/);
 });
+test('P2 compile: playback rate, volume lanes only via data-automation, opacity tweens, graphics, speed-mapped captions; lint clean', async () => {
+  const doc = await load('valid', 'p2-packaging.json');
+  doc.items.push({ id: 'cap2', track_id: 'c_sub', kind: 'caption', text: '变速句', link: { item_id: 'talk2', source_from: 11.5, source_to: 13 } });
+  doc.items.find(i => i.id === 'lower').vars.title = '<b>&"x\'';
+  const { html, cues, graphics } = compose(doc);
+  assert.equal(graphics, 1);
+  assert.match(html, /id="v-talk2"[^>]*data-playback-rate="1.5"[^>]*data-track-index="40"/, 'crossfading item on the alternate roll');
+  assert.match(html, /id="a-talk2"[^>]*data-playback-rate="1.5"[^>]*data-track-index="140"/);
+  // talk2 starts at 140/30 s with source 10 s at 1.5×: source 11.5–13 → +1…+2 s.
+  assert.deepEqual(cues.filter(c => c.text === '变速句').map(c => [r9(c.start), r9(c.end)]), [[r9(140 / 30 + 1), r9(140 / 30 + 2)]]);
+  const { parseAudioElements } = await import('@hyperframes/engine');
+  const { parseAutomation, sampleAutomationLane } = await import('@hyperframes/core/audio-automation');
+  const audio = new Map(parseAudioElements(html).map(a => [a.id, a]));
+  assert.equal(audio.get('a-talk2').playbackRate, 1.5);
+  for (const id of ['a-talk1', 'a-talk2', 'a-bed']) {
+    assert.ok(!new RegExp(`id="${id}"[^>]*data-volume`).test(html), `${id}: the lane is the only gain`);
+    assert.ok(audio.get(id).automation, id);
+  }
+  const level = (id, t) => sampleAutomationLane(parseAutomation(audio.get(id).automation).lanes[0], t);
+  const duck = 0.2 * 10 ** (-12 / 20);
+  assert.equal(level('a-talk1', 0), 0); assert.equal(level('a-talk1', 1), 1);
+  assert.ok(Math.abs(level('a-talk1', 140 / 30 + 5 / 30) - 0.5) < 1e-3, 'outgoing half of the crossfade');
+  assert.ok(Math.abs(level('a-talk2', 5 / 30) - 0.5) < 1e-3, 'incoming half of the crossfade');
+  assert.ok(Math.abs(level('a-bed', 2) - duck) < 1e-5, 'music ducked under the main track speech');
+  assert.ok(Math.abs(level('a-bed', 8.5) - duck * 0.5) < 1e-3, 'fade-out multiplies the duck');
+  assert.match(html, /tl\.fromTo\("#v-talk2",\{opacity:0\},\{opacity:1,duration:0\.33333333,ease:"none",immediateRender:false\},4\.666666666\)/);
+  assert.match(html, /id="v-talk1"[^>]*opacity:0"/, 'animated picture is authored hidden');
+  assert.ok(!/tl\.(to|fromTo)\([^)]*volume/.test(html), 'no GSAP volume tween');
+  assert.match(html, /<div id="g-lower" class="clip gfx gfx-lower-third"[^>]*left:6%;top:70%;width:62%;height:20%;font-size:7\.2px;--accent:#e3b341;opacity:0/);
+  assert.match(html, /&lt;b&gt;&amp;&quot;x&#39;/);
+  assert.ok(!html.includes('<b>&'), 'template text is escaped');
+  const lint = await lintComposition(html);
+  assert.deepEqual([lint.error_count, lint.warning_count], [0, 0], JSON.stringify(lint.findings));
+  assert.ok(!lint.findings.some(f => f.code === 'audio_volume_double_automation'));
+});
+test('graphic templates: existence, typed vars, length limits and colour format are enforced', async () => {
+  const base = await load('valid', 'p2-packaging.json');
+  const lower = d => d.items.find(i => i.id === 'lower');
+  for (const [mutate, reason] of [
+    [d => { lower(d).template = 'news-ticker'; }, /Unknown graphic template/],
+    [d => { lower(d).vars.title = '一'.repeat(17); }, /title must be a string of 1–16/],
+    [d => { lower(d).vars.accent = 'red'; }, /accent must be a #rrggbb colour/],
+    [d => { lower(d).vars.accent = 'url(x)'; }, /accent must be a #rrggbb colour/],
+    [d => { lower(d).vars.href = 'https://example.com'; }, /has no var href/],
+    [d => { delete lower(d).vars.title; }, /missing required var title/],
+    [d => { lower(d).vars.subtitle = 3; }, /subtitle must be a string/]]) {
+    const doc = structuredClone(base); mutate(doc);
+    assert.throws(() => validateV2(doc), reason);
+  }
+  const card = structuredClone(base);
+  Object.assign(lower(card), { template: 'title-card', vars: { title: '品牌', panel: false, background: '#000000' } });
+  assert.match(compose(card).html, /class="clip gfx gfx-title-card"[^>]*data-panel="false"[^>]*style="[^"]*--background:#000000;--text_color:#ffffff/);
+  const { validateTemplate, TEMPLATES } = await import('../templates.mjs');
+  assert.deepEqual([...TEMPLATES.keys()], ['lower-third', 'title-card']);
+  const template = structuredClone(TEMPLATES.get('lower-third'));
+  for (const [mutate, reason] of [
+    [t => { t.box.top = 0.8; }, /safe area/], [t => { t.html += '<script>x</script>'; }, /forbidden markup|only contain <span/],
+    [t => { t.html = t.html.replace('<span class', '<div class').replace('</span>', '</div>'); }, /only contain <span/],
+    [t => { t.css += 'body{color:red}'; }, /scoped/], [t => { t.css += '.gfx-lower-third{background:url(x)}'; }, /forbidden/],
+    [t => { t.vars.title.max_length = 40; }, /cannot fit/]]) {
+    const copy = structuredClone(template); mutate(copy);
+    assert.throws(() => validateTemplate('lower-third', copy), reason);
+  }
+});
 test('compiled v2 HTML passes the HyperFrames lint gate', async () => {
   const lint = await lintComposition(compose(v2Fixture()).html);
   assert.equal(lint.error_count, 0, JSON.stringify(lint.findings));
