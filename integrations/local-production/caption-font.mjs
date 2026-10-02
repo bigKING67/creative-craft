@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isV2, resolveCaptions } from './timeline.mjs';
 
 // Versioned renderer resource, not an assertion about the original video's font.
 const bundle = new URL('./fonts/', import.meta.url);
@@ -17,7 +18,8 @@ export function validateCaptionFont(binding) {
   }
 }
 
-function activeCaptions(project) {
+export function activeCaptions(project) {
+  if (isV2(project)) return resolveCaptions(project).map(caption => caption.item);
   return project.clips.flatMap(clip => clip.captions.filter(caption =>
     caption.to > clip.in_seconds && caption.from < clip.in_seconds + clip.frames / project.canvas.fps));
 }
@@ -70,15 +72,30 @@ function checkGlyphs(bytes, project) {
   }
 }
 
+// Check glyphs against the bundled font and record the binding (no writes).
+export async function planCaptionFont(project) {
+  if (!activeCaptions(project).length) return false;
+  checkGlyphs(await fontBytes(fileURLToPath(new URL(manifest.file, bundle))), project);
+  project.caption_font = { ...CAPTION_FONT };
+  return true;
+}
+
+// Copy the bundled bytes into a project; an existing identical copy is reused.
+export async function installCaptionFont(root) {
+  await fs.mkdir(path.join(root, 'fonts'), { recursive: true });
+  const target = path.join(root, CAPTION_FONT.file);
+  try { await fs.copyFile(fileURLToPath(new URL(manifest.file, bundle)), target, 1); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  await fontBytes(target);
+}
+
 export async function bindCaptionFont(root, project) {
   if (!activeCaptions(project).length) return;
-  const source = fileURLToPath(new URL(manifest.file, bundle));
-  checkGlyphs(await fontBytes(source), project);
+  const binding = { ...project };
+  await planCaptionFont(binding);
   await fs.mkdir(path.join(root, 'fonts'));
-  const target = path.join(root, CAPTION_FONT.file);
-  await fs.copyFile(source, target, 1);
-  await fontBytes(target);
-  project.caption_font = { ...CAPTION_FONT };
+  await installCaptionFont(root);
+  project.caption_font = binding.caption_font;
 }
 
 export async function verifyCaptionFont(root, project) {
@@ -104,7 +121,8 @@ export function captionFontReady(project) {
   const weights = [...new Set(activeCaptions(project).map(c => c.style?.weight ?? 600))];
   // Producer's tween interceptor owns __hfTimelinesBuilding, and fonts.ready
   // resolves even on font failure. Use its explicit async build registry.
-  // Producer 0.8.53 treats rejected build promises as settled: on error keep
+  // Producer 0.8.53 treated rejected build promises as settled (gate re-verified
+  // on 0.8.108 by tests/font-render.integration.mjs): on error keep
   // this readiness entry pending so its bounded readiness timeout fails the
   // job. The rejection remains observable through __captionFontReady.
   return `window.__captionFontLoaded=false;

@@ -4,27 +4,16 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { bindCaptionFont, validateCaptionFont, verifyCaptionFont } from './caption-font.mjs';
+import { bindCaptionFont, installCaptionFont, planCaptionFont, validateCaptionFont, verifyCaptionFont, activeCaptions } from './caption-font.mjs';
+import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCanvas, validateCaptionStyle, validateOrigin,
+  validateV2, migrateV1 } from './edit-document.mjs';
+import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
 
 export const run = promisify(execFile);
-export const SCHEMA = 'creative-craft.local-edit.v1';
-const fail = (message) => { throw new Error(message); };
-const integer = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
-const number = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
-const id = (v) => typeof v === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(v);
-const text = (v) => typeof v === 'string' && v.length > 0 && v.length <= 2000;
-function keys(value, allowed) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Expected object');
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`Unknown field: ${key}`);
-}
-
-// Source-matched caption geometry is data, never caller-supplied CSS.
-export function validateCaptionStyle(style) {
-  keys(style, ['fontHeight', 'centerY', 'color', 'strokeWidth', 'weight']);
-  if (!number(style.fontHeight, .015, .08) || !number(style.centerY, .1, .9) ||
-      !number(style.strokeWidth, 0, .004) || ![400, 600, 700, 900].includes(style.weight) ||
-      typeof style.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(style.color)) fail('Invalid caption style');
-}
+export const SCHEMA = SCHEMA_V1;
+export { SCHEMA_V2, validateV2, validateCaptionStyle, migrateV1 };
+const sha256 = value => createHash('sha256').update(value).digest('hex');
+const serialize = doc => `${JSON.stringify(doc, null, 2)}\n`;
 
 export async function digest(file) {
   const hash = createHash('sha256');
@@ -64,9 +53,8 @@ export function validate(project) {
       !integer(project.revision, 1, 999999)) fail('Invalid project identity');
   if (project.revision === 1 ? project.parent_sha256 !== null :
       typeof project.parent_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(project.parent_sha256)) fail('Invalid parent digest');
-  keys(project.canvas, ['width', 'height', 'fps']);
-  const { width, height, fps } = project.canvas;
-  if (![24, 30, 60].includes(fps) || !integer(width, 64, 3840) || !integer(height, 64, 3840) || width % 2 || height % 2) fail('Invalid canvas');
+  validateCanvas(project.canvas);
+  const { fps } = project.canvas;
   if (!Array.isArray(project.assets) || !project.assets.length || project.assets.length > 100 ||
       !Array.isArray(project.clips) || !project.clips.length || project.clips.length > 500 ||
       !Array.isArray(project.audio) || project.audio.length > 32) fail('Invalid project collections');
@@ -108,6 +96,9 @@ export function validate(project) {
   return { frames, duration: frames / fps };
 }
 
+// Either document generation; v1 revisions stay readable and renderable.
+export const validateDocument = doc => doc?.schema_version === SCHEMA_V2 ? validateV2(doc) : validate(doc);
+
 const revisionName = (revision) => `${String(revision).padStart(6, '0')}.json`;
 export async function readProject(root, revision) {
   root = await safePath(root);
@@ -118,7 +109,7 @@ export async function readProject(root, revision) {
   if (!names.includes(name)) fail('Revision not found');
   const file = await safePath(path.join(revisions, name));
   const project = JSON.parse(await fs.readFile(file, 'utf8'));
-  validate(project);
+  validateDocument(project);
   if (revisionName(project.revision) !== name) fail('Revision filename mismatch');
   if (project.revision > 1) {
     const previous = await safePath(path.join(revisions, revisionName(project.revision - 1)));
@@ -130,7 +121,7 @@ export async function readProject(root, revision) {
 async function publish(root, project) {
   const dir = await safePath(path.join(root, 'revisions'));
   const temp = path.join(dir, `.pending-${randomUUID()}`);
-  await fs.writeFile(temp, `${JSON.stringify(project, null, 2)}\n`, { flag: 'wx' });
+  await fs.writeFile(temp, serialize(project), { flag: 'wx' });
   try {
     // Atomic, no-replace publication. Two writers cannot publish the same revision.
     await fs.link(temp, path.join(dir, revisionName(project.revision)));
@@ -140,33 +131,58 @@ async function publish(root, project) {
   } finally { await fs.unlink(temp); }
 }
 
-export async function createProject(root, spec) {
-  keys(spec, ['project_id', 'title', 'canvas', 'assets', 'clips', 'audio']);
-  if (!Array.isArray(spec.assets) || !spec.assets.length || spec.assets.length > 100) fail('Invalid assets');
+async function importAsset(file) {
+  if (typeof file !== 'string') fail('Invalid import');
+  const source = await safePath(file);
+  if (!(await fs.stat(source)).isFile()) fail('Source must be a file');
+  const sha256 = await digest(source);
+  return { source, asset: { file: `assets/${sha256}.media`, sha256, ...await probe(source) } };
+}
+
+// Content-addressed copies; an existing identical file is reused, never replaced.
+async function copyImports(root, imports) {
+  for (const { source, asset } of imports) {
+    const target = path.join(root, asset.file);
+    try { await fs.copyFile(source, target, 1); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    if (await digest(target) !== asset.sha256) fail('Source changed during import');
+  }
+}
+
+// Accepts the v1 spec (clips/audio, converted to v2 unless legacyV1 is set for
+// compatibility tests) or the v2 spec (tracks/items). New projects are v2.
+export async function createProject(root, spec, { legacyV1 = false } = {}) {
+  const v1 = spec && typeof spec === 'object' && 'clips' in spec;
+  keys(spec, v1 ? ['project_id', 'title', 'canvas', 'assets', 'clips', 'audio'] : ['project_id', 'title', 'canvas', 'assets', 'tracks', 'items']);
+  if (legacyV1 && !v1) fail('legacyV1 requires a v1 spec');
+  if (!Array.isArray(spec.assets) || !spec.assets.length || spec.assets.length > (v1 ? 100 : 200)) fail('Invalid assets');
   const imports = [];
   for (const item of spec.assets) {
-    keys(item, ['id', 'path']);
-    if (!id(item.id) || typeof item.path !== 'string') fail('Invalid import');
-    const source = await safePath(item.path);
-    if (!(await fs.stat(source)).isFile()) fail('Source must be a file');
-    const sha256 = await digest(source);
-    imports.push({ source, asset: { id: item.id, file: `assets/${sha256}.media`, sha256, ...await probe(source) } });
+    keys(item, v1 ? ['id', 'path'] : ['id', 'path', 'origin']);
+    if (!id(item.id)) fail('Invalid import');
+    const origin = item.origin ?? { kind: 'import' };
+    if (!v1) validateOrigin(origin);
+    const imported = await importAsset(item.path);
+    imported.asset = { id: item.id, ...imported.asset, ...(v1 ? {} : { origin }) };
+    imports.push(imported);
   }
-  const project = { schema_version: SCHEMA, project_id: spec.project_id, revision: 1, parent_sha256: null,
-    title: spec.title, canvas: spec.canvas, assets: imports.map(i => i.asset), clips: spec.clips, audio: spec.audio ?? [] };
-  validate(project);
+  let project;
+  if (v1) {
+    project = { schema_version: SCHEMA, project_id: spec.project_id, revision: 1, parent_sha256: null,
+      title: spec.title, canvas: spec.canvas, assets: imports.map(i => i.asset), clips: spec.clips, audio: spec.audio ?? [] };
+    validate(project);
+    if (!legacyV1) project = { ...migrateV1(project), change: { author: 'system', summary: 'Created from a local-edit.v1 spec', operations_sha256: null } };
+  } else {
+    project = { schema_version: SCHEMA_V2, project_id: spec.project_id, revision: 1, parent_sha256: null, title: spec.title,
+      canvas: spec.canvas, assets: imports.map(i => i.asset), tracks: spec.tracks, items: spec.items,
+      change: { author: 'system', summary: 'Created project', operations_sha256: null } };
+  }
+  validateDocument(project);
   root = await safePath(root);
   await fs.mkdir(root); // Existing projects are never replaced.
   await fs.mkdir(path.join(root, 'assets'));
   await fs.mkdir(path.join(root, 'revisions'));
-  const copied = new Set();
-  for (const { source, asset } of imports) {
-    if (copied.has(asset.file)) continue;
-    const target = path.join(root, asset.file);
-    await fs.copyFile(source, target, 1);
-    if (await digest(target) !== asset.sha256) fail('Source changed during import');
-    copied.add(asset.file);
-  }
+  await copyImports(root, imports);
   await bindCaptionFont(root, project);
   await publish(root, project);
   return project;
@@ -174,6 +190,7 @@ export async function createProject(root, spec) {
 
 export async function editProject(root, expectedRevision, operations) {
   const project = await readProject(root);
+  if (project.schema_version !== SCHEMA) fail('This project is edit-document.v2; v1 operations are not supported. Submit an edit batch (edit PROJECT BATCH.json)');
   if (project.revision !== expectedRevision) fail('Revision conflict; read the latest project');
   if (!Array.isArray(operations) || !operations.length || operations.length > 100) fail('Invalid operations');
   const next = structuredClone(project);
@@ -201,6 +218,66 @@ export async function editProject(root, expectedRevision, operations) {
   validate(next);
   await publish(root, next);
   return next;
+}
+
+const asV2 = doc => doc.schema_version === SCHEMA_V2 ? structuredClone(doc) : migrateV1(doc);
+
+// Whole-document restore as a new revision. Locked tracks protect their items:
+// a revert that would change any item on a currently locked track is refused.
+async function revertContent(root, base, op) {
+  keys(op, ['type', 'revision']);
+  if (!integer(op.revision, 1, base.revision - 1)) fail('revert_to requires an earlier revision');
+  const target = asV2(await readProject(root, op.revision));
+  for (const track of base.tracks.filter(t => t.locked)) {
+    const on = doc => JSON.stringify(doc.items.filter(i => i.track_id === track.id));
+    if (on(base) !== on(target)) fail(`Track is locked: ${track.id}`);
+  }
+  const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks: target.tracks, items: target.items };
+  if (target.caption_font && !next.caption_font) next.caption_font = target.caption_font;
+  return next;
+}
+
+// Edit batch v2: {base_revision, author, summary, operations[]}. All-or-nothing:
+// every operation and the resulting document validate before anything is
+// written. A v1 project first gets a pure migration revision (author
+// "migration"), then the edit revision on top. dryRun returns the diff and
+// writes nothing (add_asset only probes).
+export async function editBatch(root, batch, { dryRun = false } = {}) {
+  keys(batch, ['base_revision', 'author', 'summary', 'operations']);
+  if (!integer(batch.base_revision, 1, 999999) || !['agent', 'human', 'system'].includes(batch.author) || !text(batch.summary) ||
+      !Array.isArray(batch.operations) || !batch.operations.length || batch.operations.length > 100) fail('Invalid edit batch');
+  root = await safePath(root);
+  const latest = await readProject(root);
+  if (latest.revision !== batch.base_revision) fail('Revision conflict; read the latest project');
+  let base = latest, baseSha = await digest(await safePath(path.join(root, 'revisions', revisionName(latest.revision)))), migration = null;
+  if (latest.schema_version === SCHEMA) {
+    migration = { ...migrateV1(latest), revision: latest.revision + 1, parent_sha256: baseSha,
+      change: { author: 'migration', summary: `Migrated ${SCHEMA} revision ${latest.revision} to ${SCHEMA_V2}`, operations_sha256: null } };
+    validateV2(migration);
+    base = migration;
+    baseSha = sha256(serialize(migration));
+  }
+  const imports = [];
+  const next = batch.operations.some(op => op?.type === 'revert_to')
+    ? (batch.operations.length === 1 ? await revertContent(root, base, batch.operations[0]) : fail('revert_to must be the only operation in its batch'))
+    : await applyOperations(base, batch.operations, { importAsset, imports });
+  const operations_sha256 = operationsSha256(batch.operations);
+  Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
+    change: { author: batch.author, summary: batch.summary, operations_sha256 } });
+  validateV2(next);
+  // Fixed caption font: bound when captions are introduced. Legacy projects that
+  // already had captions without a binding keep the system-font contract.
+  let installFont = false;
+  if (next.caption_font) await verifyCaptionFont(root, next);
+  else if (!activeCaptions(base).length) installFont = await planCaptionFont(next);
+  const result = { status: dryRun ? 'dry_run' : 'published', base_revision: latest.revision, migration_revision: migration?.revision ?? null,
+    revision: next.revision, operations_sha256, diff: diffDocuments(base, next) };
+  if (dryRun) return result;
+  await copyImports(root, imports);
+  if (installFont) await installCaptionFont(root);
+  if (migration) await publish(root, migration);
+  await publish(root, next);
+  return result;
 }
 
 export async function verifyAssets(root, project) {
