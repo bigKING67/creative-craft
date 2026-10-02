@@ -1,4 +1,6 @@
 import { validate } from './project.mjs';
+import { validateV2 } from './edit-document.mjs';
+import { isV2, resolveCaptions } from './timeline.mjs';
 import { captionFontCss, captionFontReady } from './caption-font.mjs';
 
 const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -12,8 +14,10 @@ const timelineTiming = (start, end) => {
   const to = Math.max(0, end - 1e-9);
   return `data-start="${from}" data-duration="${to - from}"`;
 };
+const captionStyle = (style, height) => style ? `top:${seconds(style.centerY * 100)}%;bottom:auto;transform:translateY(-50%);font-size:${seconds(height * style.fontHeight)}px;font-weight:${style.weight};line-height:1.1;color:${style.color};-webkit-text-stroke:${seconds(height * style.strokeWidth)}px #222222;paint-order:stroke fill;text-shadow:0 1px 1px #222222;background:transparent;padding:0;border-radius:0` : '';
 
 export function compose(project, canvas = project.canvas) {
+  if (isV2(project)) return composeV2(project, canvas);
   const { duration, frames } = validate(project);
   const { width, height } = canvas;
   const { fps } = project.canvas;
@@ -32,8 +36,7 @@ export function compose(project, canvas = project.canvas) {
       if (to <= from) return;
       const cue = { start: start + from - clip.in_seconds, end: start + to - clip.in_seconds, text: caption.text };
       const cueId = `caption-${cues.length}`;
-      const style = caption.style;
-      const matched = style ? ` style="top:${seconds(style.centerY * 100)}%;bottom:auto;transform:translateY(-50%);font-size:${seconds(height * style.fontHeight)}px;font-weight:${style.weight};line-height:1.1;color:${style.color};-webkit-text-stroke:${seconds(height * style.strokeWidth)}px #222222;paint-order:stroke fill;text-shadow:0 1px 1px #222222;background:transparent;padding:0;border-radius:0"` : '';
+      const matched = caption.style ? ` style="${captionStyle(caption.style, height)}"` : '';
       elements.push(`<div id="${cueId}" class="caption"${matched} ${timelineTiming(cue.start, cue.end)} data-track-index="20">${escape(cue.text)}</div>`);
       cues.push(cue);
     });
@@ -44,14 +47,57 @@ export function compose(project, canvas = project.canvas) {
     if (length <= 0 || track.volume === 0) return;
     elements.push(`<audio id="bed-${index}" src="${assets.get(track.asset_id).file}" ${timing(track.start_frame / fps, length, track.in_seconds)} data-track-index="${30 + index}" data-volume="${track.volume}"></audio>`);
   });
-  const html = `<!doctype html>
+  return { html: page(project, width, height, duration, elements), cues, duration, frames };
+}
+
+// EditDocument v2: tracks are layered in array order (later = above). Each
+// track gets its own data-track-index lane (video n, sound 100+n, captions
+// 200+n) and video/caption elements an explicit z-index; captions sit above
+// every picture (captions carry class "clip" for HyperFrames lint/Studio; the
+// render runtime does not select on it). transform x/y is the item centre as a fraction of the canvas,
+// scale the fraction of the canvas box the item occupies.
+function composeV2(doc, canvas) {
+  const { duration, frames } = validateV2(doc);
+  const { width, height } = canvas;
+  const { fps } = doc.canvas;
+  const assets = new Map(doc.assets.map(a => [a.id, a]));
+  const lanes = new Map(doc.tracks.map((t, i) => [t.id, i]));
+  const kinds = new Map(doc.tracks.map(t => [t.id, t.kind]));
+  const byLane = (a, b) => lanes.get(a.track_id) - lanes.get(b.track_id);
+  const timing = item => `${timelineTiming(item.start_frame / fps, (item.start_frame + item.frames) / fps)} data-media-start="${item.source_in_seconds}"`;
+  const percent = v => `${seconds(v * 100)}%`;
+  const elements = [];
+  for (const item of doc.items.filter(i => i.kind === 'media').sort(byLane)) {
+    const lane = lanes.get(item.track_id), asset = assets.get(item.asset_id);
+    if (kinds.get(item.track_id) === 'video') {
+      const style = [`z-index:${lane + 1}`, `object-fit:${item.fit ?? 'contain'}`];
+      if (item.transform) {
+        const { x, y, scale } = item.transform;
+        style.push(`left:${percent(x - scale / 2)}`, `top:${percent(y - scale / 2)}`, 'right:auto', 'bottom:auto', `width:${percent(scale)}`, `height:${percent(scale)}`);
+      }
+      if ('opacity' in item && item.opacity !== 1) style.push(`opacity:${item.opacity}`);
+      elements.push(`<video id="v-${item.id}" src="${asset.file}" ${timing(item)} data-track-index="${lane}" muted playsinline style="${style.join(';')}"></video>`);
+    }
+    if (asset.audio && item.volume > 0) elements.push(`<audio id="a-${item.id}" src="${asset.file}" ${timing(item)} data-track-index="${100 + lane}" data-volume="${item.volume}"></audio>`);
+  }
+  const cues = [];
+  for (const { item, start, end } of resolveCaptions(doc).sort((a, b) => byLane(a.item, b.item))) {
+    const lane = lanes.get(item.track_id);
+    elements.push(`<div id="c-${item.id}" class="clip caption" style="z-index:${200 + lane};${captionStyle(item.style, height)}" ${timelineTiming(start, end)} data-track-index="${200 + lane}">${escape(item.text)}</div>`);
+    cues.push({ start, end, text: item.text });
+  }
+  cues.sort((a, b) => a.start - b.start);
+  return { html: page(doc, width, height, duration, elements), cues, duration, frames };
+}
+
+function page(project, width, height, duration, elements) {
+  return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escape(project.title)}</title>
 <script src="gsap.min.js"></script>
 <style>html,body{margin:0;background:#000;overflow:hidden}#main{position:relative;width:${width}px;height:${height}px;background:#000}video{position:absolute;inset:0;width:100%;height:100%}.caption{position:absolute;left:7%;right:7%;bottom:8%;text-align:center;color:#fff;white-space:pre-wrap;font:600 ${Math.round(height * 0.052)}px/1.35 'PingFang SC','Noto Sans CJK SC',sans-serif;text-shadow:0 2px 4px #000;background:rgba(0,0,0,.65);padding:8px;border-radius:6px}</style></head>
 <body><style>${captionFontCss(project)}</style><div id="main" data-composition-id="main" data-width="${width}" data-height="${height}" data-duration="${seconds(duration)}">${elements.join('\n')}</div>
 <script>${captionFontReady(project)}
 window.__timelines=window.__timelines||{};const tl=gsap.timeline({paused:true});tl.to({}, {duration:${seconds(duration)}});window.__timelines.main=tl;</script></body></html>`;
-  return { html, cues, duration, frames };
 }
 
 export function webVtt(cues) {
