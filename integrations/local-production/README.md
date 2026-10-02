@@ -203,7 +203,7 @@ node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir
 
 ## 验证与限制
 
-`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：12 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck）、安全区布局估算；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
+`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
 
 `npm run smoke` 用自有测试图案和测试音（无客户素材），输出在根 `dist/local-production/<timestamp>/`：
 

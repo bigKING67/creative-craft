@@ -34,7 +34,11 @@ const reasons = { 'audio-only-asset-on-video-track': /has no video/, 'caption-li
   'duck-under-self': /cannot duck under itself/, 'duck-under-unknown-track': /Duck under unknown track/,
   'fades-exceed-item': /Fades exceed item length/, 'graphic-on-caption-track': /must be on a video track/,
   'graphic-var-not-primitive': /Graphic var title must be a string/, 'graphic-with-media-field': /cannot carry media\/caption fields: volume/,
-  'overlap-without-crossfade': /without crossfade: talk1, talk2/, 'speed-source-exceeds-asset': /exceeds asset \(speed-scaled\): talk2/ };
+  'overlap-without-crossfade': /without crossfade: talk1, talk2/, 'speed-source-exceeds-asset': /exceeds asset \(speed-scaled\): talk2/,
+  // P2 review: crossfade predecessor rules and graphic var naming/length.
+  'crossfade-nested-in-predecessor': /Crossfade talk2 must overlap its predecessor on track v_main by exactly 20 frames/,
+  'crossfade-after-graphic': /Crossfade gfxnext must overlap its predecessor on track v_gfx/,
+  'graphic-var-bad-name': /Graphic var Title must be a string/, 'graphic-var-too-long-utf16': /Graphic var title must be a string \(1–200\)/ };
 test('shared fixtures: every invalid document is rejected', async () => {
   const names = (await fs.readdir(path.join(fixtures, 'invalid'))).filter(n => n.endsWith('.json'));
   assert.ok(names.length >= 12);
