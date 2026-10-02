@@ -41,7 +41,7 @@ Chrome 路径示例仅适用于对应 macOS 安装；其他主机指定自己的
 
 ## 创建工程
 
-`create` 产出 v2 工程。v2 spec（媒体路径相对于命令 cwd）：
+`create` 按 spec 格式决定工程格式：v2 spec（`tracks/items`）产出 v2 工程。v2 spec（媒体路径相对于命令 cwd）：
 
 ```json
 {
@@ -72,7 +72,7 @@ node cli.mjs read /absolute/new-project
 node cli.mjs preview /absolute/new-project /absolute/new-preview 1
 ```
 
-仍接受旧 v1 spec（`clips/audio`，片段按数组顺序连续拼接、字幕 `from/to` 为源秒），按下文迁移规则转换为 v2 第 1 版。创建会 ffprobe 输入、复制素材并记录 SHA-256，不修改源文件；工程目录必须不存在。暂不支持变速、转场、淡入淡出、音乐自动闪避、图形模板（P2）或自动语音分句。
+旧 v1 spec（`clips/audio`，片段按数组顺序连续拼接、字幕 `from/to` 为源秒）仍创建 `local-edit.v1` 工程，与 0.1.0 行为一致，宿主原有的 `edit <project> <revision> operations.json` 流程不变；首次提交 v2 编辑批次时按下文迁移规则升级（`tests/host-compat.test.mjs` 覆盖这条宿主路径）。创建会 ffprobe 输入、复制素材并记录 SHA-256，不修改源文件；工程目录必须不存在。暂不支持变速、转场、淡入淡出、音乐自动闪避、图形模板（P2）或自动语音分句。
 
 ## Agent 有界编辑（批次 v2）
 

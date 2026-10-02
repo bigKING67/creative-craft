@@ -39,7 +39,7 @@ const clip = (id, start, caption) => ({ id, asset_id: 'source', in_seconds: star
   fit: 'contain', captions: [{ from: start, to: start + 1, text: caption }] });
 const root = path.join(base, 'project');
 await createProject(root, { project_id: 'production-smoke', title: 'Creative Craft 技术样例', canvas: { width: 1280, height: 720, fps: 24 },
-  assets: [{ id: 'source', path: source }], clips: [clip('opening', 0, '口播：保留这一句'), clip('detail', 3, '产品：细节画面')], audio: [] }, { legacyV1: true });
+  assets: [{ id: 'source', path: source }], clips: [clip('opening', 0, '口播：保留这一句'), clip('detail', 3, '产品：细节画面')], audio: [] });
 const outcomes = [];
 outcomes.push(await renderProject(root, path.join(base, 'talking-head-preview'), { preview: true, revision: 1 }));
 await editProject(root, 1, [{ type: 'reorder', clip_ids: ['detail', 'opening'] },

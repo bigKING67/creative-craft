@@ -151,12 +151,13 @@ async function copyImports(root, imports) {
   }
 }
 
-// Accepts the v1 spec (clips/audio, converted to v2 unless legacyV1 is set for
-// compatibility tests) or the v2 spec (tracks/items). New projects are v2.
-export async function createProject(root, spec, { legacyV1 = false } = {}) {
+// The spec format selects the project format, so existing hosts keep working:
+// a v1 spec (clips/audio) creates a local-edit.v1 project that still accepts the
+// v1 CLI and operations, and migrates on its first v2 edit batch; a v2 spec
+// (tracks/items) creates an edit-document.v2 project.
+export async function createProject(root, spec) {
   const v1 = spec && typeof spec === 'object' && 'clips' in spec;
   keys(spec, v1 ? ['project_id', 'title', 'canvas', 'assets', 'clips', 'audio'] : ['project_id', 'title', 'canvas', 'assets', 'tracks', 'items']);
-  if (legacyV1 && !v1) fail('legacyV1 requires a v1 spec');
   if (!Array.isArray(spec.assets) || !spec.assets.length || spec.assets.length > (v1 ? 100 : 200)) fail('Invalid assets');
   const imports = [];
   for (const item of spec.assets) {
@@ -173,7 +174,6 @@ export async function createProject(root, spec, { legacyV1 = false } = {}) {
     project = { schema_version: SCHEMA, project_id: spec.project_id, revision: 1, parent_sha256: null,
       title: spec.title, canvas: spec.canvas, assets: imports.map(i => i.asset), clips: spec.clips, audio: spec.audio ?? [] };
     validate(project);
-    if (!legacyV1) project = { ...migrateV1(project), change: { author: 'system', summary: 'Created from a local-edit.v1 spec', operations_sha256: null } };
   } else {
     project = { schema_version: SCHEMA_V2, project_id: spec.project_id, revision: 1, parent_sha256: null, title: spec.title,
       canvas: spec.canvas, assets: imports.map(i => i.asset), tracks: spec.tracks, items: spec.items,
