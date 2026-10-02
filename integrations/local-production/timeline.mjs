@@ -149,3 +149,20 @@ export function itemEnvelope(doc, item, kind, index = envelopeIndex(doc)) {
   const samplers = factors.map(sampler);
   return times.map(t => [t, Math.round(base * samplers.reduce((g, f) => g * f(t), 1) * 1e6) / 1e6]);
 }
+
+// HyperFrames accepts at most 512 points per automation lane.
+export const MAX_VOLUME_POINTS = 512;
+// Volume lane of one audible item (null when constant), refused when too long.
+// Compilation and edit/create validation both go through here, so a lane that
+// would fail to compile is rejected before a revision is published.
+export function volumeEnvelope(doc, item, index = envelopeIndex(doc)) {
+  const envelope = itemEnvelope(doc, item, 'audio', index);
+  if (envelope && envelope.length > MAX_VOLUME_POINTS) {
+    throw new Error(`Volume automation for item ${item.id} on track ${item.track_id} has ${envelope.length} points (max ${MAX_VOLUME_POINTS}); reduce ducking intervals, fades or crossfades`);
+  }
+  return envelope;
+}
+export function checkVolumeAutomation(doc) {
+  const index = envelopeIndex(doc);
+  for (const item of audibleItems(doc)) volumeEnvelope(doc, item, index);
+}

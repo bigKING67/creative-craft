@@ -8,6 +8,7 @@ import { bindCaptionFont, installCaptionFont, planCaptionFont, validateCaptionFo
 import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCanvas, validateCaptionStyle, validateAssetFields, validateNewAssetOrigin,
   validateV2, migrateV1 } from './edit-document.mjs';
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
+import { checkVolumeAutomation } from './timeline.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -180,6 +181,7 @@ export async function createProject(root, spec) {
       change: { author: 'system', summary: 'Created project', operations_sha256: null } };
   }
   validateDocument(project);
+  if (!v1) checkVolumeAutomation(project); // Compile limits fail here, not at render.
   root = await safePath(root);
   await fs.mkdir(root); // Existing projects are never replaced.
   await fs.mkdir(path.join(root, 'assets'));
@@ -274,6 +276,7 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
   validateV2(next);
+  checkVolumeAutomation(next); // Same envelope code as compilation; refused before dry-run or publish.
   // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
   // already had captions without a binding keep the system-font contract.
   let installFont = false;

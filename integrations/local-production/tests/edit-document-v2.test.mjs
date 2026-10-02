@@ -435,3 +435,35 @@ test('create accepts a v2 spec; add_asset dry-run probes without copying', async
   assert.deepEqual(doc.assets.find(a => a.id === 'extra').origin, { kind: 'import' });
   assert.deepEqual(doc.tracks.at(-1), { locked: false, id: 'v_top', kind: 'video' });
 });
+// 140 separate speech items under a ducked bed: 4 duck points each > 512 lane points.
+const speechItems = (asset_id, count = 140) => Array.from({ length: count }, (_, k) => ({ id: `s${k}`, track_id: 'v_main', kind: 'media', asset_id,
+  start_frame: 3 * k, frames: 1, source_in_seconds: 0, volume: 1 }));
+const DUCK = { under_track_id: 'v_main', depth_db: -12, attack_frames: 0, release_frames: 0 };
+test('volume lanes over 512 points are refused at edit time (dry-run included), before any render', async t => {
+  const doc = v2Fixture();
+  doc.tracks = [{ id: 'v_main', kind: 'video', locked: false }, { id: 'a_music', kind: 'audio', locked: false }];
+  doc.items = [...speechItems('talk'), { id: 'bed', track_id: 'a_music', kind: 'media', asset_id: 'music', start_frame: 0, frames: 440, source_in_seconds: 0, volume: 0.5 }];
+  const dir = await onDisk(t, doc);
+  const ops = [{ type: 'edit_track', track_id: 'a_music', duck: DUCK }];
+  const limit = /Volume automation for item bed on track a_music has \d+ points \(max 512\)/;
+  await assert.rejects(editBatch(dir, batch(1, ops), { dryRun: true }), limit);
+  await assert.rejects(editBatch(dir, batch(1, ops)), limit);
+  assert.equal(await revisions(dir), 1);
+  // The same document fails compilation through the same envelope code.
+  assert.throws(() => compose({ ...doc, tracks: [doc.tracks[0], { ...doc.tracks[1], duck: DUCK }] }), limit);
+  // Fewer speech intervals stay under the limit and publish.
+  await editBatch(dir, batch(1, [...ops, ...Array.from({ length: 20 }, (_, k) => ({ type: 'remove_item', item_id: `s${139 - k}` }))]));
+  assert.equal(await revisions(dir), 2);
+});
+test('create refuses a v2 spec whose volume lane exceeds 512 points and writes nothing', async t => {
+  const dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'creative-v2-limit-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const clip = path.join(dir, 'clip.mp4'), root = path.join(dir, 'project');
+  await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=64x36:rate=24:duration=20', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+    '-pix_fmt', 'yuv420p', '-shortest', clip]);
+  const spec = { project_id: 'limit', title: 'limit', canvas: { width: 128, height: 72, fps: 24 }, assets: [{ id: 'clip', path: clip }],
+    tracks: [{ id: 'v_main', kind: 'video', locked: false }, { id: 'a_music', kind: 'audio', locked: false, duck: DUCK }],
+    items: [...speechItems('clip'), { id: 'bed', track_id: 'a_music', kind: 'media', asset_id: 'clip', start_frame: 0, frames: 440, source_in_seconds: 0, volume: 0.5 }] };
+  await assert.rejects(createProject(root, spec), /Volume automation for item bed on track a_music has \d+ points/);
+  await assert.rejects(fs.access(root), { code: 'ENOENT' });
+});

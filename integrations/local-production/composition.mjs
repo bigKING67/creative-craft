@@ -1,6 +1,6 @@
 import { validate } from './project.mjs';
 import { validateV2 } from './edit-document.mjs';
-import { envelopeIndex, isV2, itemEnvelope, resolveCaptions } from './timeline.mjs';
+import { envelopeIndex, isV2, itemEnvelope, resolveCaptions, volumeEnvelope } from './timeline.mjs';
 import { getTemplate, renderGraphic, escapeHtml as escape } from './templates.mjs';
 import { captionFontCss, captionFontReady } from './caption-font.mjs';
 
@@ -122,10 +122,9 @@ function composeV2(doc, canvas) {
       elements.push(`<video id="v-${item.id}" src="${asset.file}" ${timing(item)} data-track-index="${lane + roll}" muted playsinline style="${style.join(';')}"></video>`);
     }
     if (asset.audio && item.volume > 0) {
-      const envelope = itemEnvelope(doc, item, 'audio', index), start = item.start_frame / fps;
+      const envelope = volumeEnvelope(doc, item, index), start = item.start_frame / fps;
       let level = `data-volume="${item.volume}"`;
       if (envelope) {
-        if (envelope.length > 512) throw new Error(`Volume automation for ${item.id} exceeds 512 points`);
         const automation = { version: 1, lanes: [{ target: 'volume', points: envelope.map(([t, v]) => ({ t: Math.max(0, Math.round((t - start) * 1e6) / 1e6), v })) }] };
         level = `data-automation="${escape(JSON.stringify(automation))}"`;
       }
