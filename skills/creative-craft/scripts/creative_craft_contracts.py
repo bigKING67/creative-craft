@@ -2248,6 +2248,11 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 r.require(key in item, f"{label} media item requires {key}")
             for key in ("text", "style", "link"):
                 r.require(key not in item, f"{label} media item must not set {key}")
+            if track_kind == "audio":
+                for key in ("fit", "opacity", "transform"):
+                    r.require(
+                        key not in item, f"{label} audio-track item must not set {key}"
+                    )
             r.require(
                 track_kind != "caption",
                 f"{label} media item cannot be on a caption track",

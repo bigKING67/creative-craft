@@ -10,3 +10,5 @@ dist/
 integrations/local-production/fonts/*.ttf
 # Local generated outputs
 output/
+# Agent worktrees
+.claude/worktrees/

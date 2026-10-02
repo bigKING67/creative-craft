@@ -54,6 +54,7 @@ class EditDocumentContractTests(unittest.TestCase):
             "caption-with-media-field": "caption item must not set volume",
             "linked-caption-with-timing": "linked caption must not set start_frame",
             "later-revision-without-parent": "revision > 1 requires parent_sha256",
+            "audio-item-with-visual-field": "audio-track item must not set fit",
         }
         paths = sorted((FIXTURES / "edit-document-v2/invalid").glob("*.json"))
         self.assertEqual(set(expected), {path.stem for path in paths})

@@ -137,6 +137,8 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 - media item 必须有 `asset_id/start_frame/frames/source_in_seconds/volume`；视频轨要求素材含画面，音频轨要求含声音；`source_in_seconds + frames/fps ≤ asset.duration`。
 - caption item 只能在 caption 轨：`link` 形式按所链接 media item 的源时间换算输出时间并随其移动、裁切；无 `link` 时必须给 `start_frame/frames`。`link.source_to > link.source_from`。
 - 成片时长 = 所有 media item 与非链接字幕的最大结束帧，1 帧至 10 分钟。
+- 字段按类型互斥：media item 不得带 `text/style/link`；caption item 不得带 `asset_id/source_in_seconds/volume`；音频轨 item 不得带 `fit/opacity/transform`；link 字幕不得带 `start_frame/frames`。`revision > 1` 必须有 `parent_sha256`，`revision = 1` 必须为 null。字幕之间允许重叠。
+- 以上规则在 Node（`integrations/local-production/edit-document.mjs`）与 Python（`creative_craft_contracts.py`）各实现一次，由 `tests/fixtures/edit-document-v2/` 共享样例强制一致；新增规则必须同时补样例。
 
 ### 编辑操作（P0）
 
