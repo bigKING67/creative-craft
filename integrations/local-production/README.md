@@ -128,7 +128,7 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 
 - **整批原子**：先在内存中按序应用全部操作并对结果做完整 `validateV2`，任一失败则不复制素材、不发布。`base_revision` 不是最新修订直接拒绝（需重读），不自动合并。发布沿用硬链接无替换写入，并发写只有一个成功。
 - **dry-run** 返回 `diff`：新增/删除/变更的 item id、轨道变化、新增素材 id、新旧成片帧数；`add_asset` 只 ffprobe 探测，不复制。
-- **锁定轨道**：锁定轨道上的 item 不能被修改、删除或作为移动目标；`split/replace_media/remove_item` 需要改动的 link 字幕所在轨道也必须未锁定。link 字幕的存储数据不变，只随其 media item 的位置自然换算，这不算修改。`revert_to` 若会改变当前任一锁定轨道上的 item 也被拒绝。
+- **锁定轨道**：锁定轨道上的 item 不能被修改、删除或作为移动目标；`split/replace_media/remove_item` 需要改动的 link 字幕所在轨道也必须未锁定。link 字幕的存储数据不变，只随其 media item 的位置自然换算，这不算修改。`revert_to` 若会改变当前任一锁定轨道上的 item（或目标修订缺少该轨道）也被拒绝。锁定冻结的是该轨道自身的 item 与设置（含 `duck` 配置与名称）：`revert_to` 时锁定轨道整体保持当前定义，不被目标修订的轨道对象覆盖。锁定不冻结由被参照轨道派生的闪避包络——被参照轨道（如未锁定的口播轨）的 item 变化时，锁定音乐轨的实际音量曲线会随之重新计算。
 - **split 的字幕归属（确定规则）**：link 字幕归属到**源区间起点 `source_from` 落在哪一半**（`source_from ≥ 切点源时间` 归后半，否则留在前半）。不复制字幕：跨越切点的字幕只在其所属那一半内显示相交部分，切点之后的部分不再显示；如需两半都显示，在后半段另加一条 link 字幕。
 - **trim/move**：link 字幕按源时间自动跟随，不存输出时间；裁掉的源区间内的字幕自然不再显示。
 - **P2 下的 split/trim/move（确定规则）**：

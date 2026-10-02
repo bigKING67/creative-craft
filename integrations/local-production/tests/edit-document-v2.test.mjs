@@ -330,6 +330,23 @@ test('locked tracks refuse modification, removal and moves into them', async t =
   await editBatch(dir, batch(5, [{ type: 'trim_item', item_id: 'talk2', tail_frames: 4 }]));
   assert.equal((await readProject(dir)).items.find(i => i.id === 'talk2').frames, 40);
 });
+test('revert_to keeps a locked track whole: its duck survives a revert to a revision without it', async t => {
+  const dir = await onDisk(t, v2Fixture());
+  const duck = { under_track_id: 'v_main', depth_db: -9, attack_frames: 3, release_frames: 6 };
+  await editBatch(dir, batch(1, [{ type: 'edit_track', track_id: 'a_music', duck, name: '音乐' }]));
+  await editBatch(dir, batch(2, [{ type: 'edit_track', track_id: 'a_music', locked: true }]));
+  await editBatch(dir, batch(3, [{ type: 'remove_item', item_id: 'title' }]));
+  // Revision 1 has the same bed item but no duck and no name: only unlocked content reverts.
+  await editBatch(dir, batch(4, [{ type: 'revert_to', revision: 1 }]));
+  const doc = await readProject(dir);
+  assert.deepEqual(doc.tracks.find(tr => tr.id === 'a_music'), { id: 'a_music', kind: 'audio', locked: true, duck, name: '音乐' });
+  assert.ok(doc.items.some(i => i.id === 'title'), 'unlocked tracks revert');
+  // A target whose locked-track items differ is still refused.
+  await editBatch(dir, batch(5, [{ type: 'edit_track', track_id: 'a_music', locked: false }]));
+  await editBatch(dir, batch(6, [{ type: 'trim_item', item_id: 'bed', tail_frames: 4 }]));
+  await editBatch(dir, batch(7, [{ type: 'edit_track', track_id: 'a_music', locked: true }]));
+  await assert.rejects(editBatch(dir, batch(8, [{ type: 'revert_to', revision: 1 }])), /Track is locked: a_music/);
+});
 test('split assigns linked captions by source_from; trim/slip/move/ripple behave', async t => {
   const dir = await onDisk(t, v2Fixture());
   // talk1 source 1–3 s; cut at frame 36 → source 2.5. cap1 (1.5) stays left, cap2 (2.6) goes right.
