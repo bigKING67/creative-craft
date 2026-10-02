@@ -194,6 +194,31 @@ test('P2 compile: playback rate, volume lanes only via data-automation, opacity 
   assert.deepEqual([lint.error_count, lint.warning_count], [0, 0], JSON.stringify(lint.findings));
   assert.ok(!lint.findings.some(f => f.code === 'audio_volume_double_automation'));
 });
+test('P2 compile scales: 1000 items with 100 crossfades and a ducked bed compile in one fast pass (lookups built once)', () => {
+  const doc = v2Fixture();
+  doc.tracks = [{ id: 'v_main', kind: 'video', locked: false }, { id: 'a_music', kind: 'audio', locked: false,
+    duck: { under_track_id: 'v_main', depth_db: -12, attack_frames: 0, release_frames: 0 } }];
+  doc.items = [];
+  let start = 0;
+  for (let k = 0; k < 1000; k++) {
+    const crossfade = k % 10 === 5;
+    if (crossfade) start -= 4;
+    doc.items.push({ id: `m${k}`, track_id: 'v_main', kind: 'media', asset_id: 'talk', start_frame: start, frames: 12, source_in_seconds: 0, volume: 1,
+      ...(crossfade ? { transition_in: { kind: 'crossfade', frames: 4 } } : {}) });
+    start += 12 + (k % 10 === 9 ? 2 : 0); // a gap every ten items gives the duck ~100 intervals
+  }
+  // 400 ducked bed items: each envelope reuses the one duck curve of a_music.
+  for (let k = 0; k < 400; k++) {
+    doc.items.push({ id: `bed${k}`, track_id: 'a_music', kind: 'media', asset_id: 'music', start_frame: 24 * k, frames: 24, source_in_seconds: 0, volume: 0.5 });
+  }
+  const began = performance.now();
+  const { html, frames } = compose(doc);
+  const elapsed = performance.now() - began;
+  assert.equal(frames, start - 2);
+  assert.equal((html.match(/<video [^>]*data-track-index="40"/g) ?? []).length, 100, 'every crossfading picture on the alternate roll');
+  assert.equal((html.match(/id="a-bed\d+"[^>]*data-automation/g) ?? []).length, 400, 'every bed carries the duck lane');
+  assert.ok(elapsed < 150, `compile took ${Math.round(elapsed)} ms`);
+});
 test('graphic templates: existence, typed vars, length limits and colour format are enforced', async () => {
   const base = await load('valid', 'p2-packaging.json');
   const lower = d => d.items.find(i => i.id === 'lower');
