@@ -8,7 +8,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 export const TEMPLATE_SCHEMA = 'creative-craft.graphic-template.v1';
 export const SAFE_MARGIN = 0.05;
 const fail = message => { throw new Error(message); };
-const VAR_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+// Shared with document validation (edit-document.mjs): template ids, var names and
+// the structural rule for var values (template types are checked separately).
+export const TEMPLATE_ID = /^[a-z][a-z0-9-]{0,47}$/;
+export const VAR_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+// String length counts UTF-16 code units (JS length), as the contract requires.
+export const isGraphicVarValue = v => (typeof v === 'string' && v.length >= 1 && v.length <= 200) || (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean';
 const COLOR = /^#[0-9a-fA-F]{6}$/;
 const FORBIDDEN = /<\s*(script|style|iframe|object|embed|img|link|meta|svg|math|base|form)|\son\w+\s*=|javascript:|url\s*\(|@import|expression\s*\(|\b(src|href|srcset|action)\s*=/i;
 export const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -46,7 +51,7 @@ function checkValue(name, def, value, label) {
 // the fixed-markup rule never becomes available.
 export function validateTemplate(name, template) {
   exact(template, ['schema_version', 'id', 'version', 'description', 'box', 'vars', 'html', 'css'], `Graphic template ${name}`);
-  if (template.schema_version !== TEMPLATE_SCHEMA || template.id !== name || !/^[a-z][a-z0-9-]{0,47}$/.test(name) ||
+  if (template.schema_version !== TEMPLATE_SCHEMA || template.id !== name || !TEMPLATE_ID.test(name) ||
       !Number.isInteger(template.version) || template.version < 1 || typeof template.description !== 'string') fail(`Invalid graphic template identity: ${name}`);
   exact(template.box, ['left', 'top', 'width', 'height'], `Graphic template ${name} box`);
   const { left, top, width, height } = template.box;
