@@ -29,6 +29,16 @@ def main() -> int:
             # Provider profiles and source locks are repository metadata, not job artifacts.
             if "providers" in path.parts or path.name == "sources.lock.json":
                 continue
+            if "invalid" in path.parts:
+                # Semantic-negative fixtures: schema-valid, but validation must reject them.
+                rejected = subprocess.run(
+                    [sys.executable, str(CLI), "validate", "--file", str(path)],
+                    cwd=ROOT,
+                    capture_output=True,
+                ).returncode
+                if rejected == 0:
+                    raise SystemExit(f"expected validation to reject {path.relative_to(ROOT)}")
+                continue
             run(str(CLI), "validate", "--file", str(path))
 
     run("scripts/benchmark_unique_items.py")
