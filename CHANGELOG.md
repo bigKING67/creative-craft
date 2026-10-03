@@ -49,6 +49,12 @@ Gated video production on top of the existing contracts (see
   frame midpoints; frame times come from integer pts and stream time base; new
   `cut-boundary-fragments` check flags previous-shot fragments and transition
   flashes at cut points, while short shots shown whole stay aligned.
+- source frame alignment (local-production 0.6.0): v2 imports record an exact
+  `frame_rate` for constant-frame-rate video whose own stream starts at 0; at
+  compile time a video-track in-point truncated to just below a frame start
+  (≤ 2 ms and < 0.1 frame, e.g. 24.4333 or 24.433 at 30 fps) is moved to that
+  frame start + 0.1 ms, other in-points are untouched; render, captions and QA
+  share one compiled view. QA suggestions are relative to the written value.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in
