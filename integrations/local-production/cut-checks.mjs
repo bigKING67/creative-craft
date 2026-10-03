@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { mapLimit } from './media-analysis.mjs';
-import { CAPTION_CUT, TIME_EPS, captionCutCheck, cutPoints, decodeWindow, round6, sourceTimings } from './burned-captions.mjs';
+import { CAPTION_CUT, TIME_EPS, captionCutCheck, cutPoints, decodeWindow, documentSeconds, round6, sourceTimings } from './burned-captions.mjs';
 import { fragmentCutCheck } from './cut-fragments.mjs';
 
 // One pass over the SOURCE around every video item's in/out point for all
@@ -25,7 +25,13 @@ export async function runCutChecks(doc, root, checks, { sampleAt = () => null, d
   if (!points.length) return checks.map(check => ({ status: 'not_applicable', observation: check.none, measured: { ...check.measured, points: [] } }));
   const results = await mapLimit(points, CAPTION_CUT.concurrency, async point => {
     const file = path.join(root, assets.get(point.item.asset_id).file), ranges = checks.map(check => check.range(point));
-    const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round6(point.source_seconds), output_seconds: round6(point.output_frame / fps) };
+    // Reported in the document's terms: source_seconds is the value the document
+    // holds (what an edit changes; suggestions and shifts are based on it). A
+    // corrected in-point (see cutPoints) also lists the time the render plays,
+    // compiled_source_seconds, and the in-point the source_frame it was corrected to.
+    const compiled = 'document_source_seconds' in point ? { compiled_source_seconds: round6(point.source_seconds) } : {};
+    const frame = 'source_frame' in point ? { source_frame: point.source_frame } : {};
+    const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round6(documentSeconds(point)), ...compiled, ...frame, output_seconds: round6(point.output_frame / fps) };
     const unknown = error => ({ ...entry, result: 'unknown', error: error.message.slice(0, 200) });
     let window;
     try {

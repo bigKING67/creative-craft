@@ -5,6 +5,8 @@ export const round9 = value => Math.round(value * 1e9) / 1e9;
 // P2 speed: output frames play `speed` seconds of source per output second.
 export const speedOf = item => item.speed ?? 1;
 export const sourceSeconds = (item, fps) => item.frames / fps * speedOf(item);
+// How far a source range (media item, caption link) may run past its asset's duration.
+export const SOURCE_END_TOLERANCE = 0.001;
 
 // Linked captions store source time only. Their output window is the
 // intersection of the link range with the media item's current source window,

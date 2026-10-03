@@ -1,5 +1,5 @@
 import { speedOf } from './timeline.mjs';
-import { CAPTION_CUT, TIME_EPS, frameMidAt, frameStep, round6 } from './burned-captions.mjs';
+import { CAPTION_CUT, TIME_EPS, compiledNote, documentSeconds, frameMidAt, frameStep, round6 } from './burned-captions.mjs';
 
 // Fragments of adjacent source shots at cut points. An in-point chosen a little
 // before the source's own shot change opens the item with the tail of the
@@ -70,7 +70,10 @@ const lastAtOrBefore = (times, t) => { let k = -1; while (k + 1 < times.length &
 // (through speed and source vs canvas frame rate: output frame j shows the
 // source frame at or before first + j × step); source_frames counts the source
 // frames of the fragment. change_mid_seconds is the midpoint of the changed frame.
-export function judgeFragment(edge, { times, changes, at, step, frame, first, last, fileStart = false, fileEnd = false, itemFrames }, p = CUT_FRAGMENT) {
+// `at` is the time the render plays (judged); `written` (default `at`) is the
+// document's in-point, the base of suggested_shift_seconds, so written + shift
+// is suggested_source_in_seconds.
+export function judgeFragment(edge, { times, changes, at, written = at, step, frame, first, last, fileStart = false, fileEnd = false, itemFrames }, p = CUT_FRAGMENT) {
   const W = p.window_seconds, F = p.flash_seconds;
   // Output frames whose source time is before t (they show frames before t).
   const outputBefore = t => Math.min(itemFrames, Math.max(0, Math.ceil((t - first) / step - TIME_EPS)));
@@ -88,7 +91,7 @@ export function judgeFragment(edge, { times, changes, at, step, frame, first, la
     for (let n = changes.find(k => k > c); n !== undefined && times[n] - times[c] < F - TIME_EPS && times[n] <= last + TIME_EPS; n = changes.find(k => k > c)) c = n;
     const suggested = round6(frameMidAt(times, c, frame));
     return { result: 'warn', kind: flash || c !== e ? 'flash' : 'fragment', fragment_frames: outputBefore(times[c]), source_frames: c - k0, ...change(e),
-      suggested_source_in_seconds: suggested, suggested_shift_seconds: round6(suggested - at) };
+      suggested_source_in_seconds: suggested, suggested_shift_seconds: round6(suggested - written) };
   }
   const kL = lastAtOrBefore(times, at - step);
   if (kL < 0) throw new Error('out-point frame not decoded');
@@ -124,7 +127,7 @@ export function fragmentCutCheck(sceneThreshold = 0.3, p = CUT_FRAGMENT) {
       if (window.frames.length < 4) throw new Error('too few decoded frames');
       const { item } = point, step = speedOf(item) / fps, first = item.source_in_seconds, last = first + (item.frames - 1) * step;
       const frame = frameStep(window.times), changes = shotChanges(window.frames, { sceneJump, shotMad: p.shot_mad });
-      const judged = judgeFragment(point.edge, { times: window.times, changes, at: point.source_seconds, step, frame, first, last, itemFrames: item.frames,
+      const judged = judgeFragment(point.edge, { times: window.times, changes, at: point.source_seconds, written: documentSeconds(point), step, frame, first, last, itemFrames: item.frames,
         fileStart: from <= 0, fileEnd: window.times.at(-1) + 1.5 * frame < to }, p);
       const near = changes.map(k => window.times[k]).filter(t => Math.abs(t - point.source_seconds) <= W + F);
       return { ...judged, shot_changes: near.map(round6) };
@@ -132,7 +135,7 @@ export function fragmentCutCheck(sceneThreshold = 0.3, p = CUT_FRAGMENT) {
     summary: n => ({
       scope: `${n} source cut point(s)`, finding: 'adjacent-shot fragment',
       describe: e => e.edge === 'in'
-        ? `${e.item_id} in-point opens with ${e.fragment_frames} output frame(s) (${e.source_frames} source frame(s)) of ${what(e)}: source in ${e.source_seconds.toFixed(6)} s → ${e.suggested_source_in_seconds.toFixed(6)} s (midpoint of the first frame after the change)`
+        ? `${e.item_id} in-point opens with ${e.fragment_frames} output frame(s) (${e.source_frames} source frame(s)) of ${what(e)}: source in ${e.source_seconds.toFixed(6)} s${compiledNote(e)} → ${e.suggested_source_in_seconds.toFixed(6)} s (midpoint of the first frame after the change)`
         : `${e.item_id} out-point ends with ${e.fragment_frames} output frame(s) (${e.source_frames} source frame(s)) of ${what(e)}: end before the source change (changed frame midpoint ${e.change_mid_seconds.toFixed(6)} s) → ${e.suggested_frames} output frame(s) (drop ${e.drop_output_frames}; source out ${e.suggested_source_out_seconds.toFixed(6)} s, midpoint of the changed frame)`,
       warned: (count, details, unchecked) => `${count} of ${n} source cut point(s) show a fragment of an adjacent source shot within ${W} s inside the cut: ${details}.${unchecked}`,
       pass: `No adjacent-shot fragment or flash within ${W} s inside any of ${n} source cut point(s).`,

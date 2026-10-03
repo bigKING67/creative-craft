@@ -44,7 +44,9 @@ const reasons = { 'audio-only-asset-on-video-track': /has no video/, 'caption-li
   'graphic-var-bad-name': /Graphic var Title must be a string/, 'graphic-var-too-long-utf16': /Graphic var title must be a string \(1–200\)/,
   // Graphic templates pinned to the revision.
   'graphic-template-unbound': /Graphic item lower uses template lower-third without a graphic_templates binding/, 'graphic-template-duplicate-binding': /Duplicate graphic template binding: lower-third/,
-  'graphic-template-unused-binding': /Unused graphic template binding: title-card/, 'graphic-template-file-mismatch': /file must be templates\/<sha256>\.json/ };
+  'graphic-template-unused-binding': /Unused graphic template binding: title-card/, 'graphic-template-file-mismatch': /file must be templates\/<sha256>\.json/,
+  // Source frame snapping.
+  'audio-asset-with-frame-rate': /Asset music frame_rate requires a video stream/ };
 test('a pinned document is never validated without its template set unless structural-only is explicit', async () => {
   const doc = await load('valid', 'pinned-templates.json');
   assert.throws(() => validateV2(doc), /pinned to this revision are not loaded/);

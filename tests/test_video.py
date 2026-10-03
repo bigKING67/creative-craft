@@ -72,6 +72,7 @@ class EditDocumentContractTests(unittest.TestCase):
             "graphic-template-duplicate-binding": "duplicates binding for 'lower-third'",
             "graphic-template-unused-binding": "binds 'title-card', which no graphic uses",
             "graphic-template-file-mismatch": "file must be templates/<sha256>.json",
+            "audio-asset-with-frame-rate": "asset 'music' frame_rate requires a video stream",
             "crossfade-overlap-mismatch": "must exactly overlap the end of its preceding media item talk1",
             "crossfade-without-overlap": "crossfade of 5 frames must exactly overlap",
             "duck-on-video-track": "duck is only allowed on audio tracks",

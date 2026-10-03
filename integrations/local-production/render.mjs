@@ -8,6 +8,7 @@ import { copyBoundTemplates } from './template-binding.mjs';
 import { audibleItems, isV2 } from './timeline.mjs';
 import { templateProvenance } from './templates.mjs';
 import { mediaTool } from './media-analysis.mjs';
+import { compiledView } from './source-frames.mjs';
 
 const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
@@ -37,9 +38,13 @@ export async function lintComposition(html) {
 
 export async function renderProject(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
   const { doc: project, templates } = await loadProject(root, revision);
-  await verifyAssets(root, project, templates);
+  // Source frame alignment: the compiled view is computed once here and shared by
+  // the font glyph checks (verifyAssets, copyCaptionFont) and compose, which use
+  // a view passed in as is. project.json keeps the document as written.
+  const view = isV2(project) ? compiledView(project) : project;
+  await verifyAssets(root, view, templates);
   const { width, height } = outputSize(project.canvas, preview);
-  const compiled = compose(project, { width, height }, { templates });
+  const compiled = compose(view, { width, height }, { templates });
   destination = await safePath(destination);
   root = await safePath(root);
   if (destination === root || destination.startsWith(root + path.sep)) throw new Error('Render outside the immutable project');
@@ -62,7 +67,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     signal?.throwIfAborted();
     await fs.writeFile(path.join(destination, 'project.json'), JSON.stringify(project, null, 2) + '\n', { flag: 'wx' });
     receipt.project_sha256 = await digest(path.join(destination, 'project.json'));
-    await copyCaptionFont(root, destination, project, templates);
+    await copyCaptionFont(root, destination, view, templates);
     await copyBoundTemplates(root, destination, project); // Pinned template bytes travel with the render.
     await fs.mkdir(path.join(destination, 'assets'));
     for (const asset of project.assets) {

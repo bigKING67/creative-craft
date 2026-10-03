@@ -11,6 +11,7 @@ import { TEMPLATES, TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
 import { checkLockedTemplates, installTemplates, loadPinnedTemplates, planTemplateBindings, renderedTemplateSha, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 import { digest, sha256, writeOnce } from './content-store.mjs';
+import { probedFrameRate } from './source-frames.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -37,14 +38,20 @@ export async function ffprobeJson(file) {
   return JSON.parse(stdout);
 }
 
-export async function probe(file) {
+// The video flag, width and height come from the first video stream of any
+// kind, cover art included (unchanged since local-edit.v1). { frameRate: true }
+// (EditDocument v2 asset import) adds frame_rate when probedFrameRate trusts
+// it, which requires that same first video stream to be the picture (not cover
+// art), so frame_rate, width and height always describe one stream.
+export async function probe(file, { frameRate = false } = {}) {
   const result = await ffprobeJson(file);
   const video = result.streams.find(s => s.codec_type === 'video');
   const audio = result.streams.find(s => s.codec_type === 'audio');
   const duration = Number(result.format.duration);
   if (!number(duration, 0.001, 1800)) fail('Media duration must be 0–1800 seconds');
+  const rate = frameRate ? probedFrameRate(result) : null;
   return { duration, video: Boolean(video), audio: Boolean(audio),
-    width: video?.width ?? 0, height: video?.height ?? 0 };
+    width: video?.width ?? 0, height: video?.height ?? 0, ...(rate ? { frame_rate: rate } : {}) };
 }
 
 export function validate(project) {
@@ -138,12 +145,14 @@ async function publish(root, project) {
   await writeOnce(path.join(dir, revisionName(project.revision)), { bytes }, { expected: sha256(bytes), conflict: 'Revision conflict; read the latest project' });
 }
 
-async function importAsset(file) {
+// v2: true for EditDocument v2 imports (create, add_asset), which record
+// frame_rate; local-edit.v1 assets have no such field and are not probed for it.
+async function importAsset(file, { v2 }) {
   if (typeof file !== 'string') fail('Invalid import');
   const source = await safePath(file);
   if (!(await fs.stat(source)).isFile()) fail('Source must be a file');
   const sha256 = await digest(source);
-  return { source, asset: { file: `assets/${sha256}.media`, sha256, ...await probe(source) } };
+  return { source, asset: { file: `assets/${sha256}.media`, sha256, ...await probe(source, { frameRate: v2 }) } };
 }
 
 // Content-addressed copies; an existing identical file is reused, never replaced.
@@ -167,7 +176,7 @@ export async function createProject(root, spec) {
     if (!id(item.id)) fail('Invalid import');
     const origin = item.origin ?? { kind: 'import' };
     if (!v1) validateNewAssetOrigin(origin);
-    const imported = await importAsset(item.path);
+    const imported = await importAsset(item.path, { v2: !v1 });
     imported.asset = { id: item.id, ...imported.asset, ...(v1 ? {} : { origin }) };
     imports.push(imported);
   }
@@ -297,7 +306,7 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   let next, revert = null, rebind = null;
   if (alone('revert_to')) ({ next, target: revert } = await revertContent(root, base, batch.operations[0]));
   else if (alone('rebind_template')) { rebind = checkRebind(base, batch.operations[0]); next = structuredClone(base); }
-  else next = await applyOperations(base, batch.operations, { importAsset, imports });
+  else next = await applyOperations(base, batch.operations, { importAsset: file => importAsset(file, { v2: true }), imports });
   const operations_sha256 = operationsSha256(batch.operations);
   Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
