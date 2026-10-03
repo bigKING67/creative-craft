@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 // Graphic templates are versioned execution-layer resources: fixed HTML/CSS in
 // this repository plus typed variables. Documents only choose a template id and
@@ -130,23 +131,53 @@ export function enforceMinimumText(template) {
   return template;
 }
 const freeze = value => { for (const v of Object.values(value)) if (v && typeof v === 'object') freeze(v); return Object.freeze(value); };
-// Templates are not pinned inside edit revisions; receipts record which template
-// bytes rendered a revision so a later template change is visible in provenance.
-// The digest is taken over the same bytes that were parsed and validated.
-const TEMPLATE_SHA256 = new Map();
-export const TEMPLATES = new Map(readdirSync(directory).filter(n => n.endsWith('.json')).sort().map(file => {
-  const name = file.slice(0, -5), bytes = readFileSync(new URL(file, directory));
-  TEMPLATE_SHA256.set(name, createHash('sha256').update(bytes).digest('hex'));
-  return [name, freeze(validateTemplate(name, enforceMinimumText(JSON.parse(bytes.toString('utf8')))))];
-}));
+export const templateSha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+// One parse path for execution-layer and project-bound template bytes: the
+// minimum text size and every load rule apply to both.
+export const parseTemplate = (name, bytes) => freeze(validateTemplate(name, enforceMinimumText(JSON.parse(Buffer.from(bytes).toString('utf8')))));
 
-export const getTemplate = name => TEMPLATES.get(name) ?? fail(`Unknown graphic template: ${name}`);
-export const templateProvenance = doc => [...new Set((doc.items ?? []).filter(i => i.kind === 'graphic').map(i => i.template))]
-  .sort().map(id => ({ id, version: getTemplate(id).version, sha256: TEMPLATE_SHA256.get(id) }));
+// Execution-layer templates: parsed, validated bytes plus their digest (taken
+// over the same bytes). Edit revisions pin these bytes (graphic_templates);
+// revisions without bindings render with whatever this registry holds.
+function loadRuntime(dir) {
+  return new Map(readdirSync(dir).filter(n => n.endsWith('.json')).sort().map(file => {
+    const name = file.slice(0, -5), bytes = readFileSync(new URL(file, dir));
+    return [name, Object.freeze({ template: parseTemplate(name, bytes), bytes, sha256: templateSha256(bytes) })];
+  }));
+}
+let RUNTIME = loadRuntime(directory);
+export let TEMPLATES = new Map([...RUNTIME].map(([name, entry]) => [name, entry.template]));
+export const runtimeTemplate = name => RUNTIME.get(name) ?? fail(`Unknown graphic template: ${name}`);
+// Test hook: simulates an execution-layer template upgrade. Returns a restore function.
+export function useRuntimeTemplates(dir) {
+  const saved = RUNTIME;
+  const swap = registry => { RUNTIME = registry; TEMPLATES = new Map([...RUNTIME].map(([name, entry]) => [name, entry.template])); };
+  swap(loadRuntime(dir instanceof URL ? dir : pathToFileURL(dir.endsWith('/') ? dir : `${dir}/`)));
+  return () => swap(saved);
+}
+
+// Template set of a document: revisions with graphic_templates use only the
+// bound bytes loaded from their project (attached by readProject or the edit
+// path); revisions without the field use the execution-layer registry. null
+// means the revision pins templates whose bytes are not loaded here.
+const BOUND = new WeakMap();
+export const attachTemplates = (doc, templates) => { BOUND.set(doc, templates); return doc; };
+export const templatesFor = doc => (doc?.graphic_templates ? BOUND.get(doc) ?? null : TEMPLATES);
+export const requireTemplates = doc => templatesFor(doc) ?? fail('Graphic templates pinned to this revision are not loaded; read the revision from its project');
+
+export const getTemplate = (name, templates = TEMPLATES) => templates.get(name) ?? fail(`Unknown graphic template: ${name}`);
+// Receipt provenance: pinned bindings name the project file; unpinned
+// (historical) revisions name the execution-layer bytes that rendered them.
+export function templateProvenance(doc) {
+  if (doc.graphic_templates) return doc.graphic_templates.map(({ id, version, sha256, file }) => ({ id, version, sha256, pinned: true, source: 'project', file }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return [...new Set((doc.items ?? []).filter(i => i.kind === 'graphic').map(i => i.template))].sort()
+    .map(id => { const { template, sha256 } = runtimeTemplate(id); return { id, version: template.version, sha256, pinned: false, source: 'runtime' }; });
+}
 
 // Node-side semantic check of a graphic item's vars against its template.
-export function validateGraphicVars(item) {
-  const template = getTemplate(item.template), label = `Graphic item ${item.id}`;
+export function validateGraphicVars(item, templates = TEMPLATES) {
+  const template = getTemplate(item.template, templates), label = `Graphic item ${item.id}`;
   for (const key of Object.keys(item.vars)) if (key !== PLACEMENT_VAR && !(key in template.vars)) fail(`${label}: template ${template.id} has no var ${key}`);
   if (PLACEMENT_VAR in item.vars && !(typeof item.vars[PLACEMENT_VAR] === 'string' && Object.hasOwn(template.placements, item.vars[PLACEMENT_VAR]))) {
     fail(`${label}: placement must be one of ${Object.keys(template.placements).join(', ')} (template ${template.id})`);
@@ -159,28 +190,28 @@ export function validateGraphicVars(item) {
 }
 
 // Placement of a validated graphic item: its named box, or the template default.
-export function graphicPlacement(item) {
-  const template = getTemplate(item.template), name = item.vars?.[PLACEMENT_VAR] ?? template.default_placement;
+export function graphicPlacement(item, templates = TEMPLATES) {
+  const template = getTemplate(item.template, templates), name = item.vars?.[PLACEMENT_VAR] ?? template.default_placement;
   return { name, box: template.placements[name] ?? fail(`Graphic item ${item.id}: unknown placement ${name}`) };
 }
 
 // Resolved values (defaults applied) for a validated graphic item.
-export function graphicValues(item) {
-  const template = getTemplate(item.template);
+export function graphicValues(item, templates = TEMPLATES) {
+  const template = getTemplate(item.template, templates);
   return Object.fromEntries(Object.entries(template.vars).map(([k, def]) => [k, k in item.vars ? item.vars[k] : def.default]));
 }
 
 // Text runs the bound font must cover, with their weights.
-export function graphicTexts(item) {
-  const template = getTemplate(item.template), values = graphicValues(item);
+export function graphicTexts(item, templates = TEMPLATES) {
+  const template = getTemplate(item.template, templates), values = graphicValues(item, templates);
   return Object.entries(template.vars).filter(([k, d]) => d.type === 'string' && typeof values[k] === 'string')
     .map(([k, d]) => ({ text: values[k], weight: d.weight, font_em: d.font_em, var: k }));
 }
 
 // Fixed markup with escaped text. Returns the inner HTML, placement, root
 // attributes and inline custom properties; the caller adds timing, id and stacking.
-export function renderGraphic(item) {
-  const template = getTemplate(item.template), values = graphicValues(item), placement = graphicPlacement(item);
+export function renderGraphic(item, templates = TEMPLATES) {
+  const template = getTemplate(item.template, templates), values = graphicValues(item, templates), placement = graphicPlacement(item, templates);
   const inner = template.html.replace(/\{\{([a-z][a-z0-9_]*)\}\}/g, (_, key) => values[key] === undefined ? '' : escapeHtml(values[key]));
   const properties = [], attributes = [];
   for (const [key, def] of Object.entries(template.vars)) {
