@@ -252,7 +252,7 @@ export function captionCutCheck(bandOption, p = CAPTION_CUT) {
     },
     summary: n => ({
       scope: scope(n), finding: 'burned-in caption change',
-      describe: e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(4)} s → ${e.suggested_source_seconds.toFixed(6)} s`,
+      describe: e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(6)} s → ${e.suggested_source_seconds.toFixed(6)} s`,
       warned: (count, details, unchecked) => `${count} of ${scope(n)} show a burned-in caption change within ${p.window_seconds} s inside the cut (in-point: previous line still shown; out-point: next line flashes). Suggested source times (midpoint of the first changed source frame, so the cut cannot fall back onto the previous frame): ${details}.${unchecked} Frame-difference heuristic, not OCR.`,
       pass: `No burned-in caption change within ${p.window_seconds} s inside any of ${scope(n)}. Frame-difference heuristic, not OCR; it cannot read caption text.`,
     }),

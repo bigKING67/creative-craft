@@ -57,9 +57,24 @@ const lastAtOrBefore = (times, t) => { let k = -1; while (k + 1 < times.length &
 // shot-change indices; at: source in/out seconds; step: source seconds per
 // output frame; frame: source frame duration; first/last: the item's first and
 // last shown source times; fileStart/fileEnd: the window reached the file's
-// first/last frame (the shot really starts/ends there).
+// first/last frame (the shot really starts/ends there); itemFrames: the item's
+// output frames.
+//
+// A shot piece at an edge warns only when part of that shot lies OUTSIDE the
+// item (in: shown before the in-point; out: after the out-point) and either it
+// is mostly outside or the shot is a flash. A shot shown from its own first
+// frame (outside = 0) or to its own last frame (after = 0) is aligned with the
+// cut even when it is short: it is shown whole on that side, an edit choice.
+//
+// fragment_frames counts OUTPUT frames of the render that show the fragment
+// (through speed and source vs canvas frame rate: output frame j shows the
+// source frame at or before first + j × step); source_frames counts the source
+// frames of the fragment. change_mid_seconds is the midpoint of the changed frame.
 export function judgeFragment(edge, { times, changes, at, step, frame, first, last, fileStart = false, fileEnd = false, itemFrames }, p = CUT_FRAGMENT) {
   const W = p.window_seconds, F = p.flash_seconds;
+  // Output frames whose source time is before t (they show frames before t).
+  const outputBefore = t => Math.min(itemFrames, Math.max(0, Math.ceil((t - first) / step - TIME_EPS)));
+  const change = k => ({ change_seconds: round6(times[k]), change_mid_seconds: round6(frameMidAt(times, k, frame)) });
   if (edge === 'in') {
     const k0 = lastAtOrBefore(times, at);
     if (k0 < 0) throw new Error('in-point frame not decoded');
@@ -68,11 +83,11 @@ export function judgeFragment(edge, { times, changes, at, step, frame, first, la
     if (e === undefined) return { result: s === k0 ? 'aligned' : 'clear' };
     const outside = s < 0 ? Infinity : times[k0] - times[s], shown = times[e] - times[k0];
     const flash = outside + shown < F - TIME_EPS;
-    if (!flash && outside <= shown) return { result: s === k0 ? 'aligned' : 'clear', change_seconds: round6(times[e]) };
+    if (!(outside > TIME_EPS && (flash || outside > shown))) return { result: s === k0 ? 'aligned' : 'clear', ...change(e) };
     let c = e; // skip further short shots (a flash's way out) after the first change
     for (let n = changes.find(k => k > c); n !== undefined && times[n] - times[c] < F - TIME_EPS && times[n] <= last + TIME_EPS; n = changes.find(k => k > c)) c = n;
     const suggested = round6(frameMidAt(times, c, frame));
-    return { result: 'warn', kind: flash || c !== e ? 'flash' : 'fragment', fragment_frames: c - k0, change_seconds: round6(times[e]),
+    return { result: 'warn', kind: flash || c !== e ? 'flash' : 'fragment', fragment_frames: outputBefore(times[c]), source_frames: c - k0, ...change(e),
       suggested_source_in_seconds: suggested, suggested_shift_seconds: round6(suggested - at) };
   }
   const kL = lastAtOrBefore(times, at - step);
@@ -83,13 +98,13 @@ export function judgeFragment(edge, { times, changes, at, step, frame, first, la
   const s = inside.at(-1), after0 = kL + 1 < times.length ? times[kL + 1] : times[kL] + frame;
   const after = (e !== undefined ? times[e] : fileEnd ? times.at(-1) + frame : Infinity) - after0, shown = after0 - times[s];
   const flash = shown + after < F - TIME_EPS;
-  if (!flash && after <= shown) return { result: e === kL + 1 ? 'aligned' : 'clear', change_seconds: round6(times[s]) };
+  if (!(after > TIME_EPS && (flash || after > shown))) return { result: e === kL + 1 ? 'aligned' : 'clear', ...change(s) };
   let c = s; // skip further short shots before the last change (a flash's way in)
   for (let q = inside.findLast(k => k < c); q !== undefined && times[c] - times[q] < F - TIME_EPS; q = inside.findLast(k => k < c)) c = q;
   // Keep output frames whose source time is before frame c: the last shown frame is c − 1.
-  const keep = Math.max(1, Math.ceil((times[c] - first) / step - TIME_EPS));
+  const before = outputBefore(times[c]), keep = Math.max(1, before);
   const suggested = round6(frameMidAt(times, c, frame));
-  return { result: 'warn', kind: flash || c !== s ? 'flash' : 'fragment', fragment_frames: kL + 1 - c, change_seconds: round6(times[s]),
+  return { result: 'warn', kind: flash || c !== s ? 'flash' : 'fragment', fragment_frames: itemFrames - before, source_frames: kL + 1 - c, ...change(s),
     suggested_source_out_seconds: suggested, suggested_frames: keep, drop_output_frames: itemFrames - keep };
 }
 
@@ -117,8 +132,8 @@ export function fragmentCutCheck(sceneThreshold = 0.3, p = CUT_FRAGMENT) {
     summary: n => ({
       scope: `${n} source cut point(s)`, finding: 'adjacent-shot fragment',
       describe: e => e.edge === 'in'
-        ? `${e.item_id} in-point opens with ${e.fragment_frames} frame(s) of ${what(e)}: source in ${e.source_seconds.toFixed(4)} s → ${e.suggested_source_in_seconds.toFixed(6)} s (midpoint of the first frame after the change)`
-        : `${e.item_id} out-point ends with ${e.fragment_frames} frame(s) of ${what(e)}: end before the source change at ${e.change_seconds.toFixed(4)} s → ${e.suggested_frames} output frame(s) (drop ${e.drop_output_frames}; source out ${e.suggested_source_out_seconds.toFixed(6)} s)`,
+        ? `${e.item_id} in-point opens with ${e.fragment_frames} output frame(s) (${e.source_frames} source frame(s)) of ${what(e)}: source in ${e.source_seconds.toFixed(6)} s → ${e.suggested_source_in_seconds.toFixed(6)} s (midpoint of the first frame after the change)`
+        : `${e.item_id} out-point ends with ${e.fragment_frames} output frame(s) (${e.source_frames} source frame(s)) of ${what(e)}: end before the source change (changed frame midpoint ${e.change_mid_seconds.toFixed(6)} s) → ${e.suggested_frames} output frame(s) (drop ${e.drop_output_frames}; source out ${e.suggested_source_out_seconds.toFixed(6)} s, midpoint of the changed frame)`,
       warned: (count, details, unchecked) => `${count} of ${n} source cut point(s) show a fragment of an adjacent source shot within ${W} s inside the cut: ${details}.${unchecked}`,
       pass: `No adjacent-shot fragment or flash within ${W} s inside any of ${n} source cut point(s).`,
     }),

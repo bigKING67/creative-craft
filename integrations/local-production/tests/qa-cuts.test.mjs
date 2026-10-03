@@ -53,6 +53,7 @@ test('burned-in caption check: caption switching after the in-point warns with t
   assert.ok(Math.abs(point.suggested_source_seconds - 45.5 / 30) < 1e-3, `midpoint of the first changed frame (45): ${JSON.stringify(point)}`);
   assert.deepEqual(late.refs, [{ time_seconds: 0, item_id: 'm0' }]);
   assert.match(late.measured.method, /not OCR/);
+  assert.match(late.observation, /m0 in-point at source 1\.300000 s → 1\.516667 s/, 'times in the text: 6 decimals, the suggestion a frame midpoint');
   // Out-point 1.3 + 1 s = 2.3 s: the change at 1.5 s is 0.8 s before it (outside the window).
   assert.equal(late.measured.points.find(p => p.edge === 'out').result, 'clear');
   const aligned = await burnedCaptionCheck(docWith('caption.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 1.5 }]), dir);
@@ -180,20 +181,45 @@ const shotsSource = file => run(mediaTool('ffmpeg'), ['-v', 'error', '-n', '-f',
   '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
 
 test('cut-boundary fragments: judgement rules', () => {
-  const frame = 1 / 30, times = Array.from({ length: 120 }, (_, k) => k / 30), base = { times, step: frame, frame, itemFrames: 60 };
+  const frame = 1 / 30, times = Array.from({ length: 120 }, (_, k) => k / 30), base = { times, step: frame, frame };
   // Shot changes at frames 30, 50 (a 0.67 s shot), 75 and 100 (a 0.83 s shot).
   const changes = [30, 50, 75, 100];
-  const at = (edge, source, first, last) => judgeFragment(edge, { ...base, changes, at: source, first, last });
-  assert.deepEqual(at('in', 0.8, 0.8, 2.766667), { result: 'warn', kind: 'fragment', fragment_frames: 6, change_seconds: 1,
+  const at = (edge, source, first, last) => judgeFragment(edge, { ...base, changes, at: source, first, last, itemFrames: Math.round((last - first) / frame) + 1 });
+  assert.deepEqual(at('in', 0.8, 0.8, 2.766667), { result: 'warn', kind: 'fragment', fragment_frames: 6, source_frames: 6, change_seconds: 1, change_mid_seconds: 1.016667,
     suggested_source_in_seconds: 1.016667, suggested_shift_seconds: 0.216667 }, 'opens with 6 frames of the previous shot');
   assert.equal(at('in', 0.99999, 0.99999, 2.98).fragment_frames, 1, 'a hair before frame 30 (1.0 s) still shows frame 29');
   assert.equal(at('in', 1.016667, 1.016667, 2.98).result, 'aligned', 'midpoint of the first frame of the shot');
   assert.equal(at('in', 1.1, 1.1, 3).result, 'clear', 'the 0.67 s shot is shown from frame 33 on: mostly inside the item');
   // Out-point 1.7 s (last shown frame 50, the first of the new shot): ends with 1 frame of the next shot.
-  assert.deepEqual(at('out', 1.7, 0, 1.666667), { result: 'warn', kind: 'fragment', fragment_frames: 1, change_seconds: 1.666667,
-    suggested_source_out_seconds: 1.683333, suggested_frames: 50, drop_output_frames: 10 });
+  assert.deepEqual(at('out', 1.7, 0, 1.666667), { result: 'warn', kind: 'fragment', fragment_frames: 1, source_frames: 1, change_seconds: 1.666667, change_mid_seconds: 1.683333,
+    suggested_source_out_seconds: 1.683333, suggested_frames: 50, drop_output_frames: 1 });
   assert.equal(at('out', 1.6666667, 0, 1.633333).result, 'aligned', 'the change is the first frame after the cut');
   assert.equal(at('out', 3.3, 1.6, 3.266667).result, 'clear', 'the 0.83 s shot 75–99 cut 1 frame early is mostly shown, not a fragment');
+});
+
+test('cut-boundary fragments: a short shot shown whole on the cut side is aligned, a partly shown one is a flash', () => {
+  const frame = 1 / 30, times = Array.from({ length: 120 }, (_, k) => k / 30);
+  // A 0.33 s shot on frames 30–39 between two long shots.
+  const judge = (edge, at, first, frames) => judgeFragment(edge, { times, changes: [30, 40], at, step: frame, frame, first, last: first + (frames - 1) * frame, itemFrames: frames });
+  const fromFirst = judge('in', 1, 1, 40);
+  assert.deepEqual([fromFirst.result, fromFirst.change_seconds], ['aligned', 1.333333], 'in-point on the short shot\'s first frame: nothing of it lies before the cut');
+  const late = judge('in', 1.05, 1.05, 40);
+  assert.deepEqual([late.result, late.kind, late.fragment_frames, late.source_frames], ['warn', 'flash', 9, 9], 'frame 30 lies before the cut: the rest is a flash');
+  const toLast = judge('out', 40 / 30, 0.5, 25);
+  assert.deepEqual([toLast.result, toLast.change_seconds], ['aligned', 1], 'out-point right after the short shot\'s last frame (frame 40 starts the next shot)');
+  const early = judge('out', 1.3, 0.5, 24);
+  assert.deepEqual([early.result, early.kind, early.fragment_frames, early.suggested_frames], ['warn', 'flash', 9, 15], 'frame 39 lies after the cut: the shown part is a flash');
+});
+
+test('cut-boundary fragments count output frames through speed and source vs canvas frame rate', () => {
+  // 60 fps source, item at speed 2 on a 30 fps canvas: one output frame steps 4 source frames.
+  const frame = 1 / 60, step = 2 / 30, times = Array.from({ length: 180 }, (_, k) => k / 60);
+  const judged = judgeFragment('in', { times, changes: [60], at: 0.8, step, frame, first: 0.8, last: 0.8 + 29 * step, itemFrames: 30 });
+  assert.deepEqual([judged.result, judged.fragment_frames, judged.source_frames], ['warn', 3, 12], '12 source frames before 1.0 s fill output frames 0–2');
+  assert.equal(judged.suggested_source_in_seconds, 1.008333);
+  // Out: item from 0.2 s, 13 output frames (source 0.2 … 1.0); the last output frame shows frame 60, the next shot.
+  const out = judgeFragment('out', { times, changes: [60], at: 0.2 + 13 * step, step, frame, first: 0.2, last: 0.2 + 12 * step, itemFrames: 13 });
+  assert.deepEqual([out.result, out.fragment_frames, out.source_frames, out.suggested_frames, out.drop_output_frames], ['warn', 1, 1, 12, 1], 'the one shown source frame of the next shot is frame 60');
 });
 
 test('cut-boundary fragments on a synthetic source: shot tail, flash and next-shot head warn; aligned cuts pass', { timeout: 60000 }, async t => {
@@ -223,7 +249,7 @@ test('cut-boundary fragments on a synthetic source: shot tail, flash and next-sh
   assert.deepEqual([point('m2', 'out').kind, point('m2', 'out').suggested_frames], ['flash', 2]);
   assert.deepEqual(result.refs.map(r => r.item_id), ['m0', 'm2', 'm2', 'm3']);
   assert.deepEqual([result.measured.thresholds.shot_mad, result.measured.thresholds.scene_jump], [30, 30]);
-  assert.match(result.observation, /m0 in-point opens with 6 frame\(s\) of the previous source shot/);
+  assert.match(result.observation, /m0 in-point opens with 6 output frame\(s\) \(6 source frame\(s\)\) of the previous source shot: source in 1.300000 s → 1.516667 s/);
 });
 
 test('both cut-point checks share one decode per cut point and match the checks run alone', { timeout: 60000 }, async t => {
