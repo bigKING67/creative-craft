@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { digest, ffprobeJson, loadProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
 import { audibleItems, resolveCaptions } from './timeline.mjs';
+import { snapSourceFrames } from './source-frames.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
 import { templateSet } from './templates.mjs';
@@ -168,7 +169,7 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   const videoItems = doc.items.filter(i => i.kind === 'media' && doc.tracks.find(t => t.id === i.track_id).kind === 'video');
   const cuts = [...new Set(videoItems.flatMap(i => [i.start_frame, i.start_frame + i.frames]))].filter(f => f > 0 && f < total).sort((a, b) => a - b);
   for (const cut of cuts) { want(`s-cut${cut}-before`, cut - 1, 'cut_before'); want(`s-cut${cut}-after`, cut, 'cut_after'); }
-  const captions = resolveCaptions(doc);
+  const captions = resolveCaptions(snapSourceFrames(doc)); // windows as compiled
   const captionSample = new Map();
   for (const { item, start, end } of captions) {
     const frame = Math.floor((start + end) / 2 * fps);

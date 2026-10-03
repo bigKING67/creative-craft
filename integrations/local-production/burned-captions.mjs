@@ -1,6 +1,7 @@
 import { ffprobeJson, run } from './project.mjs';
 import { sourceSeconds, speedOf } from './timeline.mjs';
 import { mediaTool } from './media-analysis.mjs';
+import { snappedSourceIn } from './source-frames.mjs';
 
 // Burned-in caption cut points. Source footage often carries captions that are
 // part of the picture and switch slightly after the speech they belong to; an
@@ -215,14 +216,23 @@ export function judgeCutPoint(edge, at, events, { frame, step = frame, window = 
   return { result: 'warn', suggested_source_seconds: suggested, suggested_shift_seconds: round6(suggested - at) };
 }
 
-// Cut points of every video-track media item whose asset has picture.
+// Cut points of every video-track media item whose asset has picture, as the
+// render plays them. For a video asset with frame_rate the in-point is the
+// compiled one (sourceFrameAt: midpoint of the snapped source frame, the same
+// function compilation uses) and the out-point follows from it; point.item is
+// then the compiled item, and document_source_seconds / source_frame record the
+// written in-point and the frame it snapped to. Without frame_rate the written
+// times are judged with the renderer's rule (shownAtIn / shownBeforeOut).
 export function cutPoints(doc) {
   const fps = doc.canvas.fps, assets = new Map(doc.assets.map(a => [a.id, a]));
   const video = new Set(doc.tracks.filter(t => t.kind === 'video').map(t => t.id));
-  return doc.items.filter(i => i.kind === 'media' && video.has(i.track_id) && assets.get(i.asset_id)?.video !== false).flatMap(item => {
+  return doc.items.filter(i => i.kind === 'media' && video.has(i.track_id) && assets.get(i.asset_id)?.video !== false).flatMap(written => {
+    const snap = snappedSourceIn(written, assets.get(written.asset_id));
+    const item = snap.snapped ? { ...written, source_in_seconds: snap.seconds } : written;
+    const snapped = snap.snapped ? { document_source_seconds: written.source_in_seconds, source_frame: snap.frame } : {};
     const sourceOut = item.source_in_seconds + sourceSeconds(item, fps);
-    return [{ item, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame },
-      { item, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames }];
+    return [{ item, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame, ...snapped },
+      { item, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames, ...snapped }];
   });
 }
 
