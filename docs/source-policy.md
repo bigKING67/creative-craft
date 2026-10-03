@@ -1,5 +1,15 @@
 # Source policy
 
+Content-production engineering references are tracked separately in
+[Upstream absorption](upstream-absorption.md). That register distinguishes
+reviewed sources, integration candidates, implemented behavior, and verified
+outputs. It does not turn a reference into a runtime dependency or Provider
+authority. See [Content production architecture](content-production-architecture.md)
+for the core/integration/host boundary and the limited local-production MVP
+evidence. Limited DataHub integration has local isolated-test evidence; live
+provider quality and full production acceptance remain pending. Consult the
+register for scope instead of treating all integrations as uniformly complete.
+
 Creative Craft depends on changing model capabilities and stable creative
 principles. Treat them differently.
 

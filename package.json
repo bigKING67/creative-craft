@@ -1,6 +1,6 @@
 {
   "name": "@bigking67/creative-craft",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "private": true,
   "description": "Agent skill for distinctive campaign concepts, copy, art direction, image and video briefs, critique, and optional traceable production.",
   "license": "MIT",
@@ -41,7 +41,7 @@
   },
   "creativeCraft": {
     "python": ">=3.10",
-    "releaseStatus": "released",
+    "releaseStatus": "unreleased-candidate",
     "publishedInstallTag": "v0.3.0"
   },
   "scripts": {

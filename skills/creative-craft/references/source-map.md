@@ -73,6 +73,19 @@ that is absent from public model pages.
 
 ## Craft family
 
+Content-production engineering research is maintained in repository-only
+`docs/upstream-absorption.md`, alongside `docs/content-production-architecture.md`.
+Resolve these paths from a Creative Craft source checkout, not from an installed
+Skill leaf: repository docs are not bundled runtime instructions. The register
+covers HyperFrames, ChatCut Agent Plugin, OpenChatCut, OpenMontage, Remotion,
+Cerul, and OpenCut with separate reference and execution states; HyperFrames
+has local-production and limited DataHub integration evidence. Host tests use
+isolated storage and, for model paths, a loopback model fixture; they do not
+prove cloud-provider, recognition-quality or production acceptance. See the
+register for dated scope, evidence locations and planned absorption gates.
+Its 2026-09-20 review does not refresh the Provider facts dated
+above. Load it for upstream maintenance, not ordinary creative requests.
+
 Repository conventions and method inspiration:
 
 - `https://github.com/bigKING67/design-craft`

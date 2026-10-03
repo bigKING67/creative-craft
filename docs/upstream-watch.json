@@ -1,0 +1,275 @@
+{
+  "description": "Machine-readable watch list for docs/upstream-absorption.md. Read-only drift checks compare each pinned research SHA with the upstream default branch for the watched paths only. A change is a prompt for human review, never an automatic absorption. Update pinned_sha only together with a dated record in upstream-absorption.md.",
+  "upstreams": [
+    {
+      "id": "hyperframes",
+      "repo": "heygen-com/hyperframes",
+      "pinned_sha": "70900216f0dab460fc16256b0d43a973fd5e519b",
+      "license": "Apache-2.0 (root); assets, fonts and dependencies checked separately",
+      "status": "implemented",
+      "adoption": "package dependency + method",
+      "npm": {
+        "package": "@hyperframes/producer",
+        "pinned_in": "integrations/local-production/package.json"
+      },
+      "watch": [
+        {
+          "path": "skills/hyperframes-core/references/creator-editing-recipes.md",
+          "why": "edit recipes: trim, split, speed, crossfade, ducking",
+          "maps_to": [
+            "integrations/local-production/operations.mjs",
+            "docs/content-production-architecture.md#video-harness-v1"
+          ]
+        },
+        {
+          "path": "skills/hyperframes-cli/SKILL.md",
+          "why": "agent loop: lint, check, snapshot, preview, render",
+          "maps_to": [
+            "integrations/local-production/render.mjs",
+            "integrations/local-production/qa.mjs"
+          ]
+        },
+        {
+          "path": "skills/hyperframes-cli/references/lint-validate-inspect.md",
+          "why": "self-check tools the QA gate may reuse",
+          "maps_to": [
+            "integrations/local-production/qa.mjs"
+          ]
+        },
+        {
+          "path": "packages/producer/README.md",
+          "why": "executeRenderJob signature and render config",
+          "maps_to": [
+            "integrations/local-production/render.mjs"
+          ]
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "why": "EditOp union compared with our edit operations",
+          "maps_to": [
+            "integrations/local-production/operations.mjs"
+          ]
+        },
+        {
+          "path": "packages/cli/src/commands/timeline.ts",
+          "why": "timeline apply/undo and edit plans",
+          "maps_to": [
+            "integrations/local-production/operations.mjs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "chatcut-agent-plugin",
+      "repo": "ChatCut-Inc/agent-plugin",
+      "pinned_sha": "877b9177144feeecdef0da70f0e4d5cb760f6037",
+      "license": "unconfirmed at repository root; do not assume per-package terms",
+      "status": "implemented",
+      "adoption": "method",
+      "history_rewritten": true,
+      "watch": [
+        {
+          "path": "codex/skills/chatcut-plugin-basics/SKILL.md",
+          "why": "asset vs item model, layered reads, gap/ripple rules",
+          "maps_to": [
+            "skills/creative-craft/schemas/edit-document-v2.schema.json",
+            "skills/creative-craft/references/video-production.md#editing-an-existing-project"
+          ]
+        },
+        {
+          "path": "codex/skills/verification/SKILL.md",
+          "why": "re-read and inspect composited frames after edits",
+          "maps_to": [
+            "integrations/local-production/qa.mjs",
+            "skills/creative-craft/schemas/render-qa.schema.json"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openchatcut",
+      "repo": "0xsline/OpenChatCut",
+      "pinned_sha": "d03acbd6c7b15e7fd08b48f2c54cd1eaaeabc35a",
+      "license": "AGPL-3.0: method reference only, no source copying",
+      "status": "implemented",
+      "adoption": "method",
+      "watch": [
+        {
+          "path": "src/editor/reducerActions.ts",
+          "why": "shared human/agent edit operation set",
+          "maps_to": [
+            "integrations/local-production/operations.mjs"
+          ]
+        },
+        {
+          "path": "src/editor/reducerHistory.ts",
+          "why": "batch-as-one-step undo semantics",
+          "maps_to": [
+            "integrations/local-production/project.mjs"
+          ]
+        },
+        {
+          "path": "src/editor/trackTypes.ts",
+          "why": "track roles, anchor/follower ducking (P2)",
+          "maps_to": [
+            "skills/creative-craft/schemas/edit-document-v2.schema.json"
+          ]
+        },
+        {
+          "path": "assets/agent/openchatcut-tool-schemas.json",
+          "why": "agent tool granularity, validateOnly, verify_export",
+          "maps_to": [
+            "integrations/local-production/cli.mjs",
+            "integrations/local-production/qa.mjs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openmontage",
+      "repo": "calesthio/OpenMontage",
+      "pinned_sha": "08e2151fa02de28a5d6a312b3d575692bf147ad7",
+      "license": "AGPL-3.0: method reference only, no source copying",
+      "status": "implemented",
+      "adoption": "method",
+      "watch": [
+        {
+          "path": "pipeline_defs/hybrid.yaml",
+          "why": "stage inputs, outputs and approval defaults",
+          "maps_to": [
+            "skills/creative-craft/scripts/creative_craft_video.py"
+          ]
+        },
+        {
+          "path": "lib/checkpoint.py",
+          "why": "code-enforced gates and stage artifacts",
+          "maps_to": [
+            "skills/creative-craft/scripts/creative_craft_video.py"
+          ]
+        },
+        {
+          "path": "tools/cost_tracker.py",
+          "why": "reserve-then-settle budget ledger",
+          "maps_to": [
+            "skills/creative-craft/scripts/creative_craft_video.py"
+          ]
+        },
+        {
+          "path": "lib/slideshow_risk.py",
+          "why": "pre-render delivery-promise and degradation checks",
+          "maps_to": [
+            "skills/creative-craft/schemas/production-plan.schema.json",
+            "integrations/local-production/qa.mjs"
+          ]
+        },
+        {
+          "path": "skills/meta/video-reference-analyst.md",
+          "why": "per-shot reference teardown dimensions",
+          "maps_to": [
+            "skills/creative-craft/references/video-production.md"
+          ]
+        },
+        {
+          "path": "skills/meta/reviewer.md",
+          "why": "structured review findings",
+          "maps_to": [
+            "skills/creative-craft/schemas/render-qa.schema.json"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "remotion",
+      "repo": "remotion-dev/remotion",
+      "pinned_sha": "579e314165ce798cc7a4dfb229c50921bf4572ed",
+      "license": "Remotion License: company use has conditions; re-check before adoption",
+      "status": "candidate",
+      "adoption": "comparison only",
+      "watch": [
+        {
+          "path": "LICENSE.md",
+          "why": "license terms gate any adoption",
+          "maps_to": [
+            "docs/upstream-absorption.md#remotion"
+          ]
+        },
+        {
+          "path": "packages/skills/skills/remotion-markup/transitions.md",
+          "why": "transition premount rules (P2 transitions)",
+          "maps_to": [
+            "docs/content-production-architecture.md#video-harness-v1"
+          ]
+        },
+        {
+          "path": "packages/skills/skills/remotion-markup/audio.md",
+          "why": "keyframed volume (P2 fades, ducking)",
+          "maps_to": [
+            "docs/content-production-architecture.md#video-harness-v1"
+          ]
+        },
+        {
+          "path": "packages/skills/skills/remotion-markup/timing-props.md",
+          "why": "from/trim/duration semantics",
+          "maps_to": [
+            "docs/content-production-architecture.md#video-harness-v1"
+          ]
+        },
+        {
+          "path": "packages/skills/skills/remotion-markup/connected-compositions.md",
+          "why": "typed editable props with own timeline (P2 graphic templates)",
+          "maps_to": [
+            "docs/content-production-architecture.md#video-harness-v1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cerul",
+      "repo": "cerul-ai/cerul",
+      "pinned_sha": "e93237887eaa1788c03b85e5e6220d674a1ed7d3",
+      "license": "Apache-2.0 (Rust core); tools and model weights checked separately",
+      "status": "implemented",
+      "adoption": "method",
+      "watch": [
+        {
+          "path": "DESIGN.md",
+          "why": "index windows, multi-route recall, fusion and rebuild",
+          "maps_to": [
+            "skills/creative-craft/references/video-production.md#evidence-grounded-footage-selection"
+          ]
+        },
+        {
+          "path": "schemas/search-result.json",
+          "why": "hit structure with per-modality evidence",
+          "maps_to": [
+            "skills/creative-craft/schemas/production-plan.schema.json"
+          ]
+        },
+        {
+          "path": "schemas/fusion-moment.json",
+          "why": "fusion evidence fields",
+          "maps_to": [
+            "skills/creative-craft/schemas/production-plan.schema.json"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "opencut",
+      "repo": "OpenCut-app/OpenCut",
+      "pinned_sha": "400f097becba5db0fbc305d5a65348cb81c20356",
+      "license": "MIT",
+      "status": "deferred",
+      "adoption": "none",
+      "watch": [
+        {
+          "path": "README.md",
+          "why": "re-evaluate when Editor API, MCP or headless ship as runnable",
+          "maps_to": [
+            "docs/upstream-absorption.md#opencut"
+          ]
+        }
+      ]
+    }
+  ]
+}

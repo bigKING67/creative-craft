@@ -25,6 +25,28 @@ Use when the work requires iterative visual conversation, several constrained
 edits, or reference continuity. Maintain a revision ledger and repeat
 invariants in every turn.
 
+## Direction and framing preflight
+
+Before spending a refinement pass, identify the high-impact choices that
+define the image rather than its finish:
+
+- shot scale: close-up, medium view, or wide/environmental view;
+- subject role: dominant hero, co-equal object, or discoverable element within
+  a larger scene;
+- approximate subject scale in frame and the intended attention sequence;
+- environment density, negative space, and spatial depth;
+- whether props form a deliberate relationship through shape, scale, material,
+  and placement or merely decorate the product;
+- whether the supplied images contain watermarks, UI, signatures, or incidental
+  text that must not transfer;
+- whether a user, creative lead, or other decision owner has selected the
+  direction.
+
+Terms such as editorial, luxurious, cinematic, or object-focused are not a
+direction lock by themselves. Translate them into visible relationships. When
+feedback changes one of the choices above, return to composition/direction
+exploration instead of treating the request as a local correction.
+
 ## Image job fields
 
 A production-ready image job contains:
@@ -135,7 +157,10 @@ For a masked edit, identify the source image and mask as separate assets and
 state their roles explicitly. The source and mask must use the same dimensions
 and format, and the mask needs an alpha channel. Treat the mask as guidance,
 not a pixel-exact selection boundary. Keep the change/preserve contract even
-when a mask is present.
+when a mask is present. When unchanged pixels are a hard requirement, use a
+deterministic composite, traditional retouch, or pixel restoration step and
+measure change outside the intended region; do not claim that generative
+inpainting alone preserved it exactly.
 
 ## Iteration ladder
 
@@ -175,5 +200,7 @@ Change the smallest causal variable:
 - text error: shorten copy, isolate exact text, or typeset afterward;
 - style drift: state medium/material rules and remove conflicting style cues;
 - local defect: use a localized edit rather than full regeneration.
+- direction shift: stop local edits and return to route or art-direction
+  selection.
 
 Record the failed output and diagnosis. Do not erase unsuccessful lineage.

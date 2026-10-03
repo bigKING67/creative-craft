@@ -19,8 +19,10 @@ if str(SCRIPT_DIR) not in sys.path:
 from host_smoke import run_reference_runtime_e2e
 
 MAX_ARCHIVE_MEMBERS = 1_000
-# Shared with the npm dry-run boundary after measuring the v0.3 package contents.
-MAX_ARCHIVE_BYTES = 525_000
+# Shared with the npm dry-run boundary. Re-measured for Video Harness v1
+# (2026-10-02: 626,956 bytes unpacked). Growth is scripts/schemas, which agents do
+# not load into context; SKILL.md and references grew ~1 KB. Headroom covers P2.
+MAX_ARCHIVE_BYTES = 650_000
 
 
 def validated_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:

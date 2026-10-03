@@ -11,7 +11,8 @@ from pathlib import Path
 from package_smoke import MAX_ARCHIVE_BYTES
 
 ROOT = Path(__file__).resolve().parents[1]
-MAX_PACKED_BYTES = 150_000
+# Re-measured 2026-10-02: 145,745 bytes packed.
+MAX_PACKED_BYTES = 165_000
 MAX_UNPACKED_BYTES = MAX_ARCHIVE_BYTES
 
 
@@ -67,6 +68,7 @@ def main() -> int:
         "skills/creative-craft/scripts/creative_craft_project.py",
         "skills/creative-craft/scripts/creative_craft_project_ops.py",
         "skills/creative-craft/scripts/creative_craft_runtime.py",
+        "skills/creative-craft/scripts/creative_craft_video.py",
         "skills/creative-craft/templates/brand-binding.json",
         "skills/creative-craft/templates/brand-pack.json",
         "skills/creative-craft/templates/copy-sheet.json",

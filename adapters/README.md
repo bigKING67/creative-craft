@@ -9,9 +9,10 @@ Tier 1 in `0.2.0` means package/discovery and isolated installation are tested
 for Pi and Codex. Claude and Cursor adapters remain documentation-only and must
 not be described as runtime-verified.
 
-Version `0.3.0` keeps Pi and Codex as the runtime-verified Tier 1 hosts. It does
-not upgrade the documentation-only Claude, Cursor, or generic adapters to
-runtime-verified support.
+Version `0.3.0` keeps Pi and Codex as the runtime-verified Tier 1 hosts. The
+`0.3.1` candidate adds Grok format/discovery verification without promoting it
+to Tier 1. It does not upgrade the documentation-only Claude, Cursor, or generic
+adapters to runtime-verified support.
 
 A host adapter should declare:
 
@@ -27,6 +28,13 @@ Use the generic installer with an explicit destination:
 
 ```bash
 python3 scripts/install_skill.py --target /path/to/host/skills
+```
+
+For a local multi-host setup where each Agent discovers the shared Agents Skill
+root, keep one canonical installation:
+
+```bash
+python3 scripts/install_skill.py --target ~/.agents/skills
 ```
 
 The installer uses same-filesystem staging, validates the copied runtime,

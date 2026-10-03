@@ -18,6 +18,8 @@ def run(*args: str) -> None:
 def main() -> int:
     run(str(CLI), "doctor")
     run(str(CLI), "validate-project", "--root", str(ROOT / "examples/premium-haircare-launch"))
+    # Exits non-zero on digest drift between production.json and its bound artifacts.
+    run(str(CLI), "video-status", "--root", str(ROOT / "examples/talking-head-broll-cut"))
 
     artifact_dirs = [
         ROOT / "skills" / "creative-craft" / "templates",
@@ -28,6 +30,17 @@ def main() -> int:
         for path in sorted(directory.rglob("*.json")):
             # Provider profiles and source locks are repository metadata, not job artifacts.
             if "providers" in path.parts or path.name == "sources.lock.json":
+                continue
+            if "invalid" in path.parts:
+                # Semantic-negative fixtures: schema-valid, but validation must reject them.
+                rejected = subprocess.run(
+                    [sys.executable, str(CLI), "validate", "--file", str(path)],
+                    cwd=ROOT,
+                    capture_output=True,
+                    check=False,
+                ).returncode
+                if rejected == 0:
+                    raise SystemExit(f"expected validation to reject {path.relative_to(ROOT)}")
                 continue
             run(str(CLI), "validate", "--file", str(path))
 

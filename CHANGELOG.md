@@ -2,6 +2,98 @@
 
 All notable changes are documented here.
 
+## Unreleased — Video Harness v1
+
+Gated video production on top of the existing contracts (see
+`docs/content-production-architecture.md#video-harness-v1`):
+
+- shared `edit-document.v2` (multi-track, engine-independent edit truth) and
+  `render-qa.v1` contracts, with cross-language semantic fixtures enforcing that
+  the Node and Python validators agree;
+- `production-plan.v1` and `video-production.v1` with `video-*` CLI stage gates:
+  approval, footage evidence, bound generation Job/Receipt, render-qa bound to the
+  current revision, revision-round limit with an explicit human extension, export
+  bound to the delivered file and its export render-qa, delivery promises computed
+  on the exported revision, approved-plan protection, and a reserve-then-settle
+  budget ledger;
+- optional `integrations/local-production` 0.2.0: v2 edit batches (11 operations,
+  dry-run, stale-revision rejection, locked tracks, single-batch lock changes),
+  v1 migration, multi-track compilation, HyperFrames lint gate, ffmpeg-based QA
+  with composited samples; HyperFrames pinned to 0.8.108; the caption font binary
+  is fetched and digest-checked instead of committed;
+- `docs/upstream-watch.json` and `make upstream-check` for read-only upstream drift
+  review.
+- P2 packaging and audio (local-production 0.3.0): constant speed changes,
+  fades, crossfades, music ducking under a reference track, `lower-third` and
+  `title-card` graphic templates with typed variables, edit-time checks of the
+  512-point volume automation limit, limiter evidence (`audioLoweredDb`) and
+  caption/graphic safe-area checks in QA;
+- optional `policy.export_requires_human_review`: an accepted inspection waits
+  for a named `video-approve --stage inspect` sign-off. The local CLI records who
+  signed; verifying that the signer is a person is left to the host.
+- P2.1 from real-footage validation (local-production 0.4.0): burned-caption
+  cut-point check (light subtitles; frame-difference heuristic, not OCR), at least
+  one QA sample per shot, named template placements with a minimum text size of 3%
+  of the short edge, render receipts naming template id/version/digest, and a
+  local whisper.cpp `transcribe` command with a pinned, digest-checked model and
+  automatic clean-audio retry.
+- graphic templates pinned to edit revisions (local-production 0.5.0): optional
+  `graphic_templates` bindings to content-addressed, normalized template bytes in
+  the project; renders load only pinned bytes, `rebind_template` is an explicit
+  upgrade, `revert_to` restores the target's bindings, and locked tracks keep
+  their template bytes. Unpinned historical revisions render with runtime
+  templates and are marked `pinned: false`.
+
+The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
+growth is scripts and schemas that agents do not load into context. All media in
+tests, smoke runs and the example is synthetic: this proves contracts and the
+technical pipeline, not creative quality or production acceptance.
+
+## 0.3.2 — unreleased candidate
+
+Practical copy guidance and creative judgment improvements:
+
+- separate everyday copy development from the unchanged formal Copy Sheet
+  contract, keeping Quick Craft direct;
+- connect supported product features to a concrete reason to choose or use,
+  including desired activities rather than only storage or operation;
+- add eight fictional teaching contrasts with explicit limits on user acceptance,
+  and preserve expressive variety rather than prescribe a headline formula;
+- explicitly route a headline plus body text through copy-development guidance;
+- add repository-only Chinese diagnostic and human-feedback materials without
+  including evaluation logs in the installed Skill.
+
+One new-product first draft received user willingness to use; a backpack
+headline was accepted after collaborative revision. These are bounded examples,
+not evidence of stable creative improvement. Reference reading passed one
+focused recheck, not a repeatability test. This candidate includes the existing
+0.3.1 work below and is not a public release.
+
+## 0.3.1 — unreleased candidate
+
+Direction-gated refinement and Grok discovery portability:
+
+- distinguish bounded output defects from feedback that reopens shot scale,
+  subject hierarchy, visual world, narrative mechanism, or product role;
+- keep unresolved high-impact choices exploratory and allow at most two
+  targeted refinement passes only after direction selection and execution
+  authorization;
+- stop on no material improvement, reopened direction, conflicting evidence,
+  or cost/authorization limits, while preserving the best prior candidate;
+- clarify that generative masks are not pixel locks and route exact preservation
+  to deterministic compositing, retouch, or pixel restoration with verification;
+- add Grok Skill discovery documentation and an optional, no-model-call host
+  smoke while keeping Codex and Pi as the only runtime-verified Tier 1 hosts;
+- extend the isolated Agent quality suite with paired unlocked-direction and
+  locked-direction refinement cases without increasing its 40-call ceiling;
+- isolate user-level Skill discovery roots, bind observed entrypoint reads to
+  the intended fixture digest before later calls, and report quality-only
+  canaries as `PARTIAL` without requiring unrelated routing results.
+
+This candidate changes Agent behavior and host discovery evidence only. It adds
+no Provider adapter, real image/video Golden Eval, public release, or new
+versioned artifact contract.
+
 ## 0.3.0 — 2026-08-26
 
 Agent-first creative quality, copy authority, and modular runtime release:

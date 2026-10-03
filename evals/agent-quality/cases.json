@@ -38,6 +38,18 @@
       "prompt": "Critique this described six-second preroll: 0-2s, a skincare jar rotates on white while five benefit claims appear; 2-4s, a model touches her cheek and the line 'clinically perfect skin' appears; 4-6s, logo, 30% discount and three CTAs compete on screen. We have no performance data and no substantiation for 'clinically perfect skin'. Separate observations, interpretations and hypotheses, then recommend the smallest high-value revision."
     },
     {
+      "id": "direction-reopened-by-feedback",
+      "title": "Stakeholder feedback reopens image direction",
+      "expected_mode": "quick",
+      "prompt": "We have been iterating on a portrait jewelry image. The latest pass removed a watermark, separated the dark cord from the tray and toned down an overly blue stone. The stakeholder's response is: 'This feels too close-up. I want a wider scene and more of an object-world aesthetic.' What should happen next? Give a concise response that the production team can use."
+    },
+    {
+      "id": "locked-direction-bounded-refine",
+      "title": "Approved direction receives one bounded refinement",
+      "expected_mode": "quick",
+      "prompt": "The stakeholder has approved the wide environmental still-life composition, object hierarchy, product scale, props, crop and lighting. One edit pass remains. Her review notes are: there is a small bottom-right watermark, and the bracelet stone reads as saturated cyan instead of natural gray-blue with localized iridescence. Respond as the creative lead responsible for the next production step."
+    },
+    {
       "id": "traceable-campaign",
       "title": "Traceable multi-agent campaign setup",
       "expected_mode": "traceable",

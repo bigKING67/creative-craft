@@ -115,6 +115,68 @@ def command_error(completed: subprocess.CompletedProcess[str]) -> str:
     return completed.stderr.strip() or completed.stdout.strip() or "no command output"
 
 
+def grok_discovery_errors(
+    payload: object, expected_skill_file: Path
+) -> list[str]:
+    """Validate that Grok discovered the exact isolated Creative Craft leaf."""
+    if not isinstance(payload, dict):
+        return ["Grok inspect output must be a JSON object"]
+    skills = payload.get("skills")
+    if not isinstance(skills, list):
+        return ["Grok inspect output has no skills array"]
+
+    expected = expected_skill_file.resolve()
+    exact_matches: list[dict[str, object]] = []
+    for item in skills:
+        if not isinstance(item, dict) or item.get("name") != "creative-craft":
+            continue
+        source = item.get("source")
+        if not isinstance(source, dict):
+            continue
+        source_path = source.get("path")
+        if not isinstance(source_path, str):
+            continue
+        if Path(source_path).expanduser().resolve() == expected:
+            exact_matches.append(item)
+
+    if not exact_matches:
+        return [f"Grok did not discover Creative Craft from {expected}"]
+    if not any(item.get("userInvocable") is True for item in exact_matches):
+        return ["Grok discovered Creative Craft but did not mark it user-invocable"]
+    return []
+
+
+def run_grok_discovery(root: Path, grok_bin: str) -> list[str]:
+    """Run a no-model-call Grok discovery probe in an isolated project."""
+    executable = shutil.which(grok_bin)
+    if executable is None:
+        return [f"Grok executable not found: {grok_bin}"]
+
+    with tempfile.TemporaryDirectory(prefix="creative-craft-grok-smoke-") as directory:
+        project = Path(directory)
+        installed = project / ".grok" / "skills" / "creative-craft"
+        installed.parent.mkdir(parents=True)
+        shutil.copytree(
+            root / "skills" / "creative-craft",
+            installed,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
+        completed = subprocess.run(
+            [executable, "inspect", "--json"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return ["Grok inspect failed: " + command_error(completed)]
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            return [f"Grok inspect returned invalid JSON: {exc}"]
+        return grok_discovery_errors(payload, installed / "SKILL.md")
+
+
 def run_reference_runtime_e2e(
     installed: Path,
     workspace: Path,
@@ -293,6 +355,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--grok-bin",
+        help="optionally verify Grok Skill discovery without invoking a model",
+    )
     args = parser.parse_args()
     root = Path(args.root).resolve()
     errors: list[str] = []
@@ -317,6 +383,19 @@ def main() -> int:
         errors.append("Codex plugin skill pointer does not resolve to creative-craft/SKILL.md")
     else:
         checks.append("codex-plugin-discovery")
+
+    grok_adapter = root / "adapters" / "grok" / "README.md"
+    if not grok_adapter.is_file():
+        errors.append("missing Grok adapter documentation: adapters/grok/README.md")
+    else:
+        checks.append("grok-adapter-contract")
+
+    if args.grok_bin:
+        grok_errors = run_grok_discovery(root, args.grok_bin)
+        if grok_errors:
+            errors.extend(grok_errors)
+        else:
+            checks.append("grok-project-skill-discovery")
 
     with tempfile.TemporaryDirectory() as directory:
         completed = subprocess.run(

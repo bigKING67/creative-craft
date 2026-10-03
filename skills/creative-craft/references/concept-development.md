@@ -71,6 +71,31 @@ are usually more useful than ten superficial ones.
 
 ## Route selection
 
+Different mechanisms can still produce equally ordinary routes. Before
+presenting, test the work itself:
+
+- When the task is to motivate choice or use, identify the concrete want or
+  inconvenience and how a supported feature addresses it. An occasion plus a
+  feature is not yet a reason to choose. Test that connection in the intended
+  headline and image, not only in the rationale; label unresearched motivations
+  as hypotheses without inventing performance or forcing a pain point.
+- Replace the product with another in its category. If almost nothing changes,
+  find the missing connection to this product, audience, or situation. A shared
+  benefit can still work through a specific execution; do not invent exclusivity.
+- Remove style adjectives. Identify the action, relationship, or point of view
+  that still carries the idea.
+- Ask what the surprise helps the audience understand or remember. Novelty
+  that obscures the proposition is a reason to rework, not a bonus.
+- Read only the headline or describe only the hero moment. If the idea needs
+  the rationale to rescue it, strengthen the artifact before the explanation.
+
+Use these as editorial decisions, not a mandatory user-facing checklist or a
+scoring ritual. A clear demonstration or quiet observation can be the best
+answer; humor, metaphor, and provocation are options, not requirements.
+When routes remain generic or choosing between executions is difficult, read
+[creative-contrasts.md](creative-contrasts.md) for worked comparisons. Borrow
+the decision principle, not the wording, aesthetic, or scenario.
+
 Selection may use a weighted matrix, but weights must be explicit. Suggested
 dimensions:
 

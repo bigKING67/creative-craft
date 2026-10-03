@@ -150,12 +150,14 @@ Brand Pack 或其他 Reference Pack。
 
 ## 当前版本
 
-**`0.3.0`** 把 Quick Craft 设为 Agent 默认路径，把证据链运行时收进显式 Traceable
-Project 模式，收窄自动路由，并新增仓库内文本 A/B 评测工具。它同时保留一等
+当前工作树是尚未发布的 **`0.3.2` candidate**：增加方向门控的有限精修与 Grok
+发现证据，不修改公开工件合同，也不增加 Provider Adapter。`0.3.0` 把 Quick Craft
+设为 Agent 默认路径，把证据链运行时收进显式 Traceable Project 模式，收窄自动路由，
+并新增仓库内文本 A/B 评测工具。它同时保留一等
 `creative-craft.copy-sheet.v1` 文案权威、面向公开交付的具名 Owner 审批门禁、
 copy-bound Project Manifest v2、模块化 portable runtime/test、安全原子写入、
 索引化的 `uniqueItems` 校验，以及有评测证据支持的 Agent 创意质量提升。当前最新已
-发布、可安装的 GitHub 版本是不可变 `v0.3.0` tag。
+发布、可安装的 GitHub 版本仍是不可变 `v0.3.0` tag。
 
 Project Manifest v2 默认 `copy_policy=required`。每个 Image/Video Job 必须绑定一份
 Copy Sheet 和明确的 Copy Unit：`draft` 只用于探索，`reviewed` 可进入内部制作就绪，
@@ -210,6 +212,15 @@ clone 仓库后使用原子 installer：
 ```bash
 python3 scripts/install_skill.py --target /path/to/host/skills
 ```
+
+在 Codex 与 Grok 都发现共享 Agents Skill 根目录的本机环境中，只维护一份安装：
+
+```bash
+python3 scripts/install_skill.py --target ~/.agents/skills
+```
+
+Grok Build 的发现方式见 `adapters/grok/`。`0.3.2` candidate 已验证不调用模型的
+Skill discovery，但尚不声称 Grok Tier 1 运行态行为。
 
 `--force` 不会先删除旧版本：installer 会在目标文件系统 staging、自检、记录
 `INSTALL_PROVENANCE.json`，再原子替换并保留旧安装备份。Claude/Cursor 当前仅有
@@ -392,7 +403,7 @@ python3 skills/creative-craft/scripts/creative_craft.py project-status \
 
 ## Agent 质量评测
 
-仓库提供仅供维护者使用的文本评测工具：在七个真实创意任务上比较不加载 Skill 的
+仓库提供仅供维护者使用的文本评测工具：在九个真实创意任务上比较不加载 Skill 的
 baseline、选定的 committed comparison revision 和 worktree candidate，再做盲评
 计分与四个路由用例。内部 `baseline` / `current` evidence key 为兼容旧报告而保留，
 不表示本机或 package 中安装了多份 Skill。
@@ -405,9 +416,13 @@ python3 scripts/evaluate_agent_quality.py route --run-dir dist/evals/agent-quali
 python3 scripts/evaluate_agent_quality.py report --run-dir dist/evals/agent-quality/<run>
 ```
 
-工具使用临时 `0700` `CODEX_HOME`，只 symlink 现有 Codex auth 文件且不读取或复制
-内容，不安装全局 Skill；workspace 为空，Codex 使用 ephemeral、read-only、
-ignore-config/rules 参数。若本机使用自定义 model provider，工具只提取 `name`、
+工具使用临时 `0700` Codex home 与 user home，同时隔离 `CODEX_HOME`、
+`HOME`/`USERPROFILE`、XDG、shell profile 和平台 application-data 根目录；只 symlink
+现有 Codex auth 文件且不读取或复制内容，不安装全局 Skill。事件证据必须证明
+no-Skill baseline 没有读取 Creative Craft 入口，comparison/candidate 只读取各自
+digest 绑定的隔离副本；否则会在继续消耗盲评或路由调用前失败。workspace 为空，
+Codex 使用 ephemeral、read-only、ignore-config/rules 参数。若本机使用自定义 model
+provider，工具只提取 `name`、
 `base_url`、`wire_api`、auth mode 和 WebSocket support 这些非敏感白名单传输字段，
 作为 CLI override 传入，不复制用户 config。comparison revision 只导出到临时目录，
 生成结束即删除。证据写入已忽略的 `dist/evals/agent-quality/`，并绑定模型、
@@ -415,7 +430,14 @@ reasoning、comparison revision 和 candidate Skill digest。
 
 真实模型评测有成本，因此不进入 CI。当前只评测文本 Agent 输出，不调用图片/视频
 Provider；盲评模型的比较结论也不能替代真实输出检查或人类创意审批。每个变体在每个
-案例中只有一个生成样本和一次盲评，因此重复运行可能波动。
+案例中只有一个生成样本和一次盲评，因此重复运行可能波动。选定少数案例的 Canary
+可以在没有 routing 结果时生成报告，但状态保持 `PARTIAL`；只有完整 quality 与
+routing suite 才能通过面向发布的验收门禁。
+
+另有独立的[中文创意判断力评测材料](evals/creative-quality-zh/README.md)：四个诊断
+任务、两个保留任务及人工盲选说明。它们不接入默认评测套件，不改变调用上限；实际
+执行情况以绑定题目、Skill 快照和原始输出的独立运行记录为准。材料和离线检查通过
+不代表创意质量已经提升。
 
 ## 最重要的一条
 
