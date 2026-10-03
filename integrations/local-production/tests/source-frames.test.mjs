@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CORRECTION_SECONDS, compiledView, correctedSourceIn, correctionOf, parseFrameRate, pictureStream, probedFrameRate, reduceFrameRate,
+import { CORRECTION_SECONDS, compiledView, correctedSourceIn, correctionOf, parseFrameRate, pictureStream, probedFrameRate, rational, reduceFrameRate, streamStart,
   truncatedFrame } from '../source-frames.mjs';
 import { validateV2 } from '../edit-document.mjs';
 import { applyOperations } from '../operations.mjs';
@@ -12,7 +12,7 @@ import { compose } from '../composition.mjs';
 import { activeCaptions } from '../caption-font.mjs';
 import { cutPoints } from '../burned-captions.mjs';
 import { SOURCE_END_TOLERANCE, resolveCaptions, sourceSeconds } from '../timeline.mjs';
-import { createProject, editBatch, readProject, run } from '../project.mjs';
+import { createProject, editBatch, ffprobeJson, readProject, run } from '../project.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = async name => JSON.parse(await fs.readFile(path.resolve(here, '../../../tests/fixtures/edit-document-v2', name), 'utf8'));
@@ -91,21 +91,33 @@ test('frame rate parsing, reduction and import rules', () => {
   assert.equal(probedFrameRate(at0([video('30000/1001', '60000/2002')])), '30000/1001');
   // Variable frame rate (r ≠ avg): none, the renderer behaviour is kept.
   assert.equal(probedFrameRate(at0([video('30/1', '1800000/60061'), audio])), null);
-  // The picture stream must start at media time 0, and so must the file.
+  // The picture stream's own start (start_pts × time_base) must be 0.
   assert.equal(probedFrameRate(at0([video('30/1', '30/1', { start_pts: 7680, start_time: '0.500000' }), audio])), null);
   assert.equal(probedFrameRate({ streams: [video('30/1', '30/1', { start_pts: 7680, start_time: '0.500000' })], format: { start_time: '0.500000' } }), null);
-  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1'), { ...audio, start_time: '-0.021333' }], format: { start_time: '-0.021333' } }), null);
-  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1', { start_time: undefined })], format: { start_time: '0.000000' } }), null);
-  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1')], format: {} }), null);
+  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1', { start_pts: undefined })], format: { start_time: '0.000000' } }), null);
+  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1', { time_base: '0/0' })], format: { start_time: '0.000000' } }), null);
+  // Other streams and the file start do not matter: an audio stream starting
+  // below 0 (AAC priming) leaves the picture's frame grid at k / rate.
+  const primed = { ...audio, start_pts: -941, start_time: '-0.021338' };
+  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1'), primed], format: { start_time: '-0.021338' } }), '30/1');
+  assert.equal(probedFrameRate({ streams: [video('30/1', '30/1')], format: {} }), '30/1');
+  assert.equal(streamStart(primed), -941 / 44100);
+  assert.equal(streamStart(video('30/1', '30/1', { start_pts: 7680 })), 0.5);
   // Audio only, or only cover art.
   assert.equal(probedFrameRate(at0([audio])), null);
   const cover = video('90000/1', '0/0', { width: 64, height: 64, disposition: { attached_pic: 1 } });
   assert.equal(probedFrameRate(at0([audio, cover])), null);
   assert.equal(pictureStream(at0([audio, cover])), null);
-  // Cover art before the picture: width, height and frame rate all come from the picture.
+  // Cover art before the picture: the QA timing decodes the picture (0:v:1), but
+  // no frame_rate is recorded, since width and height come from the first video
+  // stream (the cover) and frame_rate must describe the same stream.
   const picture = video('25/1', '25/1', { width: 160, height: 90, disposition: { attached_pic: 0 } });
-  assert.equal(pictureStream(at0([cover, picture, audio])), picture);
-  assert.equal(probedFrameRate(at0([cover, picture, audio])), '25/1');
+  assert.deepEqual(pictureStream(at0([cover, picture, audio])), { stream: picture, index: 1 });
+  assert.equal(probedFrameRate(at0([cover, picture, audio])), null);
+  assert.deepEqual(pictureStream(at0([picture, cover, audio])), { stream: picture, index: 0 });
+  assert.equal(probedFrameRate(at0([picture, cover, audio])), '25/1');
+  assert.deepEqual(rational('1/15360'), { num: 1, den: 15360 });
+  for (const bad of ['0/0', '1/0', '30', undefined]) assert.equal(rational(bad), null, String(bad));
 });
 
 test('validateV2: frame_rate only on assets with a picture and in rational form', async () => {
@@ -251,17 +263,30 @@ test('import records frame_rate for v2 video (create and add_asset), not for aud
   await ff('-f', 'lavfi', '-i', 'sine=d=1', '-c:a', 'aac', file('tone.m4a'));
   await ff('-f', 'lavfi', '-i', 'color=c=red:s=64x64', '-frames:v', '1', file('cover.png'));
   await ff('-f', 'lavfi', '-i', 'sine=d=1', '-i', file('cover.png'), '-map', '1', '-map', '0', '-c:v', 'png', '-c:a', 'aac', '-disposition:v:0', 'attached_pic', file('cover.m4a'));
+  // Audio starting 44 ms before media time 0 (as AAC priming does), video at 0.
+  await ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-itsoffset', '-0.044', '-f', 'lavfi', '-i', 'sine=d=1.1',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-avoid_negative_ts', 'disabled', '-t', '1', file('primed.mkv'));
+  const primed = (await ffprobeJson(file('primed.mkv'))).streams;
+  assert.ok(primed.find(s => s.codec_type === 'audio').start_pts < 0 && primed.find(s => s.codec_type === 'video').start_pts === 0, 'fixture: audio before 0, video at 0');
   const root = path.join(dir, 'v2');
   const created = await createProject(root, { project_id: 'import-rate', title: 'import', canvas: { width: 320, height: 180, fps: 30 },
-    assets: [{ id: 'ntsc', path: file('ntsc.mp4') }, { id: 'tone', path: file('tone.m4a') }, { id: 'late', path: file('late.mp4') }, { id: 'cover', path: file('cover.m4a') }],
+    assets: [{ id: 'ntsc', path: file('ntsc.mp4') }, { id: 'tone', path: file('tone.m4a') }, { id: 'late', path: file('late.mp4') }, { id: 'cover', path: file('cover.m4a') },
+      { id: 'primed', path: file('primed.mkv') }],
     tracks: [{ id: 'v', kind: 'video', locked: false }],
     items: [{ id: 'a', track_id: 'v', kind: 'media', asset_id: 'ntsc', start_frame: 0, frames: 15, source_in_seconds: 0, volume: 0 }] });
   const rates = doc => Object.fromEntries(doc.assets.map(a => [a.id, a.frame_rate ?? null]));
-  assert.deepEqual(rates(created), { ntsc: '30000/1001', tone: null, late: null, cover: null });
+  assert.deepEqual(rates(created), { ntsc: '30000/1001', tone: null, late: null, cover: null, primed: '30/1' });
   assert.ok(!('frame_rate' in created.assets.find(a => a.id === 'tone')));
-  // Cover art is not a picture: no video, no size, no frame rate (one stream selection).
+  // Cover art keeps the historical video flag and size (first video stream), but
+  // has no frame rate (that stream is not a picture).
   const cover = created.assets.find(a => a.id === 'cover');
-  assert.deepEqual([cover.video, cover.audio, cover.width, cover.height], [false, true, 0, 0]);
+  assert.deepEqual([cover.video, cover.audio, cover.width, cover.height], [true, true, 64, 64]);
+  assert.ok(!('frame_rate' in cover));
+  // A local-edit.v1 project can use the audio file with cover art as a clip, as before.
+  const coverV1 = await createProject(path.join(dir, 'cover-v1'), { project_id: 'cover-v1', title: 'cover', canvas: { width: 320, height: 180, fps: 30 },
+    assets: [{ id: 'cover', path: file('cover.m4a') }], clips: [{ id: 'c', asset_id: 'cover', in_seconds: 0, frames: 15, volume: 1, fit: 'contain', captions: [] }], audio: [] });
+  assert.deepEqual([coverV1.assets[0].video, coverV1.assets[0].width, coverV1.assets[0].height], [true, 64, 64]);
+  assert.ok(!('frame_rate' in coverV1.assets[0]));
   // The video starting at 0.5 s is still a picture, without a frame grid at k / rate.
   assert.deepEqual(['video', 'width', 'height'].map(k => created.assets.find(a => a.id === 'late')[k]), [true, 160, 90]);
   await editBatch(root, { base_revision: 1, author: 'agent', summary: 'add', operations: [{ type: 'add_asset', id: 'pal', path: file('pal.mp4') }] });

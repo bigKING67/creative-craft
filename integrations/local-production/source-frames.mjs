@@ -44,13 +44,20 @@ function decimalFraction(value) {
   return exponent >= 0 ? { p: digits * 10n ** BigInt(exponent), q: 1n } : { p: digits, q: 10n ** BigInt(-exponent) };
 }
 
+// An ffprobe ratio ("30/1", "1/15360") with both terms positive → { num, den }
+// (Numbers); null otherwise ("0/0", missing). Shared by import (frame rates)
+// and the QA source timing (time bases).
+export function rational(value) {
+  const m = /^(\d+)\/(\d+)$/.exec(String(value ?? ''));
+  return m && Number(m[1]) > 0 && Number(m[2]) > 0 ? { num: Number(m[1]), den: Number(m[2]) } : null;
+}
+
 const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
 // "30/1", "30000/1001" from ffprobe ratios, reduced; null when not a usable rate.
 export function reduceFrameRate(value) {
-  const m = /^(\d+)\/(\d+)$/.exec(String(value ?? ''));
-  if (!m) return null;
-  let num = BigInt(m[1]), den = BigInt(m[2]);
-  if (!num || !den) return null;
+  const r = rational(value);
+  if (!r) return null;
+  let num = BigInt(r.num), den = BigInt(r.den);
   const g = gcd(num, den); num /= g; den /= g;
   const text = `${num}/${den}`;
   return validFrameRate(text) ? text : null;
@@ -113,24 +120,43 @@ export function compiledView(doc) {
 // the source frame its in-point was corrected to), or null when unchanged.
 export const correctionOf = item => CORRECTIONS.get(item) ?? null;
 
-// The video stream analysed for an asset (width, height, frame_rate and the
-// `video` flag): the first video stream that is not cover art, or null.
-export const pictureStream = info => (info?.streams ?? []).find(s => s.codec_type === 'video' && !s.disposition?.attached_pic) ?? null;
+// The analysed picture stream of an ffprobe JSON: the first video stream that
+// is not cover art (attached_pic), as { stream, index } with index its position
+// among the video streams (ffmpeg's 0:v:index); null when there is none. The QA
+// source timing decodes this stream and import reads frame_rate from it.
+export function pictureStream(info) {
+  const videos = (info?.streams ?? []).filter(s => s.codec_type === 'video');
+  const index = videos.findIndex(s => !s.disposition?.attached_pic);
+  return index < 0 ? null : { stream: videos[index], index };
+}
+
+// A stream's start in media time from ffprobe integers: start_pts × time_base
+// (seconds), or null when either is missing or unusable.
+export function streamStart(stream) {
+  const tb = rational(stream?.time_base), pts = Number(stream?.start_pts);
+  return tb && stream.start_pts !== undefined && stream.start_pts !== null && stream.start_pts !== '' && Number.isInteger(pts)
+    ? pts * tb.num / tb.den : null;
+}
 
 // frame_rate recorded at import from one ffprobe JSON (-show_streams
 // -show_format), or null. Recorded only when the frame grid k / rate is
 // trustworthy:
-//   - the picture stream reports the same rate as r_frame_rate and
-//     avg_frame_rate (compared reduced). They differ for variable-frame-rate
-//     sources (and for some damaged or edited constant-rate files); such
-//     sources get no frame_rate and keep the renderer behaviour;
-//   - the picture stream starts at media time 0 and so does the file (stream
-//     start_time and format start_time both 0), so frame k starts at k / rate.
-// Audio-only files and cover art have no picture stream and get none.
-export function probedFrameRate(info, video = pictureStream(info)) {
-  if (!video) return null;
-  const rate = reduceFrameRate(video.r_frame_rate);
+//   - the first video stream is the picture (pictureStream index 0, not cover
+//     art), so the asset's width, height (probe: first video stream, as before
+//     frame_rate existed) and frame_rate describe the same stream;
+//   - it reports the same rate as r_frame_rate and avg_frame_rate (compared
+//     reduced). They differ for variable-frame-rate sources (and for some
+//     damaged or edited constant-rate files); such sources get no frame_rate
+//     and keep the renderer behaviour;
+//   - its own start (streamStart: start_pts × time_base, the source the QA
+//     timing uses) is 0, so frame k starts at k / rate. Other streams do not
+//     matter: an audio stream starting below 0 (AAC priming) does not move
+//     the picture's frame grid.
+// Audio-only files and cover art get none.
+export function probedFrameRate(info) {
+  const picture = pictureStream(info);
+  if (picture?.index !== 0) return null;
+  const video = picture.stream, rate = reduceFrameRate(video.r_frame_rate);
   if (!rate || rate !== reduceFrameRate(video.avg_frame_rate)) return null;
-  const zero = value => value !== undefined && value !== null && value !== '' && Number(value) === 0;
-  return zero(video.start_time) && zero(info?.format?.start_time) ? rate : null;
+  return streamStart(video) === 0 ? rate : null;
 }

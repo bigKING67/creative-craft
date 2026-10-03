@@ -11,7 +11,7 @@ import { TEMPLATES, TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
 import { checkLockedTemplates, installTemplates, loadPinnedTemplates, planTemplateBindings, renderedTemplateSha, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 import { digest, sha256, writeOnce } from './content-store.mjs';
-import { pictureStream, probedFrameRate } from './source-frames.mjs';
+import { probedFrameRate } from './source-frames.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -38,16 +38,18 @@ export async function ffprobeJson(file) {
   return JSON.parse(stdout);
 }
 
-// width, height, frame_rate and the video flag come from one stream selection
-// (pictureStream: the first non-cover-art video stream). { frameRate: true }
-// (EditDocument v2 asset import) adds frame_rate when probedFrameRate trusts it.
+// The video flag, width and height come from the first video stream of any
+// kind, cover art included (unchanged since local-edit.v1). { frameRate: true }
+// (EditDocument v2 asset import) adds frame_rate when probedFrameRate trusts
+// it, which requires that same first video stream to be the picture (not cover
+// art), so frame_rate, width and height always describe one stream.
 export async function probe(file, { frameRate = false } = {}) {
   const result = await ffprobeJson(file);
-  const video = pictureStream(result);
+  const video = result.streams.find(s => s.codec_type === 'video');
   const audio = result.streams.find(s => s.codec_type === 'audio');
   const duration = Number(result.format.duration);
   if (!number(duration, 0.001, 1800)) fail('Media duration must be 0–1800 seconds');
-  const rate = frameRate ? probedFrameRate(result, video) : null;
+  const rate = frameRate ? probedFrameRate(result) : null;
   return { duration, video: Boolean(video), audio: Boolean(audio),
     width: video?.width ?? 0, height: video?.height ?? 0, ...(rate ? { frame_rate: rate } : {}) };
 }

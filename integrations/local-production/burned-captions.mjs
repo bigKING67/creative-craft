@@ -1,7 +1,7 @@
 import { ffprobeJson, run } from './project.mjs';
 import { sourceSeconds, speedOf } from './timeline.mjs';
 import { mediaTool } from './media-analysis.mjs';
-import { compiledView, correctionOf } from './source-frames.mjs';
+import { compiledView, correctionOf, pictureStream, rational, streamStart } from './source-frames.mjs';
 
 // Burned-in caption cut points. Source footage often carries captions that are
 // part of the picture and switch slightly after the speech they belong to; an
@@ -93,25 +93,18 @@ export function stepEvents({ frames, times, width, height }, band = CAPTION_BAND
 }
 
 // Exact timing of a source file from ffprobe integers rather than printed
-// seconds: the analysed video stream (first one that is not cover art) with its
-// time_base, and the media-time origin start = earliest stream start_pts ×
-// time_base (format.start_time only if no stream reports start_pts). A decoded
+// seconds: the analysed picture stream (pictureStream, the same selection and
+// ratio parsing import uses for frame_rate) with its time_base, and the
+// media-time origin start = earliest stream start (streamStart: start_pts ×
+// time_base; format.start_time only if no stream reports start_pts). A decoded
 // frame's media time is pts × time_base − start, like data-media-start.
-const rational = value => {
-  const m = /^(\d+)\/(\d+)$/.exec(String(value ?? ''));
-  return m && Number(m[1]) > 0 && Number(m[2]) > 0 ? { num: Number(m[1]), den: Number(m[2]) } : null;
-};
 export async function sourceTiming(file) {
-  const info = await ffprobeJson(file), videos = (info.streams ?? []).filter(s => s.codec_type === 'video');
-  const index = videos.findIndex(s => !s.disposition?.attached_pic);
-  if (index < 0) throw new Error('source has no video stream');
-  const timeBase = rational(videos[index].time_base);
-  if (!timeBase) throw new Error(`ffprobe reported no usable video time_base (${videos[index].time_base})`);
-  const starts = info.streams.flatMap(s => {
-    const tb = rational(s.time_base), pts = Number(s.start_pts);
-    return tb && s.start_pts !== undefined && Number.isInteger(pts) ? [pts * tb.num / tb.den] : [];
-  });
-  return { start: starts.length ? Math.min(...starts) : Number(info.format?.start_time) || 0, time_base: timeBase, video_index: index };
+  const info = await ffprobeJson(file), picture = pictureStream(info);
+  if (!picture) throw new Error('source has no video stream');
+  const timeBase = rational(picture.stream.time_base);
+  if (!timeBase) throw new Error(`ffprobe reported no usable video time_base (${picture.stream.time_base})`);
+  const starts = info.streams.map(streamStart).filter(start => start !== null);
+  return { start: starts.length ? Math.min(...starts) : Number(info.format?.start_time) || 0, time_base: timeBase, video_index: picture.index };
 }
 
 // Memoised sourceTiming per file, so each source is probed once per check run.
