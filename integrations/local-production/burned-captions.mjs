@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { ffprobeJson, run } from './project.mjs';
 import { sourceSeconds } from './timeline.mjs';
-import { mediaTool } from './media-analysis.mjs';
+import { mapLimit, mediaTool } from './media-analysis.mjs';
 
 // Burned-in caption cut points. Source footage often carries captions that are
 // part of the picture and switch slightly after the speech they belong to; an
@@ -32,6 +32,7 @@ export const CAPTION_CUT = Object.freeze({
   line_share: 0.10, // ≥ 10% of the line window's pixels step …
   glyph_level: 200, glyph_share: 0.05, // … and ≥ 5% step to or from a light level (light caption glyphs)
   shot_mad: 30, // mean |Δ| outside the band ≥ 30 → full-frame shot change
+  concurrency: 4, // cut-point windows decoded in parallel
 });
 export const CAPTION_METHOD = 'frame-difference step heuristic on the source caption band (not OCR)';
 const round = (value, digits = 3) => Math.round(value * 10 ** digits) / 10 ** digits;
@@ -85,21 +86,31 @@ export function stepEvents({ frames, times, width, height }, band = CAPTION_BAND
 // Decode about [from, to) of a source file as grey frames (shorter edge
 // analysis_short_edge) with their source times: -copyts keeps the decoded
 // timestamps (showinfo pts_time), minus the container start time so they are
-// media-time seconds like data-media-start.
+// media-time seconds like data-media-start. -fps_mode passthrough writes every
+// decoded frame exactly once (the rawvideo muxer would otherwise default to
+// constant frame rate and duplicate/drop frames of variable-frame-rate sources),
+// so frame k is the frame showinfo reported k-th.
 export async function decodeWindow(file, from, to, p = CAPTION_CUT, startTime = 0) {
-  const ffmpeg = mediaTool('ffmpeg'), e = p.analysis_short_edge;
-  const start = Math.max(0, from);
-  const { stdout, stderr } = await run(ffmpeg, ['-hide_banner', '-nostats', '-v', 'info', '-copyts', '-ss', String(start), '-t', String(Math.max(0.05, to - start)), '-i', file,
-    '-an', '-sn', '-vf', `scale='if(lt(iw,ih),${e},-2)':'if(lt(iw,ih),-2,${e})',format=gray,showinfo`, '-f', 'rawvideo', 'pipe:1'],
+  const e = p.analysis_short_edge, start = Math.max(0, from);
+  const { stdout, stderr } = await run(mediaTool('ffmpeg'), ['-hide_banner', '-nostats', '-v', 'info', '-copyts', '-ss', String(start), '-t', String(Math.max(0.05, to - start)), '-i', file,
+    '-an', '-sn', '-vf', `scale='if(lt(iw,ih),${e},-2)':'if(lt(iw,ih),-2,${e})',format=gray,showinfo`, '-fps_mode', 'passthrough', '-f', 'rawvideo', 'pipe:1'],
   { encoding: 'buffer', timeout: 120000, maxBuffer: 512 * 1024 * 1024 });
-  const log = stderr.toString();
+  return splitFrames(stdout, stderr.toString(), startTime);
+}
+
+// Pair raw grey frames with showinfo times. A frame/time count mismatch means
+// the times cannot be trusted, so it throws (the cut point becomes unknown)
+// instead of silently truncating to the shorter list.
+export function splitFrames(raw, log, startTime = 0) {
   const size = log.match(/\bs:(\d+)x(\d+)/);
   if (!size) return { frames: [], times: [], width: 0, height: 0 };
   const width = Number(size[1]), height = Number(size[2]), N = width * height;
   const times = [...log.matchAll(/pts_time:\s*(-?[\d.]+)/g)].map(m => Number(m[1]) - startTime);
-  const count = Math.min(times.length, Math.floor(stdout.length / N));
-  const frames = Array.from({ length: count }, (_, k) => stdout.subarray(k * N, (k + 1) * N));
-  return { frames, times: times.slice(0, count), width, height };
+  if (raw.length % N !== 0 || raw.length / N !== times.length) {
+    throw new Error(`decoded ${raw.length / N} frame(s) but showinfo reported ${times.length} timestamp(s); frame times are not trustworthy`);
+  }
+  const frames = Array.from({ length: times.length }, (_, k) => raw.subarray(k * N, (k + 1) * N));
+  return { frames, times, width, height };
 }
 
 const frameStep = times => {
@@ -146,34 +157,42 @@ export async function burnedCaptionCheck(doc, root, { band: bandOption, sampleAt
       line_height: p.line_height, line_share: p.line_share, glyph_level: p.glyph_level, glyph_share: p.glyph_share, shot_mad: p.shot_mad }, points: [] };
   if (!points.length) return { status: 'not_applicable', observation: 'No video media items, so no source cut points to check for burned-in captions.', measured };
   // Pad each window so transitions at its ends still have steady_frames on both
-  // sides (sized for sources down to 15 fps).
+  // sides (sized for sources down to 15 fps). Windows decode with bounded
+  // concurrency; each file's container start time is probed once.
   const pad = (p.steady_frames + 1) / 15, starts = new Map();
-  for (const point of points) {
+  const startOf = file => {
+    if (!starts.has(file)) starts.set(file, ffprobeJson(file).then(info => Number(info.format.start_time) || 0));
+    return starts.get(file);
+  };
+  measured.points = await mapLimit(points, p.concurrency, async point => {
     const asset = assets.get(point.item.asset_id), file = path.join(root, asset.file);
     const [from, to] = point.edge === 'in' ? [point.source_seconds - pad, point.source_seconds + p.window_seconds + pad]
       : [point.source_seconds - p.window_seconds - pad, point.source_seconds + pad];
-    let entry = { item_id: point.item.id, edge: point.edge, source_seconds: round(point.source_seconds, 4), output_seconds: round(point.output_frame / fps, 6) };
+    const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round(point.source_seconds, 4), output_seconds: round(point.output_frame / fps, 6) };
     try {
-      if (!starts.has(file)) starts.set(file, Number((await ffprobeJson(file)).format.start_time) || 0);
-      const window = await decodeWindow(file, from, to, p, starts.get(file));
+      const window = await decodeWindow(file, from, to, p, await startOf(file));
       if (window.frames.length < 2 * p.steady_frames + 1) throw new Error('too few decoded frames');
       const events = stepEvents(window, band, p), frame = frameStep(window.times);
       const near = events.filter(e => Math.abs(e.source_seconds - point.source_seconds) <= p.window_seconds + frame);
-      entry = { ...entry, ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, window: p.window_seconds }),
+      return { ...entry, ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, window: p.window_seconds }),
         caption_changes: near.filter(e => e.kind === 'caption'), shot_changes: near.filter(e => e.kind === 'shot').map(e => e.source_seconds) };
     } catch (error) {
-      entry = { ...entry, result: 'unknown', error: error.message.slice(0, 200) };
+      return { ...entry, result: 'unknown', error: error.message.slice(0, 200) };
     }
-    measured.points.push(entry);
-  }
+  });
+  // Any warn → warn; otherwise any point that could not be checked → unknown;
+  // pass only when every cut point was analysed and none warned.
   const warned = measured.points.filter(e => e.result === 'warn'), unknown = measured.points.filter(e => e.result === 'unknown');
   const describe = e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(3)} s → ${e.suggested_source_seconds.toFixed(3)} s`;
-  const status = warned.length ? 'warn' : unknown.length === points.length ? 'unknown' : 'pass';
+  const status = warned.length ? 'warn' : unknown.length ? 'unknown' : 'pass';
   const scope = `${points.length} source cut point(s), caption band ${round(band.top * 100, 1)}–${round(band.bottom * 100, 1)}% of the source frame height`;
+  const reasons = [...new Set(unknown.map(e => e.error))].join('; ');
+  const unchecked = unknown.length ? ` ${unknown.length} of ${points.length} cut point(s) were not checked (${unknown.map(e => `${e.item_id} ${e.edge}`).join(', ')}): ${reasons}.` : '';
   const observation = warned.length
-    ? `${warned.length} of ${scope} show a burned-in caption change within ${p.window_seconds} s inside the cut (in-point: previous line still shown; out-point: next line flashes). Suggested source times: ${warned.map(describe).join('; ')}. Frame-difference heuristic, not OCR.`
-    : status === 'unknown' ? `Could not decode the source around any of ${scope}.`
-      : `No burned-in caption change within ${p.window_seconds} s inside any of ${scope}${unknown.length ? ` (${unknown.length} point(s) could not be decoded)` : ''}. Frame-difference heuristic, not OCR; it cannot read caption text.`;
+    ? `${warned.length} of ${scope} show a burned-in caption change within ${p.window_seconds} s inside the cut (in-point: previous line still shown; out-point: next line flashes). Suggested source times: ${warned.map(describe).join('; ')}.${unchecked} Frame-difference heuristic, not OCR.`
+    : unknown.length
+      ? `No burned-in caption change found at the ${points.length - unknown.length} analysed point(s) of ${scope}, but the check is incomplete.${unchecked}`
+      : `No burned-in caption change within ${p.window_seconds} s inside any of ${scope}. Frame-difference heuristic, not OCR; it cannot read caption text.`;
   const refs = warned.map(e => {
     const sample = sampleAt(e);
     return { time_seconds: e.output_seconds, item_id: e.item_id, ...(sample ? { sample_id: sample } : {}) };

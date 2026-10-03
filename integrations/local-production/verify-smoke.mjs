@@ -133,7 +133,9 @@ export async function verifyMultitrack(base, name) {
 // caption switches from line A to line B at changeAt seconds; without changeAt
 // the source has no caption. shortShot = [from, to] cuts to colour bars inside
 // the file (a short shot within one asset).
-export async function captionSource(file, { duration = 3, changeAt, shortShot, size = '360x640' } = {}) {
+// slowFrom: frames after that many seconds are retimed to 15 fps (1/15 s apart; the lowest rate the caption check pads for)
+// while earlier ones stay at 30 fps, giving a variable-frame-rate file.
+export async function captionSource(file, { duration = 3, changeAt, shortShot, size = '360x640', slowFrom } = {}) {
   const [w, h] = size.split('x').map(Number), y = Math.round(h * 0.7), gh = Math.round(h * 0.03);
   const glyphs = (xs, width, when) => xs.flatMap(x => [`drawbox=x=${x - 3}:y=${y - 3}:w=${width + 6}:h=${gh + 6}:color=black:t=fill:enable='${when}'`,
     `drawbox=x=${x}:y=${y}:w=${width}:h=${gh}:color=white:t=fill:enable='${when}'`]);
@@ -141,7 +143,8 @@ export async function captionSource(file, { duration = 3, changeAt, shortShot, s
     ...glyphs([0.2, 0.36, 0.52, 0.68].map(f => Math.round(f * w)), Math.round(w * 0.1), `gte(t,${changeAt})`)];
   const source = `testsrc2=size=${size}:rate=30:duration=${duration}`;
   const inputs = ['-f', 'lavfi', '-i', source, ...(shortShot ? ['-f', 'lavfi', '-i', `smptehdbars=size=${size}:rate=30:duration=${duration}`] : [])];
-  const chain = [...(shortShot ? [] : ['null']), ...caption].join(',');
+  const retime = slowFrom === undefined ? [] : [`setpts='if(lt(N,${slowFrom * 30}),N/30,${slowFrom}+(N-${slowFrom * 30})/15)/TB'`];
+  const chain = [...(shortShot || retime.length ? [] : ['null']), ...retime, ...caption].join(',');
   const graph = shortShot ? `[0:v][1:v]overlay=enable='between(t,${shortShot[0]},${shortShot[1] - 0.001})'${caption.length ? ',' + caption.join(',') : ''}[v]` : `[0:v]${chain}[v]`;
-  await run(ffmpeg(), ['-v', 'error', '-n', ...inputs, '-filter_complex', graph, '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
+  await run(ffmpeg(), ['-v', 'error', '-n', ...inputs, '-filter_complex', graph, '-map', '[v]', ...(retime.length ? ['-fps_mode', 'vfr'] : []), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
 }

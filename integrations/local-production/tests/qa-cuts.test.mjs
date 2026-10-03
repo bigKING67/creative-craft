@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { burnedCaptionCheck, captionBand, judgeCutPoint, CAPTION_BAND } from '../burned-captions.mjs';
+import { burnedCaptionCheck, captionBand, decodeWindow, judgeCutPoint, splitFrames, CAPTION_BAND } from '../burned-captions.mjs';
 import { detectShots, qaOptions } from '../qa.mjs';
 import { captionSource } from '../verify-smoke.mjs';
 
@@ -61,4 +61,47 @@ test('shot detection finds a 0.6 s shot inside one file', { timeout: 60000 }, as
   assert.equal(shots.length, 3, JSON.stringify(shots));
   assert.ok(Math.abs(shots[1].start - 2) < 0.04 && Math.abs(shots[1].end - 2.6) < 0.04, JSON.stringify(shots));
   assert.equal((await detectShots(file, 4, 0.99)).length, 1, 'threshold is configurable');
+});
+
+test('variable frame rate source: every decoded frame keeps its own source time', { timeout: 60000 }, async t => {
+  const dir = await scratch(t), file = path.join(dir, 'vfr.mp4');
+  // 30 fps until 1 s, then 15 fps; the caption switches at 3.0 s inside the 15 fps part.
+  await captionSource(file, { duration: 3, changeAt: 3, slowFrom: 1 });
+  const window = await decodeWindow(file, 2.5, 3.6);
+  assert.equal(window.frames.length, window.times.length);
+  assert.ok(window.frames.length >= 8, `frames ${window.frames.length}`);
+  const gaps = window.times.slice(1).map((time, i) => Math.round((time - window.times[i]) * 1000));
+  assert.ok(gaps.every(g => g === 67), `15 fps part decodes one frame per 1/15 s: ${gaps}`);
+  const late = await burnedCaptionCheck(docWith('vfr.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 2.8 }]), dir);
+  const point = late.measured.points.find(p => p.edge === 'in');
+  assert.equal(point.result, 'warn', JSON.stringify(point));
+  assert.ok(Math.abs(point.suggested_source_seconds - 3) < 0.02, JSON.stringify(point));
+  const aligned = await burnedCaptionCheck(docWith('vfr.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 3 }]), dir);
+  assert.equal(aligned.measured.points.find(p => p.edge === 'in').result, 'aligned', aligned.observation);
+});
+
+test('frame/time count mismatch is refused instead of truncated', () => {
+  const log = 'Parsed_showinfo_2 @ 0x1] n:0 pts:0 pts_time:1.0 s:4x2\nn:1 pts:1 pts_time:1.5\n', frame = 8;
+  assert.deepEqual(splitFrames(Buffer.alloc(2 * frame), log, 0.5).times, [0.5, 1]);
+  assert.throws(() => splitFrames(Buffer.alloc(3 * frame), log), /decoded 3 frame\(s\) but showinfo reported 2/);
+  assert.throws(() => splitFrames(Buffer.alloc(frame + 3), log), /not trustworthy/);
+});
+
+test('summary: any warn wins, otherwise any unchecked point makes the check unknown', { timeout: 60000 }, async t => {
+  const dir = await scratch(t);
+  await captionSource(path.join(dir, 'caption.mp4'), { changeAt: 1.5 });
+  // m0 reads caption.mp4; m1's asset file does not exist, so both its points are unchecked.
+  const doc = sourceIn => {
+    const d = docWith('caption.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: sourceIn }, { start_frame: 30, frames: 30, source_in_seconds: 0 }]);
+    d.assets.push({ id: 'gone', file: 'missing.mp4', video: true });
+    d.items[1].asset_id = 'gone';
+    return d;
+  };
+  const mixed = await burnedCaptionCheck(doc(1.3), dir);
+  assert.equal(mixed.status, 'warn', mixed.observation);
+  assert.match(mixed.observation, /2 of 4 cut point\(s\) were not checked \(m1 in, m1 out\)/);
+  const partial = await burnedCaptionCheck(doc(1.5), dir);
+  assert.equal(partial.status, 'unknown', partial.observation);
+  assert.match(partial.observation, /2 analysed point\(s\).*incomplete\. 2 of 4 cut point\(s\) were not checked/);
+  assert.deepEqual(partial.measured.points.map(p => p.result), ['aligned', 'clear', 'unknown', 'unknown']);
 });
