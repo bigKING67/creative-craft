@@ -65,7 +65,8 @@ Gated video production on top of the existing contracts (see
   codec conclusion. `frame_rate` is recorded only when the video stream starts at
   the media time zero (the earliest stream start; measured for MKV and MP4 edit
   lists), and render/QA re-check it so stale values from 0.6.0 projects are not
-  applied (receipt `frame_alignment`).
+  applied (receipt `frame_alignment`). Renders within one process now run one at a time:
+  concurrent renders were measured to corrupt each other's captures.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in
