@@ -130,49 +130,60 @@ export function pictureStream(info) {
   return index < 0 ? null : { stream: videos[index], index };
 }
 
-// A stream's start in media time from ffprobe integers: start_pts × time_base
-// (seconds), or null when either is missing or unusable.
+// A stream's start from ffprobe integers, exactly: start_pts × time_base as
+// the fraction { p, q } (BigInt, q > 0) with its value in seconds; null when
+// either is missing or unusable. The single start reading of import
+// (probedFrameRate) and the QA source timing (sourceTiming).
 export function streamStart(stream) {
-  const tb = rational(stream?.time_base), pts = Number(stream?.start_pts);
-  return tb && stream.start_pts !== undefined && stream.start_pts !== null && stream.start_pts !== '' && Number.isInteger(pts)
-    ? pts * tb.num / tb.den : null;
+  const tb = rational(stream?.time_base), pts = stream?.start_pts;
+  if (!tb || pts === undefined || pts === null || pts === '' || !Number.isInteger(Number(pts))) return null;
+  const p = BigInt(pts) * BigInt(tb.num), q = BigInt(tb.den);
+  return { p, q, seconds: Number(pts) * tb.num / tb.den };
+}
+
+// a/b < c/d ⇔ a·d < c·b (denominators positive).
+const earlier = (a, b) => a.p * b.q < b.p * a.q;
+// The earliest streamStart of all streams of an ffprobe JSON (the media time 0
+// of the renderer and the QA timing), or null when no stream reports one.
+export function earliestStart(info) {
+  let first = null;
+  for (const start of (info?.streams ?? []).map(streamStart)) if (start && (!first || earlier(start, first))) first = start;
+  return first;
+}
+
+// Why the frame grid k / rate of an ffprobe JSON's video does not start at
+// media time 0, or null when it does:
+//   - the first video stream is the picture (pictureStream index 0, not cover
+//     art), so the asset's width, height (probe: first video stream, as before
+//     frame_rate existed) and frame_rate describe the same stream;
+//   - its own start (streamStart) equals the earliest start of all streams.
+//     The renderer and the QA timing (sourceTiming) take that earliest start as
+//     media time 0 (measured: in an MKV whose audio starts at -0.067 s, in-point
+//     X shows video time X - 0.067), so only then does frame k start at media
+//     time k / rate. Streams that all start at the same non-zero time qualify;
+//     a file whose audio starts before its video (MKV/WebM can keep a negative
+//     audio start, MP4 AAC priming under an offset) does not. Compared exactly.
+// Import (probedFrameRate) and the render/QA re-check (frameAlignment) share it.
+export function mediaZeroProblem(info) {
+  const picture = pictureStream(info);
+  if (!picture) return 'no picture stream (only cover art or no video)';
+  if (picture.index !== 0) return 'the first video stream is cover art, the picture is a later stream';
+  const start = streamStart(picture.stream);
+  if (!start) return 'the video stream reports no usable start_pts/time_base';
+  const first = earliestStart(info);
+  return earlier(first, start) ? `the video stream starts at ${start.seconds} s, after the earliest stream start ${first.seconds} s (media time 0), ` +
+    'so frame k does not start at media time k / rate' : null;
 }
 
 // frame_rate recorded at import from one ffprobe JSON (-show_streams
 // -show_format), or null. Recorded only when the frame grid k / rate is
-// trustworthy in media time:
-//   - the first video stream is the picture (pictureStream index 0, not cover
-//     art), so the asset's width, height (probe: first video stream, as before
-//     frame_rate existed) and frame_rate describe the same stream;
-//   - it reports the same rate as r_frame_rate and avg_frame_rate (compared
-//     reduced). They differ for variable-frame-rate sources (and for some
-//     damaged or edited constant-rate files); such sources get no frame_rate
-//     and keep the renderer behaviour;
-//   - its own start (start_pts × time_base, as streamStart and the QA timing
-//     read it) equals the earliest start of all streams. The renderer and the
-//     QA timing (sourceTiming) take that earliest start as media time 0
-//     (measured: in an MKV whose audio starts at -0.067 s, in-point X shows
-//     video time X - 0.067), so only then does frame k start at media time
-//     k / rate. Streams that all start at the same non-zero time qualify; a
-//     file whose audio starts before its video (MKV/WebM can keep a negative
-//     audio start) does not. Compared exactly, as integers.
-// Audio-only files and cover art get none.
+// trustworthy in media time: mediaZeroProblem finds nothing, and the picture
+// stream reports the same rate as r_frame_rate and avg_frame_rate (compared
+// reduced). They differ for variable-frame-rate sources (and for some damaged
+// or edited constant-rate files); such sources get no frame_rate and keep the
+// renderer behaviour. Audio-only files and cover art get none.
 export function probedFrameRate(info) {
-  const picture = pictureStream(info);
-  if (picture?.index !== 0) return null;
-  const video = picture.stream, rate = reduceFrameRate(video.r_frame_rate);
-  if (!rate || rate !== reduceFrameRate(video.avg_frame_rate)) return null;
-  const start = exactStart(video);
-  if (!start) return null;
-  // a/b < c/d ⇔ a·d < c·b (denominators positive).
-  const before = other => other && other.p * start.q < start.p * other.q;
-  return info.streams.some(s => before(exactStart(s))) ? null : rate;
-}
-
-// start_pts × time_base as an exact fraction { p, q } (BigInt), under the same
-// conditions as streamStart; null otherwise.
-function exactStart(stream) {
-  if (streamStart(stream) === null) return null;
-  const tb = rational(stream.time_base);
-  return { p: BigInt(stream.start_pts) * BigInt(tb.num), q: BigInt(tb.den) };
+  if (mediaZeroProblem(info)) return null;
+  const video = pictureStream(info).stream, rate = reduceFrameRate(video.r_frame_rate);
+  return rate && rate === reduceFrameRate(video.avg_frame_rate) ? rate : null;
 }

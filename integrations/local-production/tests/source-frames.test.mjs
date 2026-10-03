@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CORRECTION_SECONDS, compiledView, correctedSourceIn, correctionOf, parseFrameRate, pictureStream, probedFrameRate, rational, reduceFrameRate, streamStart,
+import { CORRECTION_SECONDS, compiledView, correctedSourceIn, correctionOf, parseFrameRate, pictureStream, probedFrameRate, rational, reduceFrameRate, streamStart, earliestStart, mediaZeroProblem,
   truncatedFrame } from '../source-frames.mjs';
 import { validateV2 } from '../edit-document.mjs';
 import { applyOperations } from '../operations.mjs';
@@ -110,8 +110,16 @@ test('frame rate parsing, reduction and import rules', () => {
   // Streams without a usable start are not compared (as in sourceTiming).
   assert.equal(probedFrameRate(at0([video('30/1', '30/1'), { ...audio, start_pts: undefined }])), '30/1');
   assert.equal(probedFrameRate({ streams: [video('30/1', '30/1')], format: {} }), '30/1');
-  assert.equal(streamStart(primed), -941 / 44100);
-  assert.equal(streamStart(video('30/1', '30/1', { start_pts: 7680 })), 0.5);
+  // One start reading: the exact fraction and its seconds.
+  assert.deepEqual(streamStart(primed), { p: -941n, q: 44100n, seconds: -941 / 44100 });
+  assert.deepEqual(streamStart(video('30/1', '30/1', { start_pts: 7680 })), { p: 7680n, q: 15360n, seconds: 0.5 });
+  assert.equal(streamStart({ ...audio, start_pts: undefined }), null);
+  assert.equal(streamStart({ ...audio, time_base: '0/0' }), null);
+  assert.equal(earliestStart({ streams: [video('30/1', '30/1', { start_pts: 7680 }), primed] }).seconds, -941 / 44100);
+  assert.equal(earliestStart({ streams: [{ ...audio, start_pts: undefined }] }), null);
+  // The reason the frame grid does not start at media time 0 (null when it does).
+  assert.equal(mediaZeroProblem(at0([video('30/1', '30/1'), audio])), null);
+  assert.match(mediaZeroProblem({ streams: [video('30/1', '30/1'), primed] }), /video stream starts at 0 s, after the earliest stream start -0\.0213\d+ s/);
   // Audio only, or only cover art.
   assert.equal(probedFrameRate(at0([audio])), null);
   const cover = video('90000/1', '0/0', { width: 64, height: 64, disposition: { attached_pic: 1 } });
@@ -281,7 +289,7 @@ test('import records frame_rate for v2 video (create and add_asset), not for aud
   await ff('-itsoffset', '0.5', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-f', 'lavfi', '-i', 'sine=d=1.5',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', file('behind.mkv'));
   const behind = (await ffprobeJson(file('behind.mkv'))).streams;
-  assert.ok(streamStart(behind.find(s => s.codec_type === 'video')) > streamStart(behind.find(s => s.codec_type === 'audio')), 'fixture: video after audio');
+  assert.ok(streamStart(behind.find(s => s.codec_type === 'video')).seconds > streamStart(behind.find(s => s.codec_type === 'audio')).seconds, 'fixture: video after audio');
   await ff('-f', 'lavfi', '-i', 'sine=d=1', '-c:a', 'aac', file('tone.m4a'));
   await ff('-f', 'lavfi', '-i', 'color=c=red:s=64x64', '-frames:v', '1', file('cover.png'));
   await ff('-f', 'lavfi', '-i', 'sine=d=1', '-i', file('cover.png'), '-map', '1', '-map', '0', '-c:v', 'png', '-c:a', 'aac', '-disposition:v:0', 'attached_pic', file('cover.m4a'));

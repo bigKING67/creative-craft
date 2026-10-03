@@ -16,7 +16,7 @@ const ff = (...args) => run(mediaTool('ffmpeg'), ['-v', 'error', ...args]);
 // 30 fps, red frames 0..switchFrame-1, blue from switchFrame on, 320x180, plus a tone.
 const redThenBlue = (switchFrame, seconds) => ['-f', 'lavfi', '-i', `color=red:s=320x180:r=30:d=${switchFrame / 30}`,
   '-f', 'lavfi', '-i', `color=blue:s=320x180:r=30:d=${seconds - switchFrame / 30}`];
-const starts = async file => Object.fromEntries((await ffprobeJson(file)).streams.map(s => [s.codec_type, streamStart(s)]));
+const starts = async file => Object.fromEntries((await ffprobeJson(file)).streams.map(s => [s.codec_type, streamStart(s)?.seconds ?? null]));
 const colour = ([r, g, b]) => r > 150 && g < 80 && b < 80 ? 'red' : b > 150 && r < 80 && g < 80 ? 'blue' : `rgb(${r}, ${g}, ${b})`;
 
 async function firstFrame(dir, name, file, sourceIn) {
