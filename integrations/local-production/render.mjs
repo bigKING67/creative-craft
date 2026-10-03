@@ -8,7 +8,7 @@ import { copyBoundTemplates } from './template-binding.mjs';
 import { audibleItems, isV2 } from './timeline.mjs';
 import { templateProvenance } from './templates.mjs';
 import { mediaTool } from './media-analysis.mjs';
-import { compiledView } from './source-frames.mjs';
+import { frameAlignment } from './frame-alignment.mjs';
 
 const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
@@ -61,8 +61,10 @@ export async function renderProject(root, destination, { revision, preview = fal
   checkRenderSize(project.canvas);
   // Source frame alignment: the compiled view is computed once here and shared by
   // the font glyph checks (verifyAssets, copyCaptionFont) and compose, which use
-  // a view passed in as is. project.json keeps the document as written.
-  const view = isV2(project) ? compiledView(project) : project;
+  // a view passed in as is. Assets whose frame_rate no longer holds (re-probed by
+  // frameAlignment) are compiled without correction and recorded in the receipt.
+  // project.json keeps the document as written.
+  const { view, frame_alignment: alignment } = isV2(project) ? await frameAlignment(root, project) : { view: project, frame_alignment: null };
   await verifyAssets(root, view, templates);
   const { width, height } = outputSize(project.canvas, preview);
   const compiled = compose(view, { width, height }, { templates });
@@ -73,7 +75,7 @@ export async function renderProject(root, destination, { revision, preview = fal
   const receipt = { schema_version: 'creative-craft.local-render.v1', status: 'running', project_id: project.project_id,
     revision: project.revision, document_schema: project.schema_version, revision_sha256: await digest(revisionFile(root, project.revision)),
     engine: '@hyperframes/producer', engine_version: await packageVersion('@hyperframes/producer'), preview,
-    started_at: new Date().toISOString(), assets: project.assets.map(({ id, sha256 }) => ({ id, sha256 })),
+    started_at: new Date().toISOString(), assets: project.assets.map(({ id, sha256 }) => ({ id, sha256 })), ...(alignment ? { frame_alignment: alignment } : {}),
     inspection: { structure: 'pending', decode: 'pending', visual: 'unverified', listening: 'unverified' } };
   receipt.caption_font = project.caption_font ? { ...project.caption_font, integrity: 'passed',
     glyph_coverage: 'passed', runtime_load: compiled.cues.length || compiled.graphics ? 'pending' : 'not_required', source_match: 'unverified' } :

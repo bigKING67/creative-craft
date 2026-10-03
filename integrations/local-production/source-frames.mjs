@@ -98,10 +98,13 @@ export function correctedSourceIn(seconds, frameRate) {
 // validateV2 is the single source of the asset rules (frame_rate only on assets
 // with a picture); this reads frame_rate only and does not validate.
 // The input is never mutated; a view passed in again is returned as is.
+// options.skip: ids of assets whose frame_rate is not applied (render and QA
+// pass the assets frameAlignment found stale: their source no longer starts its
+// frame grid at media time 0); such items keep their written in-point.
 const VIEWS = new WeakSet(), CORRECTIONS = new WeakMap();
-export function compiledView(doc) {
+export function compiledView(doc, { skip = new Set() } = {}) {
   if (VIEWS.has(doc)) return doc;
-  const fps = doc.canvas.fps, assets = new Map(doc.assets.filter(a => a.frame_rate).map(a => [a.id, a]));
+  const fps = doc.canvas.fps, assets = new Map(doc.assets.filter(a => a.frame_rate && !skip.has(a.id)).map(a => [a.id, a]));
   const video = new Set(doc.tracks.filter(t => t.kind === 'video').map(t => t.id));
   const items = doc.items.map(item => {
     const asset = item.kind === 'media' && video.has(item.track_id) ? assets.get(item.asset_id) : undefined;
