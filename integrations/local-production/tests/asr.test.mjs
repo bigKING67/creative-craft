@@ -213,3 +213,28 @@ test('phrasesFromTokens splits long whisper segments at clause punctuation', asy
   ]);
   assert.deepEqual(phrasesFromTokens([{ tokens: [tok('结束。', 0, 900)] }], 0.5), [{ start: 0, end: 0.5, text: '结束。' }]);
 });
+
+test('phrasesFromTokens keeps decimals, clock times and letter abbreviations together', async () => {
+  const { phrasesFromTokens } = await import('../asr.mjs');
+  const tok = (text, from, to) => ({ text, offsets: { from, to } });
+  const texts = tokens => phrasesFromTokens([{ tokens }]).map(p => p.text);
+  assert.deepEqual(texts([tok('提亮3.', 0, 500), tok('5倍', 500, 900), tok('。', 900, 1000)]), ['提亮3.5倍。']);
+  assert.deepEqual(texts([tok('早上10:', 0, 500), tok('30', 500, 800), tok('开播', 800, 1200)]), ['早上10:30开播']);
+  assert.deepEqual(texts([tok(' U.', 0, 300), tok('S.', 300, 600), tok(' market.', 600, 900), tok(' Then', 900, 1200)]), ['U.S. market.', 'Then'],
+    'single-letter abbreviations do not end a phrase, a word with a full stop does');
+  assert.deepEqual(texts([tok('Done.', 0, 500), tok(' Next:', 500, 900), tok(' go', 900, 1200)]), ['Done.', 'Next:', 'go']);
+  assert.deepEqual(texts([tok('好的,', 0, 500), tok('3', 500, 700), tok('！', 700, 800), tok('5', 800, 900)]), ['好的,', '3！', '5'], ', and CJK punctuation always end a phrase');
+});
+
+test('garbled phrase text is marked unreliable and quoted from its segment as evidence', async () => {
+  const { phrasesFromTokens } = await import('../asr.mjs');
+  const tok = (text, from, to) => ({ text, offsets: { from, to } });
+  const phrases = phrasesFromTokens([{ tokens: [tok('先说�', 0, 800), tok('论,', 800, 1200), tok('再看细节', 1200, 2000)] }]);
+  assert.deepEqual(phrases, [{ start: 0, end: 1.2, text: '先说�论,', text_reliable: false }, { start: 1.2, end: 2, text: '再看细节' }]);
+  const segments = [{ start: 0, end: 2, text: ' 先说结论,再看细节 ' }];
+  const evidence = toPlanEvidence(phrases, 0, 2, 'whisper.cpp phrases', { segments });
+  assert.deepEqual(evidence.map(e => [e.start_seconds, e.end_seconds, e.excerpt]), [[0, 1.2, '先说结论,再看细节'], [1.2, 2, '再看细节']]);
+  assert.match(evidence[0].method, /garbled.*enclosing ASR segment/);
+  assert.equal(evidence[1].method, 'whisper.cpp phrases');
+  assert.throws(() => toPlanEvidence(phrases, 0, 1, 'm'), /unreliable text/);
+});

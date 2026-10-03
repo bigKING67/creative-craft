@@ -297,13 +297,14 @@ whisper 参数：`-l zh` 时附加 `--prompt "以下是普通话的句子。"`�
  engine: {name: "whisper.cpp", binary_version, model, model_sha256},
  language, audio_activity: {active_seconds, detector},
  attempts: [{params: {preprocess, whisper_args}, coverage_seconds}],
- chosen_attempt, choice_reason, note, segments: [{start, end, text}]}
+ chosen_attempt, choice_reason, note, segments: [{start, end, text}],
+ phrases: [{start, end, text, text_reliable?: false}]}
 ```
 
-`asr.mjs` 导出 `toPlanEvidence(segments, from, to, method)`：返回与 `[from, to]` 有重叠的句子，形如 `{modality: "asr", start_seconds, end_seconds, excerpt, raw_score: null, method}`，时间保留句子原始边界（不裁到区间）。
+`asr.mjs` 导出 `toPlanEvidence(spans, from, to, method, { segments })`：返回与 `[from, to]` 有重叠的句子（或短语），形如 `{modality: "asr", start_seconds, end_seconds, excerpt, raw_score: null, method}`，时间保留原始边界（不裁到区间）。传入短语时同时传 `segments`：标记 `text_reliable: false` 的短语以其所在句段（重叠最多的 segment）的文本作为 `excerpt`，时间仍是短语自己的，`method` 追加说明“短语文本乱码、摘录为整句”；没有可用句段时报错，不输出乱码摘录。
 
 限制：ASR 文本可能有错字和同音字（如品牌名、人名），引用前需核对；时间戳是句级，不是逐字或逐帧对齐，剪辑点必须人工听审确认。覆盖率只说明“有文字的时间段”，不说明文字正确：whisper 会在纯音乐/持续音调上幻觉出整句（测试中 440 Hz 正弦音被“转写”为一句视频结尾套话并覆盖全程），此时覆盖足够、不会重试，幻觉内容也会进入结果。`auto` 判据只在上述片段上实测，阈值尚未在更多素材上标定。输出文件必须不存在。
 
 `npm test` 中的 ASR 测试只用合成音频（ffmpeg 静音与正弦音、macOS `say -v Tingting`），不含客户素材；whisper-cli 或模型缺失时两项端到端测试跳过并给出原因，模型存在但摘要不符则失败。
 
-**短语级时间（phrases）**：whisper 对背景音乐垫底的密集口播会把十几到二十几秒合成一个句段（segments）。转写改用 `-ojf` 读取词元时间戳，在逗号、句号等标点处切分为 `phrases`。在一条 137 秒的真实素材上，相对云端 ASR 的句末边界：中位偏差 0.09 s，p90 0.66 s；句首中位 0.14 s，个别离群达 3 s。短语只用于**提名**剪辑点，仍需结合能量谷、烧录字幕检查和人工听审确认。
+**短语级时间（phrases）**：whisper 对背景音乐垫底的密集口播会把十几到二十几秒合成一个句段（segments）。转写改用 `-ojf` 读取词元时间戳，在逗号、句号等标点处切分为 `phrases`。中文标点与 `,!?;` 总是断句；`.` 与 `:` 只在下一个词元不以数字开头、且当前词元不是单个拉丁字母缩写（如 `A.`）时断句，所以 `3.`+`5倍`、`10:`+`30` 不会被切开。词元文本可能把一个多字节汉字拆在两个词元之间，拼出的短语会含替换字符 U+FFFD（句段文本不受影响）：这类短语保留时间，标记 `text_reliable: false`，取证时改用所在句段文本（见 `toPlanEvidence`）。在一条 137 秒的真实素材上，相对云端 ASR 的句末边界：中位偏差 0.09 s，p90 0.66 s；句首中位 0.14 s，个别离群达 3 s。短语只用于**提名**剪辑点，仍需结合能量谷、烧录字幕检查和人工听审确认。
