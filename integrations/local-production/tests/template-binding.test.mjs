@@ -9,7 +9,7 @@ import { createProject, editBatch, loadProject, readProject, run, validateV2 } f
 import { compose } from '../composition.mjs';
 import { renderProject } from '../render.mjs';
 import { CAPTION_FONT, installCaptionFont } from '../caption-font.mjs';
-import { TEMPLATES, runtimeTemplate, templateProvenance, useRuntimeTemplates } from '../templates.mjs';
+import { TEMPLATES, runtimeTemplate, templateProvenance, useMinimumText, useRuntimeTemplates } from '../templates.mjs';
 import { copyBoundTemplates } from '../template-binding.mjs';
 
 const runtimeDir = fileURLToPath(new URL('../templates/', import.meta.url));
@@ -56,7 +56,10 @@ test('create and edit pin the templates graphics use; dry-run reports new bindin
   assert.deepEqual(first.graphic_templates, [{ id: 'title-card', version: 2, sha256: runtime.sha256, file: `templates/${runtime.sha256}.json` }]);
   const file = path.join(root, first.graphic_templates[0].file);
   assert.ok((await fs.lstat(file)).isFile());
-  assert.deepEqual(await fs.readFile(file), Buffer.from(runtime.bytes), 'raw execution-layer bytes, content-addressed');
+  assert.deepEqual(await fs.readFile(file), Buffer.from(runtime.bytes), 'normalized execution-layer bytes, content-addressed');
+  // Shipped templates are already in normalized form, so bindings made before
+  // normalization (raw source bytes) have the same digest and stay valid.
+  assert.deepEqual(Buffer.from(runtime.bytes), await fs.readFile(path.join(runtimeDir, 'title-card.json')));
   assert.deepEqual(templateProvenance(first), [{ id: 'title-card', version: 2, sha256: runtime.sha256, pinned: true, source: 'project', file: first.graphic_templates[0].file }]);
 
   const add = batch(1, [{ type: 'add_item', item: strap }]);
@@ -132,8 +135,9 @@ test('missing, altered, symlinked or invalid bound templates fail the read and t
   await fs.writeFile(file, good);
   await readProject(root);
 
-  // Template rules run again on load: hash-consistent but invalid bytes are refused,
-  // and a too-small text size is raised to the minimum exactly as for runtime templates.
+  // Template rules run again on load: hash-consistent but invalid bytes are refused.
+  // Raw (pre-normalization) bindings are accepted only while the current
+  // normalization leaves them unchanged; otherwise they fail as a rule difference.
   const revision = path.join(root, 'revisions/000001.json'), doc = JSON.parse(await fs.readFile(revision, 'utf8'));
   const bind = async template => {
     const bytes = Buffer.from(JSON.stringify(template)), digest = sha(bytes);
@@ -145,7 +149,26 @@ test('missing, altered, symlinked or invalid bound templates fail the read and t
   await bind({ ...base, css: `${base.css}.gfx-title-card-title{zoom:.5}` });
   await assert.rejects(readProject(root), /fails template validation: .*could change text size/);
   await bind({ ...base, vars: { ...base.vars, subtitle: { ...base.vars.subtitle, font_em: 1.5 } } });
-  assert.match(await htmlOf(root), /--fs-subtitle:3em/);
+  await assert.rejects(readProject(root), /bound raw \(pre-normalization\) bytes differ from the current template rules/);
+  await bind({ ...base, vars: { ...base.vars, subtitle: { ...base.vars.subtitle, font_em: 3.1 } } });
+  assert.match(await htmlOf(root), /--fs-subtitle:3.1em/, 'raw bytes that normalization leaves unchanged render as bound');
+});
+
+test('a stricter minimum text rule changes the execution layer but not pinned revisions', async t => {
+  const root = await project(t), before = await htmlOf(root, 1), original = runtimeTemplate('title-card').sha256;
+  assert.match(before, /--fs-subtitle:3em/);
+  const restore = useMinimumText(3.05);
+  t.after(restore);
+  assert.notEqual(runtimeTemplate('title-card').sha256, original, 'runtime bytes are re-normalized');
+  assert.equal(await htmlOf(root, 1), before, 'the bound bytes are not rewritten by the new rule');
+  // Adopting the new rule is an explicit rebind; the new binding stores normalized bytes.
+  await editBatch(root, batch(1, [{ type: 'rebind_template', template: 'title-card' }]));
+  const [binding] = (await readProject(root)).graphic_templates;
+  assert.equal(binding.sha256, runtimeTemplate('title-card').sha256);
+  assert.match(await htmlOf(root), /--fs-subtitle:3.05em/);
+  restore();
+  assert.match(await htmlOf(root), /--fs-subtitle:3.05em/, 'still rendered from its own bytes after the rule changes back');
+  assert.equal(await htmlOf(root, 1), before);
 });
 
 test('historical revisions without bindings render with runtime templates and gain bindings on their next edit', async t => {

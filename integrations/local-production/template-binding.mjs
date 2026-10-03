@@ -1,12 +1,14 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { writeOnce } from './content-store.mjs';
-import { parseTemplate, runtimeTemplate, templateSha256 } from './templates.mjs';
+import { parseBoundTemplate, runtimeTemplate, templateSha256 } from './templates.mjs';
 
 // Graphic templates pinned to edit revisions (graphic_templates). Like the
-// caption font, a binding is content-addressed: the template JSON's raw bytes
-// live at templates/<sha256>.json inside the project, and a pinned revision
-// renders only from those bytes (hash and template rules re-checked on load).
+// caption font, a binding is content-addressed: the normalized template's
+// deterministic serialization (templates.mjs normalizeTemplate) lives at
+// templates/<sha256>.json inside the project, and a pinned revision renders
+// only from those bytes (hash and template rules re-checked on load, nothing
+// rewritten).
 // Callers pass project roots already resolved through safePath.
 const fail = message => { throw new Error(message); };
 export const bindingFile = sha256 => `templates/${sha256}.json`;
@@ -30,7 +32,7 @@ async function boundBytes(root, binding) {
 export async function loadBoundTemplate(root, binding) {
   const bytes = await boundBytes(root, binding);
   let template;
-  try { template = parseTemplate(binding.id, bytes); }
+  try { template = parseBoundTemplate(binding.id, bytes); }
   catch (error) { fail(`Graphic template ${binding.id} bound to this revision fails template validation: ${error.message}`); }
   if (template.version !== binding.version) fail(`Graphic template ${binding.id}: bound file is version ${template.version}, binding says ${binding.version}`);
   return template;
