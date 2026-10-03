@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { burnedCaptionCheck, captionBand, decodeWindow, judgeCutPoint, splitFrames, CAPTION_BAND } from '../burned-captions.mjs';
+import { captionBand, decodeWindow, judgeCutPoint, splitFrames, CAPTION_BAND } from '../burned-captions.mjs';
 import { detectShots, extractFrame, frameMid, qaOptions } from '../qa.mjs';
 import { run } from '../project.mjs';
 import { mediaTool } from '../media-analysis.mjs';
-import { cutFragmentCheck, judgeFragment } from '../cut-fragments.mjs';
+import { judgeFragment } from '../cut-fragments.mjs';
+import { burnedCaptionCheck, cutFragmentCheck, cutPointChecks, summarizeCutChecks } from '../cut-checks.mjs';
 import { captionSource } from '../verify-smoke.mjs';
 
 // Self-authored synthetic sources only (ffmpeg lavfi), no customer media.
@@ -223,4 +224,31 @@ test('cut-boundary fragments on a synthetic source: shot tail, flash and next-sh
   assert.deepEqual(result.refs.map(r => r.item_id), ['m0', 'm2', 'm2', 'm3']);
   assert.deepEqual([result.measured.thresholds.shot_mad, result.measured.thresholds.scene_jump], [30, 30]);
   assert.match(result.observation, /m0 in-point opens with 6 frame\(s\) of the previous source shot/);
+});
+
+test('both cut-point checks share one decode per cut point and match the checks run alone', { timeout: 60000 }, async t => {
+  const dir = await scratch(t);
+  await captionSource(path.join(dir, 'caption.mp4'), { changeAt: 1.5, duration: 4 });
+  const doc = docWith('caption.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 1.3 }, { start_frame: 30, frames: 30, source_in_seconds: 2.2 }]);
+  const calls = [];
+  const decode = (...args) => { calls.push(args.slice(0, 3)); return decodeWindow(...args); };
+  const shared = await cutPointChecks(doc, dir, { decode });
+  assert.equal(calls.length, 4, 'one decode for each of the 4 cut points');
+  // The shared range is the union of both checks' ranges (fragments need about ±1 s, captions 0.5 s).
+  assert.ok(calls.every(([, from, to]) => to - from > 2), JSON.stringify(calls));
+  const alone = [await burnedCaptionCheck(doc, dir), await cutFragmentCheck(doc, dir)];
+  assert.deepEqual([shared.burned, shared.fragments], alone);
+  assert.equal(shared.burned.status, 'warn', shared.burned.observation);
+});
+
+test('cut-check summary: warn wins, then unknown with the unchecked points, else pass', () => {
+  const texts = { scope: '3 source cut point(s)', finding: 'thing', describe: e => `${e.item_id} ${e.edge}`, pass: 'all clear',
+    warned: (count, details, unchecked) => `${count} warned: ${details}.${unchecked}` };
+  const point = (item_id, edge, result, extra = {}) => ({ item_id, edge, result, output_seconds: 1, ...extra });
+  const warn = summarizeCutChecks([point('a', 'in', 'warn'), point('b', 'out', 'unknown', { error: 'boom' }), point('c', 'in', 'clear')], { ...texts, sampleAt: () => 's-1' });
+  assert.deepEqual(warn, { status: 'warn', observation: '1 warned: a in. 1 of 3 cut point(s) were not checked (b out): boom.', refs: [{ time_seconds: 1, item_id: 'a', sample_id: 's-1' }] });
+  const unknown = summarizeCutChecks([point('b', 'out', 'unknown', { error: 'boom' }), point('c', 'in', 'aligned')], texts);
+  assert.equal(unknown.status, 'unknown');
+  assert.match(unknown.observation, /^No thing found at the 1 analysed point\(s\) of 3 source cut point\(s\), but the check is incomplete\. 1 of 2/);
+  assert.deepEqual(summarizeCutChecks([point('c', 'in', 'clear')], texts), { status: 'pass', observation: 'all clear' });
 });

@@ -1,7 +1,6 @@
-import path from 'node:path';
 import { ffprobeJson, run } from './project.mjs';
 import { sourceSeconds, speedOf } from './timeline.mjs';
-import { mapLimit, mediaTool } from './media-analysis.mjs';
+import { mediaTool } from './media-analysis.mjs';
 
 // Burned-in caption cut points. Source footage often carries captions that are
 // part of the picture and switch slightly after the speech they belong to; an
@@ -36,6 +35,11 @@ export const CAPTION_CUT = Object.freeze({
 });
 export const CAPTION_METHOD = 'frame-difference step heuristic on the source caption band (not OCR)';
 const round = (value, digits = 3) => Math.round(value * 10 ** digits) / 10 ** digits;
+// Source times in reports and suggestions: microseconds (far inside any frame, no float noise).
+export const round6 = value => round(value, 6);
+// Midpoint of decoded frame k: halfway to the next decoded frame (the last one: half a frame).
+// A cut time written there shows frame k whatever the rounding, unlike its start.
+export const frameMidAt = (times, k, frame) => k + 1 < times.length ? (times[k] + times[k + 1]) / 2 : times[k] + frame / 2;
 
 export function captionBand(option) {
   if (option === undefined) return CAPTION_BAND;
@@ -81,7 +85,7 @@ export function stepEvents({ frames, times, width, height }, band = CAPTION_BAND
     // time and the next frame's), the stable in/out time for that frame. Both
     // times stay exact here (judging compares them with the cut point); the
     // check rounds them for the report.
-    events.push({ source_seconds: times[k], frame_mid_seconds: (times[k] + times[k + 1]) / 2, line_share: round(lineShare), glyph_share: round(glyphShare),
+    events.push({ source_seconds: times[k], frame_mid_seconds: frameMidAt(times, k), line_share: round(lineShare), glyph_share: round(glyphShare),
       rest_mad: round(restMad, 1), kind: restMad >= p.shot_mad ? 'shot' : 'caption' });
   }
   return events;
@@ -207,8 +211,8 @@ export function judgeCutPoint(edge, at, events, { frame, step = frame, window = 
   if (!inside.length) return { result: atEdge ? 'aligned' : 'clear' };
   if (edge === 'in' && atEdge) return { result: 'aligned' };
   const pick = inside[0]; // in: earliest change; out: earliest change before the cut
-  const suggested = round(frameMidOf(pick, frame), 6); // µs: far inside the frame, no float noise
-  return { result: 'warn', suggested_source_seconds: suggested, suggested_shift_seconds: round(suggested - at, 6) };
+  const suggested = round6(frameMidOf(pick, frame));
+  return { result: 'warn', suggested_source_seconds: suggested, suggested_shift_seconds: round6(suggested - at) };
 }
 
 // Cut points of every video-track media item whose asset has picture.
@@ -222,53 +226,35 @@ export function cutPoints(doc) {
   });
 }
 
-// Analyse every cut point on its source asset. Returns the check fields
-// (status, observation, measured, refs) for render-qa.
-export async function burnedCaptionCheck(doc, root, { band: bandOption, sampleAt = () => null } = {}) {
-  const band = captionBand(bandOption), p = CAPTION_CUT, fps = doc.canvas.fps;
-  const assets = new Map(doc.assets.map(a => [a.id, a]));
-  const points = cutPoints(doc);
-  const measured = { method: CAPTION_METHOD, band, window_seconds: p.window_seconds,
-    thresholds: { analysis_short_edge: p.analysis_short_edge, steady_frames: p.steady_frames, steady_range: p.steady_range, step_delta: p.step_delta,
-      line_height: p.line_height, line_share: p.line_share, glyph_level: p.glyph_level, glyph_share: p.glyph_share, shot_mad: p.shot_mad }, points: [] };
-  if (!points.length) return { status: 'not_applicable', observation: 'No video media items, so no source cut points to check for burned-in captions.', measured };
-  // Pad each window so transitions at its ends still have steady_frames on both
-  // sides (sized for sources down to 15 fps). Windows decode with bounded
-  // concurrency; each file's container start time is probed once.
-  const pad = (p.steady_frames + 1) / 15, timingOf = sourceTimings();
-  measured.points = await mapLimit(points, p.concurrency, async point => {
-    const asset = assets.get(point.item.asset_id), file = path.join(root, asset.file);
-    const [from, to] = point.edge === 'in' ? [point.source_seconds - pad, point.source_seconds + p.window_seconds + pad]
-      : [point.source_seconds - p.window_seconds - pad, point.source_seconds + pad];
-    const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round(point.source_seconds, 4), output_seconds: round(point.output_frame / fps, 6) };
-    try {
-      const window = await decodeWindow(file, from, to, p, await timingOf(file));
+// The burned-caption analysis for the shared cut-point pass (cut-checks.mjs):
+// the source range it needs around a cut point, the per-point judgement on the
+// decoded frames of that range, and the texts of its summary.
+export function captionCutCheck(bandOption, p = CAPTION_CUT) {
+  const band = captionBand(bandOption);
+  // Pad the range so transitions at its ends still have steady_frames on both
+  // sides (sized for sources down to 15 fps).
+  const pad = (p.steady_frames + 1) / 15;
+  const scope = n => `${n} source cut point(s), caption band ${round(band.top * 100, 1)}–${round(band.bottom * 100, 1)}% of the source frame height`;
+  return {
+    measured: { method: CAPTION_METHOD, band, window_seconds: p.window_seconds,
+      thresholds: { analysis_short_edge: p.analysis_short_edge, steady_frames: p.steady_frames, steady_range: p.steady_range, step_delta: p.step_delta,
+        line_height: p.line_height, line_share: p.line_share, glyph_level: p.glyph_level, glyph_share: p.glyph_share, shot_mad: p.shot_mad } },
+    none: 'No video media items, so no source cut points to check for burned-in captions.',
+    range: point => point.edge === 'in' ? [point.source_seconds - pad, point.source_seconds + p.window_seconds + pad]
+      : [point.source_seconds - p.window_seconds - pad, point.source_seconds + pad],
+    analyse(point, window, fps) {
       if (window.frames.length < 2 * p.steady_frames + 1) throw new Error('too few decoded frames');
       const events = stepEvents(window, band, p), frame = frameStep(window.times);
       const near = events.filter(e => Math.abs(e.source_seconds - point.source_seconds) <= p.window_seconds + frame);
-      return { ...entry, ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, step: speedOf(point.item) / fps, window: p.window_seconds }),
-        caption_changes: near.filter(e => e.kind === 'caption').map(e => ({ ...e, source_seconds: round(e.source_seconds, 6), frame_mid_seconds: round(e.frame_mid_seconds, 6) })),
-        shot_changes: near.filter(e => e.kind === 'shot').map(e => round(e.source_seconds, 6)) };
-    } catch (error) {
-      return { ...entry, result: 'unknown', error: error.message.slice(0, 200) };
-    }
-  });
-  // Any warn → warn; otherwise any point that could not be checked → unknown;
-  // pass only when every cut point was analysed and none warned.
-  const warned = measured.points.filter(e => e.result === 'warn'), unknown = measured.points.filter(e => e.result === 'unknown');
-  const describe = e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(4)} s → ${e.suggested_source_seconds.toFixed(6)} s`;
-  const status = warned.length ? 'warn' : unknown.length ? 'unknown' : 'pass';
-  const scope = `${points.length} source cut point(s), caption band ${round(band.top * 100, 1)}–${round(band.bottom * 100, 1)}% of the source frame height`;
-  const reasons = [...new Set(unknown.map(e => e.error))].join('; ');
-  const unchecked = unknown.length ? ` ${unknown.length} of ${points.length} cut point(s) were not checked (${unknown.map(e => `${e.item_id} ${e.edge}`).join(', ')}): ${reasons}.` : '';
-  const observation = warned.length
-    ? `${warned.length} of ${scope} show a burned-in caption change within ${p.window_seconds} s inside the cut (in-point: previous line still shown; out-point: next line flashes). Suggested source times (midpoint of the first changed source frame, so the cut cannot fall back onto the previous frame): ${warned.map(describe).join('; ')}.${unchecked} Frame-difference heuristic, not OCR.`
-    : unknown.length
-      ? `No burned-in caption change found at the ${points.length - unknown.length} analysed point(s) of ${scope}, but the check is incomplete.${unchecked}`
-      : `No burned-in caption change within ${p.window_seconds} s inside any of ${scope}. Frame-difference heuristic, not OCR; it cannot read caption text.`;
-  const refs = warned.map(e => {
-    const sample = sampleAt(e);
-    return { time_seconds: e.output_seconds, item_id: e.item_id, ...(sample ? { sample_id: sample } : {}) };
-  });
-  return { status, observation, measured, ...(refs.length ? { refs } : {}) };
+      return { ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, step: speedOf(point.item) / fps, window: p.window_seconds }),
+        caption_changes: near.filter(e => e.kind === 'caption').map(e => ({ ...e, source_seconds: round6(e.source_seconds), frame_mid_seconds: round6(e.frame_mid_seconds) })),
+        shot_changes: near.filter(e => e.kind === 'shot').map(e => round6(e.source_seconds)) };
+    },
+    summary: n => ({
+      scope: scope(n), finding: 'burned-in caption change',
+      describe: e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(4)} s → ${e.suggested_source_seconds.toFixed(6)} s`,
+      warned: (count, details, unchecked) => `${count} of ${scope(n)} show a burned-in caption change within ${p.window_seconds} s inside the cut (in-point: previous line still shown; out-point: next line flashes). Suggested source times (midpoint of the first changed source frame, so the cut cannot fall back onto the previous frame): ${details}.${unchecked} Frame-difference heuristic, not OCR.`,
+      pass: `No burned-in caption change within ${p.window_seconds} s inside any of ${scope(n)}. Frame-difference heuristic, not OCR; it cannot read caption text.`,
+    }),
+  };
 }

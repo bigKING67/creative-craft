@@ -5,8 +5,8 @@ import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
 import { templateSet } from './templates.mjs';
-import { burnedCaptionCheck, captionBand } from './burned-captions.mjs';
-import { cutFragmentCheck } from './cut-fragments.mjs';
+import { captionBand } from './burned-captions.mjs';
+import { cutPointChecks } from './cut-checks.mjs';
 import { logSegments, mediaTool, overlap, silenceFilter, silences, union } from './media-analysis.mjs';
 
 // Technical checks on one actual rendered file of one revision. Automated
@@ -239,10 +239,10 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
     const frame = Math.round(point.output_seconds * fps), id = point.edge === 'in' ? `s-cut${frame}-after` : `s-cut${frame}-before`;
     return sampled.has(id) ? id : sampled.has(`s-${point.item_id}-mid`) ? `s-${point.item_id}-mid` : null;
   };
-  const burned = await burnedCaptionCheck(doc, root, { band, sampleAt: atCut });
+  // Fragments of adjacent SOURCE shots (or a flash) just inside every video item's
+  // in/out point. Both checks share one decode per cut point.
+  const { burned, fragments } = await cutPointChecks(doc, root, { band, sceneThreshold, sampleAt: atCut });
   check('burned-caption-cut-points', 'captions', burned.status, burned.observation, { measured: burned.measured, ...(burned.refs ? { refs: burned.refs } : {}) });
-  // Fragments of adjacent SOURCE shots (or a flash) just inside every video item's in/out point.
-  const fragments = await cutFragmentCheck(doc, root, { sceneThreshold, sampleAt: atCut });
   check('cut-boundary-fragments', 'video', fragments.status, fragments.observation, { measured: fragments.measured, ...(fragments.refs ? { refs: fragments.refs } : {}) });
 
   // Lint result recorded by the render receipt (render is blocked on errors).
