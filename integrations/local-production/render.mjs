@@ -14,10 +14,30 @@ const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
 export const revisionFile = (root, revision) => path.join(root, 'revisions', `${String(revision).padStart(6, '0')}.json`);
 
-// Preview: longest edge at most 640, even dimensions. Export: project canvas.
+// Measured renderer limit (HyperFrames producer 0.8.108, headless Chrome 154,
+// macOS): with an output height of 86 px or less the sequential screenshot
+// capture makes no progress and the producer fails after its stall timeout
+// ("capture stalled", 60 s); 88 px and up render. The container, codec and
+// even the presence of video do not matter, and width does not (64 px wide
+// renders). See README「渲染尺寸下限」.
+export const MIN_RENDER_HEIGHT = 88;
+
+// Preview: longest edge at most 640, but never below MIN_RENDER_HEIGHT high
+// (and never above the canvas), even dimensions. Export: project canvas.
 export function outputSize(canvas, preview) {
-  const scale = preview ? Math.min(1, 640 / Math.max(canvas.width, canvas.height)) : 1;
-  return { width: Math.max(2, Math.round(canvas.width * scale / 2) * 2), height: Math.max(2, Math.round(canvas.height * scale / 2) * 2) };
+  const scale = preview ? Math.min(1, Math.max(640 / Math.max(canvas.width, canvas.height), MIN_RENDER_HEIGHT / canvas.height)) : 1;
+  const even = value => Math.max(2, Math.round(value / 2) * 2);
+  return { width: even(canvas.width * scale), height: Math.min(canvas.height, Math.max(MIN_RENDER_HEIGHT, even(canvas.height * scale))) };
+}
+
+// Refused before anything is written or a browser starts: the canvas itself
+// (export size, and the largest a preview can be) is below the renderer limit.
+export function checkRenderSize(canvas) {
+  if (canvas.height < MIN_RENDER_HEIGHT) {
+    throw new Error(`Canvas ${canvas.width}x${canvas.height} is too small to render: the renderer's screenshot capture stalls below ` +
+      `${MIN_RENDER_HEIGHT} px of output height (measured: ≤86 px fails, ≥88 px renders, whatever the media). ` +
+      `Use a canvas at least ${MIN_RENDER_HEIGHT} px high (e.g. a new project or a revert to a revision with a larger canvas)`);
+  }
 }
 
 export function expectsAudio(project, frames) {
@@ -38,6 +58,7 @@ export async function lintComposition(html) {
 
 export async function renderProject(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
   const { doc: project, templates } = await loadProject(root, revision);
+  checkRenderSize(project.canvas);
   // Source frame alignment: the compiled view is computed once here and shared by
   // the font glyph checks (verifyAssets, copyCaptionFont) and compose, which use
   // a view passed in as is. project.json keeps the document as written.
