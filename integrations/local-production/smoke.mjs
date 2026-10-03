@@ -187,11 +187,11 @@ for (const binding of brandBindings) assert.equal(await digest(path.join(base, '
 const brandHtml = await fs.readFile(path.join(base, 'packaging-export/index.html'), 'utf8');
 assert.match(brandHtml, /id="v-main3"[^>]*data-playback-rate="1.5"/);
 assert.ok(!/<audio[^>]*data-volume/.test(brandHtml) && (brandHtml.match(/<audio[^>]*data-automation=/g) ?? []).length === 3, 'every sound level is a volume lane');
-// Linked caption on the 1.5× item: the 24 fps source records frame_rate, so the
-// in-point 2.5 s plays from frame 60's midpoint 60.5/24 s; source 3.5–4.5 s →
-// output 5 + (3.5 − 60.5/24)/1.5 … 5 + (4.5 − 60.5/24)/1.5 s.
+// Linked caption on the 1.5× item: source 3.5–4.5 s → output 5 + 1/1.5 … 5 + 2/1.5 s.
+// The 24 fps source records frame_rate, but its in-point 2.5 s (frame 60's
+// start) is not a truncated decimal, so compilation keeps it.
 assert.equal((await readProject(brand, 1)).assets.find(a => a.id === 'talk').frame_rate, '24/1');
-assert.match(await fs.readFile(path.join(base, 'packaging-export/captions.vtt'), 'utf8'), /00:00:05\.653 --> 00:00:06\.319\n变速：细节一闪而过/);
+assert.match(await fs.readFile(path.join(base, 'packaging-export/captions.vtt'), 'utf8'), /00:00:05\.667 --> 00:00:06\.333\n变速：细节一闪而过/);
 const brandSignals = await verifyBrand(base, 'packaging-export', { depthDb });
 const brandQa = await cli('qa', brand, path.join(base, 'packaging-export'), path.join(base, 'packaging-qa'));
 assert.notEqual(brandQa.verdict, 'fail', JSON.stringify(brandQa.checks.filter(c => c.status === 'fail')));
@@ -263,11 +263,12 @@ summary.portrait_qa = { verdict: portraitQa.verdict, checks: Object.fromEntries(
     saturated_share: barsShare(await frameAt(path.join(base, 'portrait-preview/video.mp4'), shotSample.time_seconds, 'scale=36:64')) } };
 assert.ok(summary.portrait_qa.short_shot_sample.saturated_share > 0.3, JSON.stringify(summary.portrait_qa.short_shot_sample));
 
-// 7. Source frame snapping: a 30 fps source turns from red to blue at frame 22
-// (22/30 = 0.7333… s); the in-point is written truncated as 0.7333. A v2 import
-// records frame_rate and compilation starts at frame 22's midpoint, so output
-// frame 0 is blue and the cut-fragment check passes. A local-edit.v1 project
-// (no frame_rate, historical behaviour) shows frame 21 (red) and QA warns.
+// 7. Source frame alignment: a 30 fps source turns from red to blue at frame 22
+// (22/30 = 0.7333… s); the in-point is written truncated as 0.7333 (0.001 frame
+// below frame 22). A v2 import records frame_rate and compilation plays from
+// frame 22's start + 0.1 ms, so output frame 0 is blue and the cut-fragment
+// check passes. A local-edit.v1 project (no frame_rate, historical behaviour)
+// shows frame 21 (red) and QA warns.
 const switching = path.join(base, 'switch-at-22.mp4');
 await run(ffmpeg, ['-v', 'error', '-n', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=0.7333333', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=30:d=1.2666667',
   '-filter_complex', '[0:v]trim=end_frame=22[a];[1:v]trim=end_frame=38,setpts=PTS-STARTPTS[b];[a][b]concat=n=2:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30', switching]);
@@ -281,7 +282,7 @@ await createProject(unsnapped, { project_id: 'frame-snap-v1', title: '无帧率'
   assets: [{ id: 'switch', path: switching }], clips: [{ id: 'cut', asset_id: 'switch', in_seconds: 0.7333, frames: 15, volume: 0, fit: 'contain', captions: [] }], audio: [] });
 await renderProject(snapped, path.join(base, 'frame-snap-preview'), { preview: true, revision: 1 });
 await renderProject(unsnapped, path.join(base, 'frame-snap-v1-preview'), { preview: true, revision: 1 });
-assert.match(await fs.readFile(path.join(base, 'frame-snap-preview/index.html'), 'utf8'), /id="v-cut"[^>]*data-media-start="0\.75"/);
+assert.match(await fs.readFile(path.join(base, 'frame-snap-preview/index.html'), 'utf8'), /id="v-cut"[^>]*data-media-start="0\.733433333"/);
 const firstFrame = async dir => (await run(ffmpeg, ['-v', 'error', '-i', path.join(base, dir, 'video.mp4'), '-vf', 'select=eq(n\\,0),scale=8:8', '-frames:v', '1',
   '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer' })).stdout;
 const tint = rgb => { let r = 0, b = 0; for (let i = 0; i < rgb.length; i += 3) { r += rgb[i]; b += rgb[i + 2]; } return r > b ? 'red' : 'blue'; };
