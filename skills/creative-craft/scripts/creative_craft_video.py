@@ -783,15 +783,20 @@ def record_artifact(
                 f"revision {revision} is not newer than current revision {current}"
             )
         data["current_revision"] = revision
+    # Compare with the latest binding of this path in each completed stage; an
+    # earlier draft rebound before completion is superseded, not evidence.
     for done in data["stages"]:
         if done["status"] != "completed":
             continue
+        latest = None
         for bound in done["artifacts"]:
-            if bound["path"] == relative and bound["sha256"] != artifact["sha256"]:
-                raise VideoError(
-                    f"{relative} is bound by completed stage {done['id']} and must "
-                    "stay unchanged; write changes to a new file"
-                )
+            if bound["path"] == relative:
+                latest = bound
+        if latest is not None and latest["sha256"] != artifact["sha256"]:
+            raise VideoError(
+                f"{relative} is bound by completed stage {done['id']} and must "
+                "stay unchanged; write changes to a new file"
+            )
     if kind == "production-plan":
         data["plan"] = {"path": relative, "sha256": artifact["sha256"]}
     stage["artifacts"].append(artifact)

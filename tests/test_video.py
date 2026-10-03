@@ -837,6 +837,25 @@ class VideoGateTests(unittest.TestCase):
         self.assertEqual(2, production(self.root)["revision_rounds"])
         self.cli("video-extend-rounds", "--by", "lead", "--reason", "again", code=1)
 
+    def test_rebinding_an_approved_plan_ignores_superseded_drafts(self) -> None:
+        self.init("--approval-required", "none")
+        self.cli("video-skip", "--stage", "brief", "--reason", "chat brief")
+        self.cli("video-skip", "--stage", "reference", "--reason", "none")
+        draft = production_plan()
+        draft["title"] = "first draft"
+        write_doc(self.root, "plan.json", draft)
+        self.cli("video-record", "--stage", "plan", "--kind", "production-plan", "--artifact", "plan.json")
+        write_doc(self.root, "plan.json", production_plan())
+        self.cli("video-record", "--stage", "plan", "--kind", "production-plan", "--artifact", "plan.json")
+        self.cli("video-complete", "--stage", "plan")
+        self.cli("video-record", "--stage", "select", "--kind", "production-plan", "--artifact", "plan.json")
+        write_doc(self.root, "plan.json", draft)
+        out = self.cli(
+            "video-record", "--stage", "select", "--kind", "production-plan",
+            "--artifact", "plan.json", code=1,
+        )
+        self.assertIn("bound by completed stage plan", out)
+
     def test_extend_rounds_requires_a_limit_block(self) -> None:
         self.assembled()
         out = self.cli("video-extend-rounds", "--by", "lead", "--reason", "early", code=1)
