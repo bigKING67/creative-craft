@@ -1,15 +1,17 @@
 // Explicit opt-in: real producer + Chrome (PRODUCER_HEADLESS_SHELL_PATH).
 // Outputs below the measured 88 px capture height are captured at an integer
 // multiple and scaled back: a 128x72 canvas exports and previews at 128x72,
-// a 1280x160 canvas previews at 640x80, with the picture and captions in place.
+// a 1280x160 canvas previews at 640x80, with the picture and captions in place;
+// a 3840x88 preview is captured at the export size (3840x88) and scaled back;
+// QA judges the size the receipt recorded.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
-import { createProject, probe } from '../project.mjs';
+import { createProject, digest, probe } from '../project.mjs';
 import { renderProject } from '../render.mjs';
 import { qaRender } from '../qa.mjs';
-import { REGION, frameColor, frameColour, synthVideo, tempDir } from './media-fixtures.mjs';
+import { REGION, ffmpeg, frameColor, frameColour, synthVideo, tempDir } from './media-fixtures.mjs';
 
 const CAPTION_BAND = 'iw/2:ih/10:iw/4:ih*3/4'; // centre half of the band around centerY 0.8
 
@@ -27,7 +29,9 @@ async function project(dir, name, [width, height], { caption = false } = {}) {
 async function assertRender(root, output, { preview, size, capture }) {
   const receipt = await renderProject(root, output, { preview });
   assert.equal(receipt.status, 'completed');
-  assert.deepEqual(receipt.capture, { ...capture, factor: capture.width / size[0], downscale: 'ffmpeg scale flags=area' });
+  const factor = capture.width / size[0];
+  assert.deepEqual(receipt.capture, { ...capture, downscale: 'ffmpeg scale flags=area', ...(Number.isInteger(factor) && capture.height === size[1] * factor ? { factor }
+    : { factor: null, basis: 'export capture (an integer multiple of the preview would be larger)' }) });
   const video = path.join(output, 'video.mp4'), media = await probe(video);
   assert.deepEqual([receipt.output.width, receipt.output.height, media.width, media.height], [...size, ...size]);
   await assert.rejects(fs.access(path.join(output, 'capture.mp4')), { code: 'ENOENT' }, 'the upscaled capture is removed');
@@ -37,7 +41,7 @@ async function assertRender(root, output, { preview, size, capture }) {
   return { receipt, video };
 }
 
-test('a 128x72 canvas exports and previews at 128x72 via a 2x capture; a 1280x160 canvas previews at 640x80', { timeout: 180000 }, async t => {
+test('a 128x72 canvas exports and previews at 128x72 via a 2x capture; a 1280x160 canvas previews at 640x80; a 3840x88 preview uses the export capture', { timeout: 300000 }, async t => {
   assert.ok(process.env.PRODUCER_HEADLESS_SHELL_PATH, 'Set PRODUCER_HEADLESS_SHELL_PATH for this integration check');
   process.env.HF_DE_STALL_MS ??= '15000'; // a regression fails in 15 s instead of 60 s
   const dir = await tempDir('render-size-');
@@ -54,4 +58,34 @@ test('a 128x72 canvas exports and previews at 128x72 via a 2x capture; a 1280x16
 
   const wide = await project(dir, 'wide', [1280, 160]);
   await assertRender(wide, path.join(dir, 'wide-preview'), { preview: true, size: [640, 80], capture: { width: 1280, height: 160 } });
+
+  // 3840x88: the preview (640x14) would need a 7x capture (4480x98), larger than the
+  // export's own 3840x88, so it is captured at 3840x88 and scaled back (non-integer).
+  const banner = await project(dir, 'banner', [3840, 88]);
+  const preview = await assertRender(banner, path.join(dir, 'banner-preview'), { preview: true, size: [640, 14], capture: { width: 3840, height: 88 } });
+  const qaBanner = await qaRender(banner, path.join(dir, 'banner-preview'), path.join(dir, 'banner-qa'));
+  const resolution = qaBanner.checks.find(c => c.id === 'resolution');
+  assert.equal(resolution.status, 'pass');
+  assert.equal(resolution.measured.expected_source, 'receipt');
+  assert.equal(preview.receipt.output.width, 640);
+
+  // QA judges a render by the output size its receipt recorded: a preview made
+  // under the earlier rule (1280x160 raised to 704x88; simulated by re-encoding
+  // this preview at 704x88 and recording it as such) passes at 704x88.
+  const raised = path.join(dir, 'wide-preview'), raisedReceipt = JSON.parse(await fs.readFile(path.join(raised, 'receipt.json'), 'utf8'));
+  await ffmpeg('-y', '-i', path.join(raised, 'video.mp4'), '-vf', 'scale=704:88,setsar=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(raised, 'old.mp4'));
+  Object.assign(raisedReceipt.output, { file: 'old.mp4', sha256: await digest(path.join(raised, 'old.mp4')), width: 704, height: 88 });
+  await fs.writeFile(path.join(raised, 'receipt.json'), JSON.stringify(raisedReceipt));
+  const old = (await qaRender(wide, raised, path.join(dir, 'wide-qa'))).checks.find(c => c.id === 'resolution');
+  assert.deepEqual([old.status, old.measured.expected_width, old.measured.expected_height, old.measured.expected_source], ['pass', 704, 88, 'receipt']);
+
+  // A receipt without an output size falls back to today's rule, and says so.
+  const older = path.join(dir, 'tiny-preview'), receiptFile = path.join(older, 'receipt.json');
+  const recorded = JSON.parse(await fs.readFile(receiptFile, 'utf8'));
+  delete recorded.output.width; delete recorded.output.height;
+  await fs.writeFile(receiptFile, JSON.stringify(recorded));
+  const fallback = (await qaRender(tiny, older, path.join(dir, 'tiny-preview-qa'))).checks.find(c => c.id === 'resolution');
+  assert.equal(fallback.status, 'pass');
+  assert.equal(fallback.measured.expected_source, 'output-size-rule');
+  assert.match(fallback.observation, /receipt records no output size/);
 });
