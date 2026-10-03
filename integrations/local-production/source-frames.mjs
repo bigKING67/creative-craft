@@ -140,7 +140,7 @@ export function streamStart(stream) {
 
 // frame_rate recorded at import from one ffprobe JSON (-show_streams
 // -show_format), or null. Recorded only when the frame grid k / rate is
-// trustworthy:
+// trustworthy in media time:
 //   - the first video stream is the picture (pictureStream index 0, not cover
 //     art), so the asset's width, height (probe: first video stream, as before
 //     frame_rate existed) and frame_rate describe the same stream;
@@ -148,15 +148,31 @@ export function streamStart(stream) {
 //     reduced). They differ for variable-frame-rate sources (and for some
 //     damaged or edited constant-rate files); such sources get no frame_rate
 //     and keep the renderer behaviour;
-//   - its own start (streamStart: start_pts × time_base, the source the QA
-//     timing uses) is 0, so frame k starts at k / rate. Other streams do not
-//     matter: an audio stream starting below 0 (AAC priming) does not move
-//     the picture's frame grid.
+//   - its own start (start_pts × time_base, as streamStart and the QA timing
+//     read it) equals the earliest start of all streams. The renderer and the
+//     QA timing (sourceTiming) take that earliest start as media time 0
+//     (measured: in an MKV whose audio starts at -0.067 s, in-point X shows
+//     video time X - 0.067), so only then does frame k start at media time
+//     k / rate. Streams that all start at the same non-zero time qualify; a
+//     file whose audio starts before its video (MKV/WebM can keep a negative
+//     audio start) does not. Compared exactly, as integers.
 // Audio-only files and cover art get none.
 export function probedFrameRate(info) {
   const picture = pictureStream(info);
   if (picture?.index !== 0) return null;
   const video = picture.stream, rate = reduceFrameRate(video.r_frame_rate);
   if (!rate || rate !== reduceFrameRate(video.avg_frame_rate)) return null;
-  return streamStart(video) === 0 ? rate : null;
+  const start = exactStart(video);
+  if (!start) return null;
+  // a/b < c/d ⇔ a·d < c·b (denominators positive).
+  const before = other => other && other.p * start.q < start.p * other.q;
+  return info.streams.some(s => before(exactStart(s))) ? null : rate;
+}
+
+// start_pts × time_base as an exact fraction { p, q } (BigInt), under the same
+// conditions as streamStart; null otherwise.
+function exactStart(stream) {
+  if (streamStart(stream) === null) return null;
+  const tb = rational(stream.time_base);
+  return { p: BigInt(stream.start_pts) * BigInt(tb.num), q: BigInt(tb.den) };
 }
