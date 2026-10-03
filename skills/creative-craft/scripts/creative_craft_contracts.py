@@ -2393,6 +2393,12 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
         )
     fps = data.get("canvas", {}).get("fps")
     assets = _indexed_ids(r, data.get("assets"), "assets")
+    for asset_id, asset in assets.items():
+        if "frame_rate" in asset:
+            r.require(
+                asset.get("video") is True,
+                f"asset {asset_id!r} frame_rate requires a video stream",
+            )
     tracks = _indexed_ids(r, data.get("tracks"), "tracks")
     items = _indexed_ids(r, data.get("items"), "items")
     _check_ducking(r, data, tracks)
