@@ -56,7 +56,7 @@ Chrome 路径示例仅适用于对应 macOS 安装；其他主机指定自己的
 合同见 `docs/content-production-architecture.md`「源素材帧对齐（2026-10-03）」。入点常被写成截断的小数（镜头首帧是 733/30 = 24.4333… 而写成 24.4333），渲染器显示“时间 ≤ 入点”的帧，于是成片第 0 帧是上一帧（旧镜头末帧）。
 
 - **asset `frame_rate`**（可选，有理数字符串，如 `"30/1"`、`"30000/1001"`）：v2 `create` 与 `add_asset` 导入时由 ffprobe 写入，只在 `video: true` 的素材上合法（`validateV2` 拒绝纯音频素材上的该字段及非 `<num>/<den>` 形式；这是素材规则的唯一来源，编译时的修正函数只看 `frame_rate`）。导入时按工程格式决定：v1 工程（`local-edit.v1`）的导入不探测也不写该字段；已有工程不改写、不补写；v1 迁移得到的素材也没有该字段。
-- **导入规则**（`probe` + `probedFrameRate`）：`video` 标记与宽高**保持原行为**，取自第一条视频流（任何视频流，包括封面图 `attached_pic`）；因此带封面图的音频文件仍是 `video: true`、宽高为封面尺寸，v1 工程照旧可把它用作 clip。`frame_rate` **只在第一条视频流不是封面图时**记录（保证帧率与宽高来自同一条流；封面图在前、画面流在后的文件不记录）。该流 `r_frame_rate` 与 `avg_frame_rate` 约分后**完全相等**（恒定帧率），且该流**自身起点**（`start_pts × time_base`，与 QA `sourceTiming` 同一来源）**为 0**，才记录约分后的帧率；文件 `format.start_time` 与其他流起点不参与判断，音频起点为负（AAC priming）不影响。否则（可变帧率、视频起点偏移如 0.5 s、缺 `start_pts` 等）不记录，这类素材保持渲染器原口径，由 QA 按解码出的实际帧时间检查并报警。“分析画面流”（第一条非封面视频流，`pictureStream`）与比值解析（`rational`）、流起点（`streamStart`）由导入与 QA `sourceTiming` 共用。
+- **导入规则**（`probe` + `probedFrameRate`）：`video` 标记与宽高**保持原行为**，取自第一条视频流（任何视频流，包括封面图 `attached_pic`）；因此带封面图的音频文件仍是 `video: true`、宽高为封面尺寸，v1 工程照旧可把它用作 clip。`frame_rate` **只在第一条视频流不是封面图时**记录（保证帧率与宽高来自同一条流；封面图在前、画面流在后的文件不记录）。该流 `r_frame_rate` 与 `avg_frame_rate` 约分后**完全相等**（恒定帧率），且该流起点（`start_pts × time_base`，与 QA `sourceTiming` 同一来源）**等于所有流的最早起点**（渲染器与 QA 共同的媒体时间零点，见下文「素材兼容与渲染尺寸」；按整数精确比较），才记录约分后的帧率。所有流从同一非零时间开始（如都在 0.5 s）也记录；音频早于视频开始（MKV/WebM 可保留的负音频起点，或视频晚于音频 0.5 s）则不记录（0.7.0 起；0.6.0 只要求视频流自身起点为 0，会给负音频起点的 MKV/WebM 记录帧率并按错误的帧网格修正）。否则（可变帧率、视频晚于其他流开始、缺 `start_pts` 等）不记录，这类素材保持渲染器原口径，由 QA 按解码出的实际帧时间检查并报警。“分析画面流”（第一条非封面视频流，`pictureStream`）与比值解析（`rational`）、流起点（`streamStart`）由导入与 QA `sourceTiming` 共用。
 - **修正规则**（`truncatedFrame` / `correctedSourceIn`，`source-frames.mjs`）：只修正“小数截断”。视频轨 media item 的源入点若低于某帧起点（k/帧率）**不超过 2 ms 且严格不足 0.1 帧**（两条同时满足；覆盖截到毫秒的写法，如 30 fps 第 733 帧写成 24.433、24.4327 或 24.4333，29.97 fps 写成 24.457，24 fps 写成 30.541），编译为该帧起点 **+ 0.1 ms**（0.0001 s，保留到 1e-9 s）；恰在帧起点、或低于帧起点超过 2 ms（如 30 fps 下 24.430，低 3.3 ms）、或达到 0.1 帧（60 fps 下 0.1 帧 = 1.67 ms，先于 2 ms 生效）的入点**保持原值**（不再整体对齐到帧中点）。全程用 BigInt 有理数精确计算：入点按文档中 JSON 数值的最短十进制形式（如 `24.4333` = 244333/10000），帧率按整数比；恰低 2 ms 仍修正，恰低 0.1 帧不修正。位移上限为 min(2 ms, 0.1 帧) + 0.1 ms。帧率参数可传字符串或 `parseFrameRate` 的解析结果，`correctedSourceIn` 只解析一次，两种形式结果一致。
 - **编译视图**（`compiledView(doc)`）：一次算出带修正入点的 items（文档不被改写，未修正的 item 与原文档共用同一对象，`correctionOf(item)` 给出原 item 与修正到的帧号）；对视图再调用直接返回自身。编译（`data-media-start`、link 字幕窗口、字体绑定的可见字幕）、`activeCaptions`、QA 字幕采样与两项剪辑点检查都使用同一个视图，不各自调用修正函数：渲染时 `renderProject` 只计算一次视图，传给字体校验（`verifyAssets`、`copyCaptionFont`）与 `compose`（`project.json` 仍写原文档）；`qaRender` 计算一次，供字幕采样与剪辑点检查；创建/编辑时 `planCaptionFont` 只算一次字体 runs，`editBatch` 对 base 与 next 各算一次。同一视频轨 item 的 `<audio>` 与 `<video>` 用同一个修正后的入点（位移 ≤ 2 ms + 0.1 ms，音画同步不变）。
   - **音频轨** item（包括放在音频轨上的同一视频素材）**不修正**，精确写定的音频入点保持不变。
@@ -65,6 +65,50 @@ Chrome 路径示例仅适用于对应 macOS 安装；其他主机指定自己的
 - **QA**：两项剪辑点检查（烧录字幕、相邻镜头碎片）按编译视图判断（渲染实际起播时间），但**按文档写定值报告与建议**：`measured.points` 的 `source_seconds` 是文档写定值（入点为写定入点，出点为写定入点 + 时长换算的写定出点），`suggested_shift_seconds` 以它为基准（写定值 + shift = 建议值，按 shift 改文档即得到目标帧中点），描述文本中的 “source in X” / “at source X” 也是写定值。入点被修正的 item 另列 `compiled_source_seconds`（编译后实际值，文本中写作 “(compiled X s)”），入点还记录 `source_frame`（修正到的帧号）。未修正的剪辑点不加这些字段，按渲染器口径判断（见下文 QA）。内部剪辑点（`cutPoints`）不携带原 item，需要写定值时用 `correctionOf(point.item)`。
 - **真实素材复验**（`byq-foundation-02` 整片，720×1280 30 fps，视频与文件起点均为 0，只读，临时工程已删除）：v2 导入记录 `"30/1"`。item `cut` 入点 24.4333、30 帧，编译为 24.433433333（第 733 帧起点 + 0.1 ms）；预览第 0 帧（`select=eq(n\,0)`）与源第 733 帧（新镜头首帧）MAE 0.89、与第 732 帧 55.0。同工程 item `plain` 入点 60.65（帧内，非截断）编译后仍为 60.65。QA `cut-boundary-fragments` 与 `burned-caption-cut-points` 均为 pass。第二轮（2 ms 阈值）复验：同一素材临时 v2 工程，item `cut` 入点写成 3 位小数 24.433、30 帧，编译为 24.433433333；预览第 0 帧与源第 733 帧 MAE 1.01、与第 732 帧 55.08；两项剪辑点检查均为 pass，入点报告 `source_seconds` 24.433（写定值）、`compiled_source_seconds` 24.433433、`source_frame` 733（碎片检查 aligned），出点报告写定出点 25.433 与编译出点 25.433433。
 - **局限**：只修正入点，不改输出帧数；帧网格假设第 0 帧位于媒体时间零点、恒定帧率（导入规则已排除不满足的素材）；源帧率与画布帧率不同时，后续帧仍按画布 fps 推进，与原行为一致；入点在帧内但离帧起点很近（如晚 0.001 帧）不属于截断，保持原值。
+
+## 素材兼容与渲染尺寸（0.7.0）
+
+起因：一次在 128×72 画布上的测试中，HEVC MOV、VP9/Opus WebM、H.264/AAC MKV 都在第 0 帧卡住（producer 60 s 后报 “Sequential screenshot capture stalled … stuck at frame 0”），当时疑为编码不受支持。在完全相同的条件下补做 H.264 MP4 对照后，**对照同样卡住**；同一批素材在 320×180 下全部成功。真正原因是输出画面高度，与容器和编码无关。因此**不按编码拒绝导入，也不提供转码**。
+
+**渲染尺寸下限**（本机实测：`@hyperframes/producer` 0.8.108、Google Chrome 154 headless、macOS；`MIN_RENDER_HEIGHT = 88`，`render.mjs`）：
+
+- 扫描（H.264 MP4 纯色素材，画布 = 素材尺寸）：输出高度 **≤ 86 px 稳定卡住**（64×64、128×72、144×80、150×84、160×72、160×86），**≥ 88 px 正常**（160×88、128×90、128×128、90×160、160×90 及以上）。宽度不受影响（64×160 正常）。源素材尺寸不影响结果：320×180 素材放进 128×72 画布同样卡住，128×72 素材放进 320×180 画布正常。
+- **没有视频的工程同样会卡**：160×72 画布上只有音频 item 加一条字幕，停在第 6/15 帧。问题出在 Chrome 截图视口，与素材无关。
+- **预览**：长边缩到 640 后高度会低于 88 px 时（极端宽高比，如 1280×160 预览会变成 640×80），缩放比例提高到让高度至少为 88 px，且不超过画布原尺寸（1280×160 预览为 704×88，3840×480 预览也是 704×88）。QA 用同一个 `outputSize` 推算预览尺寸。
+- **画布高度不足 88 px**：导出和预览在加载修订之后、写入任何文件和启动浏览器之前立即失败。错误信息给出画布尺寸、实测下限（≤86 px 失败，≥88 px 正常）以及修复办法（使用高度至少 88 px 的画布，即新建工程，或回退到画布更大的修订）。`create` 与编辑批次**不拦截**：这是渲染器的限制，不是文档合同（schema 仍允许 64 px 起）。
+- 下限是本机实测值，换渲染器版本或 Chrome 版本后需要重新扫描（用 `MATRIX_SIZE` 跑下面的矩阵即可）。
+
+**支持矩阵**（`node tests/media-support.matrix.mjs`，需要 `PRODUCER_HEADLESS_SHELL_PATH`；每例为 1 s 合成素材，320×240、30 fps，经 `createProject` 导入后预览渲染；判定条件为完成渲染、第 0 帧中心区域是素材的颜色、有音轨的用例成片平均音量高于 −40 dB；producer 的卡顿看门狗通过 `HF_DE_STALL_MS` 缩短到 15 s，3 例并发，整轮约半分钟）。另用 `MATRIX_SECONDS=8 MATRIX_IN=3 MATRIX_SIZE=1080x1920 MATRIX_FULL=1`（8 s、入点 3 s、竖屏 1080×1920 导出）复测了 HEVC、VP9、MKV、HLG、VFR、旋转和 H.264 MP4 对照，结果相同。
+
+| 用例 | 用途 | 容器 | 视频（编码/profile/像素格式） | 音频 | 结果 |
+|---|---|---|---|---|---|
+| H.264 8-bit 4:2:0 | 视频 | MP4、MOV | h264/Constrained Baseline/yuv420p | AAC | 可渲染 |
+| H.264 10-bit | 视频 | MP4 | h264/High 10/yuv420p10le | — | 可渲染 |
+| H.264 4:2:2 | 视频 | MP4 | h264/High 4:2:2/yuv422p | — | 可渲染 |
+| H.264 4:4:4 | 视频 | MP4 | h264/High 4:4:4 Predictive/yuv444p | — | 可渲染 |
+| HEVC 8-bit（hvc1） | 视频 | MP4、MOV | hevc/Main/yuv420p | —、AAC | 可渲染 |
+| HEVC 10-bit（hvc1） | 视频 | MOV | hevc/Main 10/yuv420p10le | — | 可渲染 |
+| HEVC 10-bit HLG（BT.2020，iPhone HDR 形态） | 视频 | MOV | hevc/Main 10/yuv420p10le | AAC | 可渲染（色彩见局限） |
+| HEVC / H.264 可变帧率 | 视频 | MOV、MP4 | hevc/Main、h264 | AAC、— | 可渲染（不记录 `frame_rate`） |
+| HEVC 旋转 90°（display matrix） | 视频 | MOV | hevc/Main/yuv420p | — | 可渲染，方向正确 |
+| VP9 / Opus | 视频 | WebM | vp9/Profile 0/yuv420p | Opus | 可渲染 |
+| H.264 / AAC | 视频 | MKV | h264/yuv420p | AAC | 可渲染 |
+| H.264 视频的音轨 | 视频 | MP4、MOV | h264/yuv420p | MP3、Opus（MP4）、PCM s16le（MOV）、FLAC（MP4）、ALAC（MOV、MP4） | 全部可渲染且有声 |
+| 独立音频素材 | 音频轨 | M4A、MP3、MP4、Ogg、WAV、FLAC | — | AAC、MP3、Opus（MP4、Ogg）、PCM s16le、FLAC、ALAC（M4A） | 全部可渲染且有声 |
+
+原因：producer 用 ffmpeg 抽取视频帧再注入页面，音频也由 ffmpeg 处理，不依赖浏览器解码，所以本机 ffmpeg 能解码的容器和编码都可以渲染。旋转素材另行核对过方向：编码为 320×240、上红下蓝的 HEVC，带 90° 旋转元数据，在 240×320 画布上渲染成左红右蓝，与 ffmpeg 自动旋转后的源帧一致。H.264 10-bit 那一例用时约 18 s（其他约 2 s），原因未查。
+
+**媒体时间零点（与 QA 一致）**：渲染器和 QA 剪辑点检查（`sourceTiming`）都以**所有流的最早起点**作为媒体时间零点，文档中的入点 X 对应视频时间 X + start（start 为最早起点，通常 ≤ 0）。实测（第 1.0 s 由红变蓝的素材，320×180）：
+- MP4/MOV：即使用 `-itsoffset -0.044 -avoid_negative_ts disabled` 封装，ffprobe 读到的各流起点也都是 0（muxer 已经归零），因此零点就是视频起点。入点 1.016667 和 1.06 的第 0 帧都是蓝色。
+- MKV/WebM：可以保留负的音频起点（MKV −0.067 s，WebM −0.056 s）。此时零点在视频起点之前：MKV 入点 1.016667 和 1.06 的第 0 帧仍是红色（视频时间 0.95 与 0.993），入点 1.1 是蓝色（1.033）；WebM 入点 1.06 是蓝色（1.004）。
+- 这类素材不记录 `frame_rate`（见上文导入规则），因此不做截断修正，保持渲染器原口径，入点偏差由 QA 剪辑点检查按解码出的实际帧时间报警。所有流从同一非零时间开始的素材（如 MKV 整体偏移 0.5 s）零点就是视频起点，照常记录帧率并修正，实测修正后第 0 帧正确（`tests/source-start.integration.mjs`）。
+
+**局限**：
+- HDR（HLG/PQ 10-bit）在 `hdrMode: 'force-sdr'` 下可以出画（矩阵中纯红 HLG 素材渲染为红色），但没有做色调映射，也没有验证色彩准确性。
+- 可变帧率素材可以渲染，但不记录 `frame_rate`，不做截断修正。
+- 矩阵只用了合成纯色素材和正弦音，没有覆盖真实 iPhone 文件中的额外数据轨（如 `mebx` 元数据、`tmcd` 时间码）、杜比视界或超长素材。
+
+可选集成测试（需要真实 Chrome）：`tests/render-size.integration.mjs`（1280×160 画布预览被钳到 704×88 后成功渲染、第 0 帧颜色正确）、`tests/source-start.integration.mjs`（媒体时间零点与 `frame_rate` 规则）、`tests/font-render.integration.mjs`。
 
 ## 创建工程
 
@@ -239,7 +283,7 @@ node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir [--c
 
 ## 验证与限制
 
-`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；P2.1：模板命名位置（缺省=旧位置、非法 placement 拒绝、lint 零发现）、最小字号（加载时抬高、抬高后仍须放得下、CSS 只能用 --fs 变量）、烧录字幕剪辑点判定（入点晚于字幕切换 warn 并给出变化时刻、对齐不报、出点前闪现 warn、无字幕素材与错位字幕带不报、整帧镜头切换不算字幕变化）与镜头检测（文件内 0.6 s 短镜头被切出、阈值可配置）；模板固定（0.5.0）：4 个新增共享 invalid 样例的拒绝原因、创建/编辑自动绑定与内容寻址复制、dry-run 只报告不写文件、删除最后使用者时移除绑定、执行层模板变化后旧修订仍按绑定字节编译出相同 HTML、`rebind_template` 的单独成批/未使用/无变化拒绝与升级后使用新字节、绑定文件缺失/篡改/符号链接/校验失败时读取与渲染失败、旧版原始字节绑定的规则差异拒绝、提高最小字号后旧绑定修订 HTML 不变、`revert_to` 恢复目标修订的变量与模板字节（HTML 一致）及未绑定目标的说明、锁定轨道上 graphic 的 rebind/revert 拒绝、未绑定历史修订上的无变化 rebind 拒绝、缺模板集时校验与编译拒绝、编辑批次每个绑定文件只读一次、写一次辅助函数、历史修订用执行层模板（`pinned: false`）且编辑后获得绑定、渲染目录复制绑定文件；源素材帧对齐（0.6.0）：`truncatedFrame`/`correctedSourceIn` 在 30/1、30000/1001、24/1 与 60/1 下只修正低于帧起点不超过 2 ms 且不足 0.1 帧的入点（修正为帧起点 + 0.1 ms；30/1 下 24.433、24.4327、24.4333 均为第 733 帧，恰低 2 ms 修正，24.430 等低于 2 ms 以上与 60/1 下达到 0.1 帧的不修正），帧起点、帧中点与帧内入点保持原值，帧率字符串与解析结果行为一致；帧率解析/约分与导入规则（可变帧率、视频流起点 0.5 s 或缺 `start_pts`、纯音频、封面图均不记录；音频起点为负、文件起点非 0 而视频流起点为 0 时记录；封面图在前时 QA 分析第二条视频流、但不记录帧率；`rational`/`streamStart` 共用）；共享 invalid 样例的拒绝原因；编译只修正视频轨 item（同 item 声音同起点、音频轨 item 不修正、link 字幕随修正后入点换算、文档不被改写、无 `frame_rate` 保持原值）；编译视图单点计算（视图再次传入返回自身、剪辑点与视图 item 及原 item 对应、字体可见字幕随视图）；剪辑点出点的 `document_source_seconds` 为写定出点、剪辑点不携带原 item（写定值经 `correctionOf` 取得）；QA 建议以写定值为基准（`judgeCutPoint`/`judgeFragment` 的 `written`；修正入点 1.2999 的碎片与烧录字幕检查报告 `source_seconds` 1.2999、`compiled_source_seconds` 1.3001，写定值 + shift = 建议的帧中点，文本写 “source in 1.299900 s (compiled 1.300100 s)”）；24/1 素材在 60 fps 画布第 1 帧处拆分后尾段起点等于头段结束处；用到最后一帧的 item 修正后不超出素材时长容差，超出时不修正；`create`/`add_asset` 导入记录 `frame_rate`（含音频起点 −44 ms、视频起点 0 的合成 mkv），而纯音频、带封面图的音频（与以前一致为 `video: true`、封面宽高，v1 工程仍可用作 clip）、起点偏移的视频与 v1 不记录；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
+`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；P2.1：模板命名位置（缺省=旧位置、非法 placement 拒绝、lint 零发现）、最小字号（加载时抬高、抬高后仍须放得下、CSS 只能用 --fs 变量）、烧录字幕剪辑点判定（入点晚于字幕切换 warn 并给出变化时刻、对齐不报、出点前闪现 warn、无字幕素材与错位字幕带不报、整帧镜头切换不算字幕变化）与镜头检测（文件内 0.6 s 短镜头被切出、阈值可配置）；模板固定（0.5.0）：4 个新增共享 invalid 样例的拒绝原因、创建/编辑自动绑定与内容寻址复制、dry-run 只报告不写文件、删除最后使用者时移除绑定、执行层模板变化后旧修订仍按绑定字节编译出相同 HTML、`rebind_template` 的单独成批/未使用/无变化拒绝与升级后使用新字节、绑定文件缺失/篡改/符号链接/校验失败时读取与渲染失败、旧版原始字节绑定的规则差异拒绝、提高最小字号后旧绑定修订 HTML 不变、`revert_to` 恢复目标修订的变量与模板字节（HTML 一致）及未绑定目标的说明、锁定轨道上 graphic 的 rebind/revert 拒绝、未绑定历史修订上的无变化 rebind 拒绝、缺模板集时校验与编译拒绝、编辑批次每个绑定文件只读一次、写一次辅助函数、历史修订用执行层模板（`pinned: false`）且编辑后获得绑定、渲染目录复制绑定文件；源素材帧对齐（0.6.0）：`truncatedFrame`/`correctedSourceIn` 在 30/1、30000/1001、24/1 与 60/1 下只修正低于帧起点不超过 2 ms 且不足 0.1 帧的入点（修正为帧起点 + 0.1 ms；30/1 下 24.433、24.4327、24.4333 均为第 733 帧，恰低 2 ms 修正，24.430 等低于 2 ms 以上与 60/1 下达到 0.1 帧的不修正），帧起点、帧中点与帧内入点保持原值，帧率字符串与解析结果行为一致；帧率解析/约分与导入规则（可变帧率、视频晚于音频开始、音频起点为负、缺 `start_pts`、纯音频、封面图均不记录；所有流同一非零起点（不同 time_base 精确比较）、音频晚于视频开始时记录；封面图在前时 QA 分析第二条视频流、但不记录帧率；`rational`/`streamStart` 共用）；共享 invalid 样例的拒绝原因；编译只修正视频轨 item（同 item 声音同起点、音频轨 item 不修正、link 字幕随修正后入点换算、文档不被改写、无 `frame_rate` 保持原值）；编译视图单点计算（视图再次传入返回自身、剪辑点与视图 item 及原 item 对应、字体可见字幕随视图）；剪辑点出点的 `document_source_seconds` 为写定出点、剪辑点不携带原 item（写定值经 `correctionOf` 取得）；QA 建议以写定值为基准（`judgeCutPoint`/`judgeFragment` 的 `written`；修正入点 1.2999 的碎片与烧录字幕检查报告 `source_seconds` 1.2999、`compiled_source_seconds` 1.3001，写定值 + shift = 建议的帧中点，文本写 “source in 1.299900 s (compiled 1.300100 s)”）；24/1 素材在 60 fps 画布第 1 帧处拆分后尾段起点等于头段结束处；用到最后一帧的 item 修正后不超出素材时长容差，超出时不修正；`create`/`add_asset` 导入记录 `frame_rate`（含唯一视频流起点 0.5 s 的 mp4），而纯音频、带封面图的音频（与以前一致为 `video: true`、封面宽高，v1 工程仍可用作 clip）、音频起点 −44 ms 的合成 mkv、视频晚于音频 0.5 s 的 mkv 与 v1 不记录；渲染尺寸（0.7.0）：预览缩放的 88 px 高度下限与不超过画布、画布高度不足 88 px 时 create/edit 照常而 render/preview 立即失败且不写输出目录；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
 
 `npm run smoke` 用自有测试图案和测试音（无客户素材），输出在根 `dist/local-production/<timestamp>/`：
 
