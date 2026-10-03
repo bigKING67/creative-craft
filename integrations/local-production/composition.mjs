@@ -74,8 +74,9 @@ export function compose(project, canvas = project.canvas, { templates } = {}) {
 function composeV2(doc, canvas, templates) {
   const { duration, frames } = validateV2(doc, { templates });
   // Source frame alignment: the compiled view (truncated in-points of video-track
-  // items corrected), computed once. Everything below (data-media-start, linked
-  // caption windows, the font runs of page()) uses it.
+  // items corrected). renderProject passes the view it computed once (used as is
+  // here); a document passed in is compiled here, once. Everything below
+  // (data-media-start, linked caption windows, the font runs of page()) uses it.
   doc = compiledView(doc);
   const { width, height } = canvas;
   const { fps } = doc.canvas;

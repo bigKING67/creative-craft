@@ -9,7 +9,7 @@ import { CORRECTION_SECONDS, compiledView, correctedSourceIn, correctionOf, pars
 import { validateV2 } from '../edit-document.mjs';
 import { applyOperations } from '../operations.mjs';
 import { compose } from '../composition.mjs';
-import { activeCaptions } from '../caption-font.mjs';
+import { activeCaptions, fontRuns } from '../caption-font.mjs';
 import { cutPoints } from '../burned-captions.mjs';
 import { SOURCE_END_TOLERANCE, resolveCaptions, sourceSeconds } from '../timeline.mjs';
 import { createProject, editBatch, ffprobeJson, readProject, run } from '../project.mjs';
@@ -184,6 +184,12 @@ test('the compiled view is computed once and shared: views, captions and cut poi
   Object.assign(itemOf(doc, 'cap1').link, { source_from: 4.5044, source_to: 4.50455 });
   assert.ok(resolveCaptions(doc).some(c => c.item.id === 'cap1'), 'visible in the written window');
   assert.ok(!activeCaptions(doc).some(c => c.id === 'cap1'), 'font runs follow the compiled view');
+  // A view passed to compose / the font runs (as renderProject does) is used as
+  // is: the same output as compiling the document there.
+  const once = compiledView(doc);
+  assert.equal(compose(once).html, compose(doc).html);
+  assert.deepEqual(fontRuns(once), fontRuns(doc));
+  assert.deepEqual(activeCaptions(once), activeCaptions(doc));
 });
 
 test('cut points: compiled in/out, the written in- and out-point, the frame', async () => {

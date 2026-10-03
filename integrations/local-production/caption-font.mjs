@@ -22,7 +22,7 @@ export function validateCaptionFont(binding) {
 
 export function activeCaptions(project) {
   // The captions compilation shows (windows of the compiled view; a view passed
-  // in by compose is used as is).
+  // in by renderProject or compose is used as is, not compiled again).
   if (isV2(project)) return resolveCaptions(compiledView(project)).map(caption => caption.item);
   return project.clips.flatMap(clip => clip.captions.filter(caption =>
     caption.to > clip.in_seconds && caption.from < clip.in_seconds + clip.frames / project.canvas.fps));
@@ -76,9 +76,9 @@ function glyphRanges(bytes) {
   throw new Error('Caption font Unicode cmap missing');
 }
 
-function checkGlyphs(bytes, project, templates) {
+function checkGlyphs(bytes, runs) {
   const ranges = glyphRanges(bytes);
-  for (const char of new Set(fontRuns(project, templates).flatMap(run => Array.from(run.text)))) {
+  for (const char of new Set(runs.flatMap(run => Array.from(run.text)))) {
     if ('\n\r\t'.includes(char)) continue;
     const code = char.codePointAt(0);
     if (!ranges.some(([start, end, glyph]) => code >= start && code <= end && glyph + code - start > 0)) {
@@ -88,9 +88,11 @@ function checkGlyphs(bytes, project, templates) {
 }
 
 // Check glyphs against the bundled font and record the binding (no writes).
+// The font runs (and so the compiled view of a v2 document) are computed once.
 export async function planCaptionFont(project, templates) {
-  if (!fontRuns(project, templates).length) return false;
-  checkGlyphs(await fontBytes(fileURLToPath(new URL(manifest.file, bundle))), project, templates);
+  const runs = fontRuns(project, templates);
+  if (!runs.length) return false;
+  checkGlyphs(await fontBytes(fileURLToPath(new URL(manifest.file, bundle))), runs);
   project.caption_font = { ...CAPTION_FONT };
   return true;
 }
@@ -104,9 +106,8 @@ export async function installCaptionFont(root) {
 }
 
 export async function bindCaptionFont(root, project, templates) {
-  if (!fontRuns(project, templates).length) return;
   const binding = { ...project };
-  await planCaptionFont(binding, templates);
+  if (!(await planCaptionFont(binding, templates))) return;
   await fs.mkdir(path.join(root, 'fonts'));
   await installCaptionFont(root);
   project.caption_font = binding.caption_font;
@@ -115,7 +116,7 @@ export async function bindCaptionFont(root, project, templates) {
 export async function verifyCaptionFont(root, project, templates) {
   if (!project.caption_font) return; // Legacy projects retain their old rendering contract.
   validateCaptionFont(project.caption_font);
-  checkGlyphs(await fontBytes(path.join(root, project.caption_font.file)), project, templates);
+  checkGlyphs(await fontBytes(path.join(root, project.caption_font.file)), fontRuns(project, templates));
 }
 
 export async function copyCaptionFont(root, destination, project, templates) {
