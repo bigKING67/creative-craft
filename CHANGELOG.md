@@ -64,9 +64,16 @@ Gated video production on top of the existing contracts (see
   common audio codecs all render, also at 128x72) replaces the earlier wrong
   codec conclusion. `frame_rate` is recorded only when the video stream starts at
   the media time zero (the earliest stream start; measured for MKV and MP4 edit
-  lists), and render/QA re-check it so stale values from 0.6.0 projects are not
-  applied (receipt `frame_alignment`). Renders within one process now run one at a time:
-  concurrent renders were measured to corrupt each other's captures.
+  lists); loading a project re-checks it once (the decision is bound to the
+  loaded document and used by every compilation of it, carried by edits) so
+  stale values from 0.6.0 projects are not applied (receipt `frame_alignment`;
+  QA compiles with the receipt's, or all applied for older receipts, and checks
+  resolution against the receipt's output size). Previews are never captured
+  larger than their export, captures are capped at the measured 7680 px, and the
+  scale-back uses fixed CRF 18 and cleans up after failure or cancellation.
+  Browser captures within one process now run one at a time (concurrent captures
+  were measured to corrupt each other); a render cancelled while waiting for the
+  capture returns `cancelled` at once.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in
