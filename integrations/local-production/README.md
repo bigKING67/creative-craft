@@ -38,6 +38,7 @@ Chrome 路径示例仅适用于对应 macOS 安装；其他主机指定自己的
 - 与 Python 核心一致的附加规则：media item 不得带 `text/style/link`；caption item 不得带 `asset_id/source_in_seconds/volume`；`revision = 1` 时 `parent_sha256` 必须为 null，否则必须为 64 位十六进制。
 - **成片时长** = 所有 media item 与非 link 字幕的最大结束帧，1 帧至 10 分钟。
 - 每个修订带 `change {author: agent|human|system|migration, summary, operations_sha256}`。
+- 可选 `graphic_templates: [{id, version, sha256, file}]`：本修订固定的图形模板（`file` 必须是 `templates/<sha256>.json`）。字段存在时每个 graphic 的 `template` 恰有一个同 id 绑定，绑定不得重复、不得有未被使用的绑定；见“模板版本与回执”。
 
 ### P2 字段：包装与音频
 
@@ -123,11 +124,12 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 | `replace_media` | `item_id, asset_id, source_in_seconds?, captions?` | 保持时序；未给 `captions` 时移除旧 link 字幕；`captions` 为 `{id, track_id, text, style?, source_from, source_to}` |
 | `set_item_props` | `item_id, props` | `volume/fit/opacity/transform/text/style/speed/fade_in_frames/fade_out_frames/transition_in/vars`；值为 null 表示移除（volume/text/vars 不可移除） |
 | `revert_to` | `revision` | 以旧修订内容发布新修订，**必须单独成批** |
+| `rebind_template` | `template` | 把该模板的绑定升级到当前执行层模板字节，**必须单独成批**；模板未被任何 graphic 使用、或当前字节与已绑定相同（无变化）时拒绝 |
 
 规则：
 
 - **整批原子**：先在内存中按序应用全部操作并对结果做完整 `validateV2`，任一失败则不复制素材、不发布。`base_revision` 不是最新修订直接拒绝（需重读），不自动合并。发布沿用硬链接无替换写入，并发写只有一个成功。
-- **dry-run** 返回 `diff`：新增/删除/变更的 item id、轨道变化、新增素材 id、新旧成片帧数；`add_asset` 只 ffprobe 探测，不复制。
+- **dry-run** 返回 `diff`：新增/删除/变更的 item id、轨道变化、新增素材 id、新旧成片帧数、模板绑定变化 `graphic_templates {added, removed, changed}`；`add_asset` 只 ffprobe 探测，不复制；不复制模板文件。批次结果另有 `notes`（如历史修订首次获得模板绑定的说明）。
 - **锁定轨道**：锁定轨道上的 item 不能被修改、删除或作为移动目标；`split/replace_media/remove_item` 需要改动的 link 字幕所在轨道也必须未锁定。link 字幕的存储数据不变，只随其 media item 的位置自然换算，这不算修改。`revert_to` 若会改变当前任一锁定轨道上的 item（或目标修订缺少该轨道）也被拒绝。锁定冻结的是该轨道自身的 item 与设置（含 `duck` 配置与名称）：`revert_to` 时锁定轨道整体保持当前定义，不被目标修订的轨道对象覆盖。锁定不冻结由被参照轨道派生的闪避包络——被参照轨道（如未锁定的口播轨）的 item 变化时，锁定音乐轨的实际音量曲线会随之重新计算。
 - **split 的字幕归属（确定规则）**：link 字幕归属到**源区间起点 `source_from` 落在哪一半**（`source_from ≥ 切点源时间` 归后半，否则留在前半）。不复制字幕：跨越切点的字幕只在其所属那一半内显示相交部分，切点之后的部分不再显示；如需两半都显示，在后半段另加一条 link 字幕。
 - **trim/move**：link 字幕按源时间自动跟随，不存输出时间；裁掉的源区间内的字幕自然不再显示。
@@ -215,7 +217,7 @@ node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir [--c
 
 ## 验证与限制
 
-`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；P2.1：模板命名位置（缺省=旧位置、非法 placement 拒绝、lint 零发现）、最小字号（加载时抬高、抬高后仍须放得下、CSS 只能用 --fs 变量）、烧录字幕剪辑点判定（入点晚于字幕切换 warn 并给出变化时刻、对齐不报、出点前闪现 warn、无字幕素材与错位字幕带不报、整帧镜头切换不算字幕变化）与镜头检测（文件内 0.6 s 短镜头被切出、阈值可配置）；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
+`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；P2.1：模板命名位置（缺省=旧位置、非法 placement 拒绝、lint 零发现）、最小字号（加载时抬高、抬高后仍须放得下、CSS 只能用 --fs 变量）、烧录字幕剪辑点判定（入点晚于字幕切换 warn 并给出变化时刻、对齐不报、出点前闪现 warn、无字幕素材与错位字幕带不报、整帧镜头切换不算字幕变化）与镜头检测（文件内 0.6 s 短镜头被切出、阈值可配置）；模板固定（0.5.0）：4 个新增共享 invalid 样例的拒绝原因、创建/编辑自动绑定与内容寻址复制、dry-run 只报告不写文件、删除最后使用者时移除绑定、执行层模板变化后旧修订仍按绑定字节编译出相同 HTML、`rebind_template` 的单独成批/未使用/无变化拒绝与升级后使用新字节、绑定文件缺失/篡改/符号链接/校验失败时读取与渲染失败、绑定模板同样执行最小字号、历史修订用执行层模板（`pinned: false`）且编辑后获得绑定、渲染目录复制绑定文件；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
 
 `npm run smoke` 用自有测试图案和测试音（无客户素材），输出在根 `dist/local-production/<timestamp>/`：
 
@@ -251,7 +253,15 @@ P2 的已知限制：闪避依据参照轨上**有声 item 的区间**，不是�
 
 ### 模板版本与回执
 
-编辑修订只按 id 引用模板，不固定模板内容；模板升级后重新渲染旧修订，图形外观可能变化。渲染回执的 `templates` 记录本次使用的每个模板 `{id, version, sha256}`（模板 JSON 原始字节摘要），与 `composition_sha256` 一起用于追溯差异。把模板内容按内容寻址绑定进修订（类似字幕字体）属于共享 schema 变更，尚未实现。
+图形模板随修订固定（合同见 `docs/content-production-architecture.md`“图形模板固定到修订”）。做法与固定字幕字体相同：按内容寻址把模板 JSON 原始字节复制进工程。
+
+- **绑定**：`create` 与编辑批次产生的新修订只要含 graphic，就为所用模板写入 `graphic_templates` 绑定 `{id, version, sha256, file: "templates/<sha256>.json"}`；首次使用某模板字节时把执行层 `templates/<id>.json` 的原始字节写入工程 `templates/<sha256>.json`（已存在且字节相同则复用，写后核对摘要；`templates/` 目录或文件为符号链接即拒绝）。dry-run 不写文件，只在 `diff.graphic_templates.added` 里列出将新增的绑定。
+- **不变性**：已有绑定在后续编辑中保持不变，执行层模板升级也不影响；`revert_to` 恢复内容但保留当前绑定（与锁定轨道相同，绑定是当前决定），当前未绑定的模板优先沿用目标修订的绑定。删除最后一个使用某模板的 graphic 时移除该绑定（文件留在工程中）；绑定全部移除后字段保留为空数组。
+- **升级**：只有 `rebind_template {template}` 能把绑定换成当前执行层字节，必须单独成批；新模板定义下现有 graphic 的变量须仍然合法，否则整批拒绝。
+- **历史修订**：没有 `graphic_templates` 的旧修订不被改写，渲染与校验使用当前执行层模板。在其上提交编辑时，若结果含 graphic，新修订为其绑定当前模板字节，并在批次结果 `notes` 中说明。
+- **读取与渲染**：`read`/`render`/`qa` 对有绑定的修订只从工程内绑定文件加载模板：核对 sha256、重新执行模板加载校验（`enforceMinimumText` + `validateTemplate`）并核对 version，graphic 变量按绑定的模板定义校验；文件缺失、摘要不符、符号链接或校验失败即失败（读取即失败，因此也无法渲染）。渲染把绑定文件复制进渲染目录 `templates/`，渲染目录可独立重放。
+- **回执**：`templates` 每项为 `{id, version, sha256, pinned, source}`。固定的修订为 `pinned: true, source: "project"` 并带 `file`；历史修订为 `pinned: false, source: "runtime"`（sha256 为执行层模板原始字节摘要），与 `composition_sha256` 一起用于追溯差异。
+- Python 侧只校验结构与覆盖规则（同一组共享样例）；模板内容与变量类型仍由 Node 校验。
 
 ## 本地语音转写
 
