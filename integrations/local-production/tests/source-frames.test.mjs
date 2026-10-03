@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CORRECTION_SECONDS, compiledView, correctedSourceIn, correctionOf, parseFrameRate, pictureStream, probedFrameRate, rational, reduceFrameRate, streamStart, earliestStart, mediaZeroProblem,
@@ -12,7 +11,8 @@ import { compose } from '../composition.mjs';
 import { activeCaptions, fontRuns } from '../caption-font.mjs';
 import { cutPoints } from '../burned-captions.mjs';
 import { SOURCE_END_TOLERANCE, resolveCaptions, sourceSeconds } from '../timeline.mjs';
-import { createProject, editBatch, ffprobeJson, readProject, run } from '../project.mjs';
+import { createProject, editBatch, ffprobeJson, readProject } from '../project.mjs';
+import { ffmpeg, tempDir } from './media-fixtures.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = async name => JSON.parse(await fs.readFile(path.resolve(here, '../../../tests/fixtures/edit-document-v2', name), 'utf8'));
@@ -277,24 +277,23 @@ test('the corrected range stays inside the asset, up to the last source frame', 
 });
 
 test('import records frame_rate for v2 video (create and add_asset), not for audio, cover art, video starting after media time 0 or v1 projects', async t => {
-  const dir = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'frame-rate-import-'));
+  const dir = await tempDir('frame-rate-import-');
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const file = name => path.join(dir, name);
-  const ff = (...args) => run('ffmpeg', ['-v', 'error', ...args]);
-  await ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30000/1001:duration=1', '-f', 'lavfi', '-i', 'sine=d=1',
+  await ffmpeg('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30000/1001:duration=1', '-f', 'lavfi', '-i', 'sine=d=1',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', file('ntsc.mp4'));
-  await ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=25:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file('pal.mp4'));
-  await ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-output_ts_offset', '0.5', file('late.mp4'));
+  await ffmpeg('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=25:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file('pal.mp4'));
+  await ffmpeg('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-output_ts_offset', '0.5', file('late.mp4'));
   // Video 0.5 s after the audio: media time 0 is the audio start.
-  await ff('-itsoffset', '0.5', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-f', 'lavfi', '-i', 'sine=d=1.5',
+  await ffmpeg('-itsoffset', '0.5', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-f', 'lavfi', '-i', 'sine=d=1.5',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', file('behind.mkv'));
   const behind = (await ffprobeJson(file('behind.mkv'))).streams;
   assert.ok(streamStart(behind.find(s => s.codec_type === 'video')).seconds > streamStart(behind.find(s => s.codec_type === 'audio')).seconds, 'fixture: video after audio');
-  await ff('-f', 'lavfi', '-i', 'sine=d=1', '-c:a', 'aac', file('tone.m4a'));
-  await ff('-f', 'lavfi', '-i', 'color=c=red:s=64x64', '-frames:v', '1', file('cover.png'));
-  await ff('-f', 'lavfi', '-i', 'sine=d=1', '-i', file('cover.png'), '-map', '1', '-map', '0', '-c:v', 'png', '-c:a', 'aac', '-disposition:v:0', 'attached_pic', file('cover.m4a'));
+  await ffmpeg('-f', 'lavfi', '-i', 'sine=d=1', '-c:a', 'aac', file('tone.m4a'));
+  await ffmpeg('-f', 'lavfi', '-i', 'color=c=red:s=64x64', '-frames:v', '1', file('cover.png'));
+  await ffmpeg('-f', 'lavfi', '-i', 'sine=d=1', '-i', file('cover.png'), '-map', '1', '-map', '0', '-c:v', 'png', '-c:a', 'aac', '-disposition:v:0', 'attached_pic', file('cover.m4a'));
   // Audio starting 44 ms before media time 0 (as AAC priming does), video at 0.
-  await ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-itsoffset', '-0.044', '-f', 'lavfi', '-i', 'sine=d=1.1',
+  await ffmpeg('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=30:duration=1', '-itsoffset', '-0.044', '-f', 'lavfi', '-i', 'sine=d=1.1',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-avoid_negative_ts', 'disabled', '-t', '1', file('primed.mkv'));
   const primed = (await ffprobeJson(file('primed.mkv'))).streams;
   assert.ok(primed.find(s => s.codec_type === 'audio').start_pts < 0 && primed.find(s => s.codec_type === 'video').start_pts === 0, 'fixture: audio before 0, video at 0');
