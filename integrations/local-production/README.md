@@ -249,6 +249,10 @@ P2 的已知限制：闪避依据参照轨上**有声 item 的区间**，不是�
 
 实际浏览器故障回归：配置已安装的 `PRODUCER_HEADLESS_SHELL_PATH` 后运行 `node --test tests/font-render.integration.mjs`。使用1秒合成黑色视频验证400/900字重，再故意让字体URL不存在；必须失败，不能输出可交付结果。producer 0.8.53会覆盖内部tween-building标志，且把已拒绝的buildReady当作结束，因此字体门槛使用独立buildReady项，加载失败后保持未就绪，交给其有界超时中止；该门槛在 0.8.108 上经同一回归测试复核通过。不要以`document.fonts.ready`已完成替代加载成功检查。
 
+### 模板版本与回执
+
+编辑修订只按 id 引用模板，不固定模板内容；模板升级后重新渲染旧修订，图形外观可能变化。渲染回执的 `templates` 记录本次使用的每个模板 `{id, version, sha256}`（模板 JSON 原始字节摘要），与 `composition_sha256` 一起用于追溯差异。把模板内容按内容寻址绑定进修订（类似字幕字体）属于共享 schema 变更，尚未实现。
+
 ## 本地语音转写
 
 `transcribe` 用本机 whisper.cpp 把素材口播转成带句级时间戳的 JSON，作为 production-plan 选片证据（evidence modality `asr`）。客户音频不离开本机：ffmpeg 抽取 16 kHz 单声道 PCM 到私有临时目录，转写结束（含失败）即删除；不调用任何云端服务。

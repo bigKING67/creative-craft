@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 
 // Graphic templates are versioned execution-layer resources: fixed HTML/CSS in
@@ -122,6 +123,13 @@ export const TEMPLATES = new Map(readdirSync(directory).filter(n => n.endsWith('
 }));
 
 export const getTemplate = name => TEMPLATES.get(name) ?? fail(`Unknown graphic template: ${name}`);
+
+// Templates are not pinned inside edit revisions; receipts record which template
+// bytes rendered a revision so a later template change is visible in provenance.
+const TEMPLATE_SHA256 = new Map([...TEMPLATES.keys()].map(name =>
+  [name, createHash('sha256').update(readFileSync(new URL(`${name}.json`, directory))).digest('hex')]));
+export const templateProvenance = doc => [...new Set((doc.items ?? []).filter(i => i.kind === 'graphic').map(i => i.template))]
+  .sort().map(id => ({ id, version: getTemplate(id).version, sha256: TEMPLATE_SHA256.get(id) }));
 
 // Node-side semantic check of a graphic item's vars against its template.
 export function validateGraphicVars(item) {

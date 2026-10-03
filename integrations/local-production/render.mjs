@@ -5,6 +5,7 @@ import { digest, probe, readProject, safePath, verifyAssets, run } from './proje
 import { compose, webVtt } from './composition.mjs';
 import { copyCaptionFont } from './caption-font.mjs';
 import { audibleItems, isV2 } from './timeline.mjs';
+import { templateProvenance } from './templates.mjs';
 
 const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
@@ -70,6 +71,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     await fs.copyFile(require.resolve('gsap/dist/gsap.min.js'), path.join(destination, 'gsap.min.js'), 1);
     await fs.writeFile(path.join(destination, 'index.html'), compiled.html, { flag: 'wx' });
     receipt.composition_sha256 = await digest(path.join(destination, 'index.html'));
+    receipt.templates = isV2(project) ? templateProvenance(project) : [];
     await fs.writeFile(path.join(destination, 'captions.vtt'), webVtt(compiled.cues), { flag: 'wx' });
     receipt.lint = await lintComposition(compiled.html);
     if (receipt.lint.blocked) throw new Error(`HyperFrames lint blocked render: ${receipt.lint.findings.filter(f => f.severity === 'error').map(f => f.code).join(', ')}`);

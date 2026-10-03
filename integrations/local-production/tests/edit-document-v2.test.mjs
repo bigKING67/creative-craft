@@ -525,3 +525,15 @@ test('create refuses a v2 spec whose volume lane exceeds 512 points and writes n
   await assert.rejects(createProject(root, spec), /Volume automation for item bed on track a_music has \d+ points/);
   await assert.rejects(fs.access(root), { code: 'ENOENT' });
 });
+
+test('render receipts can name the template bytes behind each graphic', async () => {
+  const { templateProvenance, getTemplate } = await import('../templates.mjs');
+  const doc = { items: [{ kind: 'graphic', template: 'lower-third' }, { kind: 'graphic', template: 'title-card' }, { kind: 'graphic', template: 'lower-third' }, { kind: 'media' }] };
+  const provenance = templateProvenance(doc);
+  assert.deepEqual(provenance.map(p => p.id), ['lower-third', 'title-card']);
+  for (const p of provenance) {
+    assert.equal(p.version, getTemplate(p.id).version);
+    assert.match(p.sha256, /^[a-f0-9]{64}$/);
+  }
+  assert.deepEqual(templateProvenance({ items: [] }), []);
+});
