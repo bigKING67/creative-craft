@@ -1,5 +1,3 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -12,18 +10,12 @@ import { checkVolumeAutomation } from './timeline.mjs';
 import { TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
 import { installTemplates, loadPinnedTemplates, planTemplateBindings, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
+import { digest, sha256, writeOnce } from './content-store.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
-export { SCHEMA_V2, validateV2, validateCaptionStyle, migrateV1 };
-const sha256 = value => createHash('sha256').update(value).digest('hex');
+export { SCHEMA_V2, validateV2, validateCaptionStyle, migrateV1, digest };
 const serialize = doc => `${JSON.stringify(doc, null, 2)}\n`;
-
-export async function digest(file) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
-  return hash.digest('hex');
-}
 
 // This is a local single-user tool, not a filesystem sandbox for hostile users.
 export async function safePath(value) {
@@ -128,16 +120,9 @@ export async function readProject(root, revision) {
 }
 
 async function publish(root, project) {
-  const dir = await safePath(path.join(root, 'revisions'));
-  const temp = path.join(dir, `.pending-${randomUUID()}`);
-  await fs.writeFile(temp, serialize(project), { flag: 'wx' });
-  try {
-    // Atomic, no-replace publication. Two writers cannot publish the same revision.
-    await fs.link(temp, path.join(dir, revisionName(project.revision)));
-  } catch (error) {
-    if (error.code === 'EEXIST') fail('Revision conflict; read the latest project');
-    throw error;
-  } finally { await fs.unlink(temp); }
+  const dir = await safePath(path.join(root, 'revisions')), bytes = serialize(project);
+  // Atomic, no-replace publication. Two writers cannot publish the same revision.
+  await writeOnce(path.join(dir, revisionName(project.revision)), { bytes }, { expected: sha256(bytes), conflict: 'Revision conflict; read the latest project' });
 }
 
 async function importAsset(file) {
@@ -151,10 +136,7 @@ async function importAsset(file) {
 // Content-addressed copies; an existing identical file is reused, never replaced.
 async function copyImports(root, imports) {
   for (const { source, asset } of imports) {
-    const target = path.join(root, asset.file);
-    try { await fs.copyFile(source, target, 1); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    if (await digest(target) !== asset.sha256) fail('Source changed during import');
+    await writeOnce(path.join(root, asset.file), { source }, { expected: asset.sha256, mismatch: 'Source changed during import' });
   }
 }
 

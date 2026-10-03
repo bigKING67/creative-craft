@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256, writeOnce } from './content-store.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,7 @@ async function fontBytes(file) {
     throw new Error('Caption font must be a regular file');
   }
   const bytes = await fs.readFile(file);
-  if (createHash('sha256').update(bytes).digest('hex') !== CAPTION_FONT.sha256) {
+  if (sha256(bytes) !== CAPTION_FONT.sha256) {
     throw new Error('Caption font hash mismatch');
   }
   return bytes;
@@ -93,8 +93,7 @@ export async function planCaptionFont(project) {
 export async function installCaptionFont(root) {
   await fs.mkdir(path.join(root, 'fonts'), { recursive: true });
   const target = path.join(root, CAPTION_FONT.file);
-  try { await fs.copyFile(fileURLToPath(new URL(manifest.file, bundle)), target, 1); }
-  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  await writeOnce(target, { source: fileURLToPath(new URL(manifest.file, bundle)) }, { expected: CAPTION_FONT.sha256, mismatch: 'Caption font hash mismatch' });
   await fontBytes(target);
 }
 

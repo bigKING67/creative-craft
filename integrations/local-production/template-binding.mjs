@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
+import { writeOnce } from './content-store.mjs';
 import { attachTemplates, parseTemplate, runtimeTemplate, templateSha256 } from './templates.mjs';
 
 // Graphic templates pinned to edit revisions (graphic_templates). Like the
@@ -86,13 +86,8 @@ export async function installTemplates(root, writes) {
   await fs.mkdir(dir, { recursive: true });
   if (!(await fs.lstat(dir)).isDirectory()) fail('Project templates/ must be a directory');
   for (const { binding, bytes } of writes) {
-    if (templateSha256(bytes) !== binding.sha256) fail(`Graphic template ${binding.id} changed while binding`);
-    const temp = path.join(dir, `.pending-${randomUUID()}`);
-    await fs.writeFile(temp, bytes, { flag: 'wx' });
-    try { await fs.link(temp, path.join(root, binding.file)); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    finally { await fs.unlink(temp); }
-    await boundBytes(root, binding); // Digest of what is now on disk.
+    await writeOnce(path.join(root, binding.file), { bytes }, { expected: binding.sha256, mismatch: `Graphic template ${binding.id} changed while binding` });
+    await boundBytes(root, binding); // Regular file, digest of what is now on disk.
   }
 }
 
