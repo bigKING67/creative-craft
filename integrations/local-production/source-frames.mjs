@@ -98,13 +98,40 @@ export function correctedSourceIn(seconds, frameRate) {
 // validateV2 is the single source of the asset rules (frame_rate only on assets
 // with a picture); this reads frame_rate only and does not validate.
 // The input is never mutated; a view passed in again is returned as is.
-// options.skip: ids of assets whose frame_rate is not applied (render and QA
-// pass the assets frameAlignment found stale: their source no longer starts its
-// frame grid at media time 0); such items keep their written in-point.
-const VIEWS = new WeakSet(), CORRECTIONS = new WeakMap();
-export function compiledView(doc, { skip = new Set() } = {}) {
+//
+// Which assets' frame_rate applies is decided once, outside: a document read
+// from a project (loadProject) is bound to its frame alignment (bindAlignment;
+// frame-alignment.mjs re-checks every asset with frame_rate against its file),
+// an edit batch carries that decision to the document it builds, and QA binds
+// the alignment the render receipt recorded. A bound document applies exactly
+// the assets its alignment marks applied; a stale one keeps its written
+// in-points. A document that is not bound (built in memory: tests, compose of a
+// literal document, a project being created from files the import rule has
+// just probed) gets the structural view only: every recorded frame_rate is
+// applied as written and no file is looked at.
+const VIEWS = new WeakSet(), CORRECTIONS = new WeakMap(), ALIGNMENTS = new WeakMap();
+
+// Bind `doc` to `alignment`: exactly one { asset_id, frame_rate, applied,
+// reason? } entry per asset with frame_rate (checked, so an alignment from a
+// receipt or an earlier revision that does not describe this document is
+// refused). Returns doc. A compiled view cannot be rebound.
+export function bindAlignment(doc, alignment) {
+  if (VIEWS.has(doc)) throw new Error('A compiled view cannot be bound to another frame alignment');
+  const rated = doc.assets.filter(a => a.frame_rate);
+  if (!Array.isArray(alignment) || alignment.length !== rated.length ||
+      rated.some(a => !alignment.some(e => e?.asset_id === a.id && e.frame_rate === a.frame_rate && typeof e.applied === 'boolean'))) {
+    throw new Error('Frame alignment does not describe this document (one entry per asset with frame_rate expected)');
+  }
+  ALIGNMENTS.set(doc, alignment);
+  return doc;
+}
+// The alignment bound to a document (or to the document a view was compiled from), or null.
+export const alignmentOf = doc => ALIGNMENTS.get(doc) ?? null;
+
+export function compiledView(doc) {
   if (VIEWS.has(doc)) return doc;
-  const fps = doc.canvas.fps, assets = new Map(doc.assets.filter(a => a.frame_rate && !skip.has(a.id)).map(a => [a.id, a]));
+  const alignment = ALIGNMENTS.get(doc), applied = asset => !alignment || alignment.find(e => e.asset_id === asset.id).applied;
+  const fps = doc.canvas.fps, assets = new Map(doc.assets.filter(a => a.frame_rate && applied(a)).map(a => [a.id, a]));
   const video = new Set(doc.tracks.filter(t => t.kind === 'video').map(t => t.id));
   const items = doc.items.map(item => {
     const asset = item.kind === 'media' && video.has(item.track_id) ? assets.get(item.asset_id) : undefined;
@@ -116,6 +143,7 @@ export function compiledView(doc, { skip = new Set() } = {}) {
   });
   const view = { ...doc, items };
   VIEWS.add(view);
+  if (alignment) ALIGNMENTS.set(view, alignment);
   return view;
 }
 
@@ -166,7 +194,7 @@ export function earliestStart(info) {
 //     time k / rate. Streams that all start at the same non-zero time qualify;
 //     a file whose audio starts before its video (MKV/WebM can keep a negative
 //     audio start, MP4 AAC priming under an offset) does not. Compared exactly.
-// Import (probedFrameRate) and the render/QA re-check (frameAlignment) share it.
+// Import (probedFrameRate) and the load-time re-check (frameAlignment, loadProject) share it.
 export function mediaZeroProblem(info) {
   const picture = pictureStream(info);
   if (!picture) return 'no picture stream (only cover art or no video)';

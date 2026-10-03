@@ -8,7 +8,7 @@ import { copyBoundTemplates } from './template-binding.mjs';
 import { audibleItems, isV2 } from './timeline.mjs';
 import { templateProvenance } from './templates.mjs';
 import { mediaTool } from './media-analysis.mjs';
-import { frameAlignment } from './frame-alignment.mjs';
+import { compiledView } from './source-frames.mjs';
 
 const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
@@ -89,14 +89,16 @@ export function renderProject(root, destination, options = {}) {
 }
 
 async function renderProjectNow(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
-  const { doc: project, templates } = await loadProject(root, revision);
-  // Source frame alignment: the compiled view is computed once here and shared by
-  // the font glyph checks (verifyAssets, copyCaptionFont) and compose, which use
-  // a view passed in as is. Assets whose frame_rate no longer holds (re-probed by
-  // frameAlignment) are compiled without correction and recorded in the receipt.
-  // project.json keeps the document as written.
-  const { view, frame_alignment: alignment } = isV2(project) ? await frameAlignment(root, project) : { view: project, frame_alignment: null };
-  await verifyAssets(root, view, templates);
+  const { doc: project, templates, alignment, verified } = await loadProject(root, revision);
+  // Source frame alignment: loadProject decided which assets' frame_rate
+  // applies (stale ones are compiled without correction) and bound the document
+  // to it; the compiled view is computed once here and shared by the font glyph
+  // checks (verifyAssets, copyCaptionFont) and compose, which use a view passed
+  // in as is. The receipt records the alignment; project.json keeps the
+  // document as written. Asset files loadProject already hashed are not hashed
+  // again.
+  const view = isV2(project) ? compiledView(project) : project;
+  await verifyAssets(root, view, templates, { verified });
   const { width, height } = outputSize(project.canvas, preview), capture = captureSize({ width, height });
   const compiled = compose(view, { width: capture.width, height: capture.height }, { templates });
   destination = await safePath(destination);

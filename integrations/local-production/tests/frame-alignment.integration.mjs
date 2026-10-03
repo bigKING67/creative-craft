@@ -43,8 +43,23 @@ test('a stale frame_rate from a 0.6.0 project is not applied at render; receipt 
   for (const id of ['cut-boundary-fragments', 'burned-caption-cut-points']) {
     const check = qa.checks.find(c => c.id === id);
     assert.deepEqual(check.measured.frame_alignment, receipt.frame_alignment, id);
+    assert.equal(check.measured.frame_alignment_source, 'receipt', id);
     const point = check.measured.points.find(p => p.edge === 'in');
     assert.equal(point.source_seconds, 1.0333, `${id}: judged at the written in-point`);
     assert.ok(!('compiled_source_seconds' in point) && !('source_frame' in point), `${id}: no correction`);
+  }
+
+  // A receipt without frame_alignment (a 0.6.0 render, which corrected every
+  // asset with frame_rate): QA compiles that way, without probing again, and says so.
+  const receiptFile = path.join(output, 'receipt.json'), legacy = JSON.parse(await fs.readFile(receiptFile, 'utf8'));
+  delete legacy.frame_alignment;
+  await fs.writeFile(receiptFile, JSON.stringify(legacy));
+  const legacyQa = await qaRender(root, output, path.join(dir, 'qa-legacy'));
+  for (const id of ['cut-boundary-fragments', 'burned-caption-cut-points']) {
+    const check = legacyQa.checks.find(c => c.id === id);
+    assert.equal(check.measured.frame_alignment_source, 'legacy-default', id);
+    assert.deepEqual(check.measured.frame_alignment, [{ asset_id: 'src', frame_rate: '30/1', applied: true }], id);
+    const point = check.measured.points.find(p => p.edge === 'in');
+    assert.equal(point.compiled_source_seconds, 1.033433, `${id}: judged as the legacy render compiled it`);
   }
 });

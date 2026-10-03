@@ -11,7 +11,8 @@ import { TEMPLATES, TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
 import { checkLockedTemplates, installTemplates, loadPinnedTemplates, planTemplateBindings, renderedTemplateSha, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 import { digest, sha256, writeOnce } from './content-store.mjs';
-import { probedFrameRate } from './source-frames.mjs';
+import { bindAlignment, probedFrameRate } from './source-frames.mjs';
+import { carryAlignment, frameAlignment } from './frame-alignment.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -106,10 +107,16 @@ export function validate(project) {
 export const validateDocument = (doc, options) => doc?.schema_version === SCHEMA_V2 ? validateV2(doc, options) : validate(doc);
 
 const revisionName = (revision) => `${String(revision).padStart(6, '0')}.json`;
-// One revision with its template set: {doc, templates}. templates is the bound
-// set of a pinned revision, the execution-layer set of an unpinned v2 revision
-// and null for v1. Callers that compile, check fonts or validate the document
-// again pass it on explicitly.
+// One revision with its template set and frame alignment:
+// {doc, templates, alignment, verified}. templates is the bound set of a
+// pinned revision, the execution-layer set of an unpinned v2 revision and null
+// for v1. Callers that compile, check fonts or validate the document again pass
+// it on explicitly. alignment (v2; null for v1, whose assets have no
+// frame_rate) is decided here once, the same way: every asset with frame_rate
+// has its file digest-checked (a changed or missing file fails the load, like a
+// bound template) and re-probed (frameAlignment); doc is bound to the result,
+// so every compiledView of it uses it. verified: Map asset id → real path of
+// the files checked here (verifyAssets does not hash them again).
 export async function loadProject(root, revision) {
   root = await safePath(root);
   const revisions = await safePath(path.join(root, 'revisions'));
@@ -133,7 +140,10 @@ export async function loadProject(root, revision) {
     const previous = await safePath(path.join(revisions, revisionName(project.revision - 1)));
     if (await digest(previous) !== project.parent_sha256) fail('Parent revision changed');
   }
-  return { doc: project, templates };
+  if (project.schema_version !== SCHEMA_V2) return { doc: project, templates, alignment: null, verified: new Map() };
+  const verified = await checkAssetFiles(root, project.assets.filter(a => a.frame_rate));
+  const alignment = await frameAlignment(project, verified);
+  return { doc: bindAlignment(project, alignment), templates, alignment, verified };
 }
 
 // The document only (CLI read, callers that need no template set).
@@ -199,6 +209,9 @@ export async function createProject(root, spec) {
   await fs.mkdir(path.join(root, 'assets'));
   await fs.mkdir(path.join(root, 'revisions'));
   await copyImports(root, imports);
+  // Not bound to a frame alignment: every asset was probed by the import rule
+  // just now, so the structural view (each recorded frame_rate applied) is the
+  // one loadProject will decide for these bytes.
   await bindCaptionFont(root, project, templates);
   await installTemplates(root, templateWrites);
   await publish(root, project);
@@ -258,7 +271,7 @@ async function revertContent(root, base, op) {
   const tracks = target.tracks.map(t => locked.has(t.id) ? structuredClone(locked.get(t.id)) : t);
   const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks, items: target.items };
   if (target.caption_font && !next.caption_font) next.caption_font = target.caption_font;
-  return { next, target: { doc: target, templates: loaded.templates ?? TEMPLATES } };
+  return { next, target: { doc: target, templates: loaded.templates ?? TEMPLATES, alignment: loaded.alignment } };
 }
 
 // rebind_template {template}: the explicit, single-operation decision that moves
@@ -287,14 +300,15 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   if (!integer(batch.base_revision, 1, 999999) || !['agent', 'human', 'system'].includes(batch.author) || !text(batch.summary) ||
       !Array.isArray(batch.operations) || !batch.operations.length || batch.operations.length > 100) fail('Invalid edit batch');
   root = await safePath(root);
-  const { doc: latest, templates: latestTemplates } = await loadProject(root);
+  const { doc: latest, templates: latestTemplates, alignment: latestAlignment } = await loadProject(root);
   if (latest.revision !== batch.base_revision) fail('Revision conflict; read the latest project');
-  let base = latest, baseTemplates = latestTemplates, baseSha = await digest(await safePath(path.join(root, 'revisions', revisionName(latest.revision)))), migration = null;
+  let base = latest, baseTemplates = latestTemplates, baseAlignment = latestAlignment, baseSha = await digest(await safePath(path.join(root, 'revisions', revisionName(latest.revision)))), migration = null;
   if (latest.schema_version === SCHEMA) {
     migration = { ...migrateV1(latest), revision: latest.revision + 1, parent_sha256: baseSha,
       change: { author: 'migration', summary: `Migrated ${SCHEMA} revision ${latest.revision} to ${SCHEMA_V2}`, operations_sha256: null } };
     validateV2(migration);
-    [base, baseTemplates] = [migration, TEMPLATES];
+    // v1 assets carry no frame_rate: the migration's alignment is empty.
+    [base, baseTemplates, baseAlignment] = [bindAlignment(migration, []), TEMPLATES, []];
     baseSha = sha256(serialize(migration));
   }
   // A lock change is its own revision, so unlock-then-edit cannot hide in one batch.
@@ -316,6 +330,10 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   const { writes: templateWrites, notes, templates } = planTemplateBindings(base, next, { baseTemplates, rebind, revert });
   checkLockedTemplates(base, next);
   validateV2(next, { templates });
+  // Frame alignment of the new revision (its font runs are compiled below): the
+  // decisions loadProject made for the same bytes, new imports applied.
+  bindAlignment(next, carryAlignment(next, [[base, baseAlignment], ...(revert ? [[revert.doc, revert.alignment]] : [])],
+    new Set(imports.map(i => i.asset.sha256))));
   checkVolumeAutomation(next); // Same envelope code as compilation; refused before dry-run or publish.
   // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
   // already had captions without a binding keep the system-font contract.
@@ -338,10 +356,21 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   return result;
 }
 
-export async function verifyAssets(root, project, templates) {
-  await verifyCaptionFont(root, project, templates);
-  for (const asset of project.assets) {
-    const file = await safePath(path.join(root, asset.file));
+// Digest check of asset files (in parallel): Map asset id → real path of each
+// file whose bytes match asset.sha256. Assets in `verified` (a check of the
+// same root earlier in this operation, e.g. loadProject's) are not hashed again.
+async function checkAssetFiles(root, assets, verified = new Map()) {
+  return new Map(await Promise.all(assets.map(async asset => {
+    if (verified.has(asset.id)) return [asset.id, verified.get(asset.id)];
+    const file = await fs.realpath(await safePath(path.join(root, asset.file)));
     if (await digest(file) !== asset.sha256) fail(`Asset changed: ${asset.id}`);
-  }
+    return [asset.id, file];
+  })));
+}
+
+// Caption font and every asset file of a revision; `verified`: loadProject's
+// result for the same revision, so each file is hashed once per render.
+export async function verifyAssets(root, project, templates, { verified } = {}) {
+  await verifyCaptionFont(root, project, templates);
+  return checkAssetFiles(root, project.assets, verified);
 }
