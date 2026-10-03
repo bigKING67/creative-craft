@@ -189,8 +189,10 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 ## 技术检查（QA）
 
 ```sh
-node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir
+node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir [--caption-band 0.62:0.86] [--scene-threshold 0.3]
 ```
+
+可选参数：`--caption-band TOP:BOTTOM` 覆盖烧录字幕带（源画面高度比例，默认 0.62:0.86，带高 ≥ 0.05）；`--scene-threshold N` 覆盖成片镜头检测阈值（0–1，默认 0.3）。模块调用为 `qaRender(root, renderDir, qaDir, { captionBand: {top, bottom}, sceneThreshold })`。
 
 读取渲染目录回执与工程快照：回执必须 `completed`，`revision_sha256` 与工程修订文件一致，快照与修订内容一致，视频 SHA-256 与回执一致；否则拒绝检查。QA 目录必须是新目录且在工程外。生成符合 `render-qa.schema.json` 的 `qa.json`：
 
@@ -200,14 +202,20 @@ node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir
 - **captions**：每条可见字幕在显示区间中点采样合成帧，帧存在记 pass（不判断文字是否可读）。
 - **安全区**（`caption-safe-area`，category captions；`graphic-safe-area`，category video）：在字幕采样帧与图形中点采样帧上检查元素框是否距四边 ≥5%，都不是像素检测。图形（`measured.method = template-load-guarantee`）：框即模板框，模板加载校验已保证其在安全区内，该检查只是把这一保证记入 QA 并给出采样引用，observation 明确写明“由模板加载校验保证、非像素检测、不测量文字是否放得下”；不再做文字截断估算。字幕（`compiled-layout-estimate`）**按编译布局计算**：按编译 CSS 推算（默认样式：7%–93% 宽、底边 8%、行高 1.35、8 px 内边距；显式样式：以 centerY 为中心、行高 1.1、加描边），文本宽度按字符估算（全角 CJK/符号 1 em、其他 0.55 em、空格 0.3 em）推算换行行数。越界 → fail。`measured.boxes` 记录每个框。局限：字宽为估算，不是浏览器实测；不检测画面内容本身（如素材里已有的贴边文字）；图形检查不提供模板加载之外的新证据。
 - **lint**：引用渲染回执的 lint 结果（error→fail，warning→warn，旧回执无结果→unknown）。
+- **烧录字幕剪辑点**（`burned-caption-cut-points`，category captions）：素材自带的烧录字幕常比语音晚切换，按语音间隙选的入点可能仍显示被剪掉那句的字幕。对视频轨每个 media item 的**源入点与源出点**，在**源素材**上解码附近帧（灰度、短边缩到 360 px），检测字幕带（默认画面高度 62%–86%）的“阶跃”变化：
+  - 判据：某像素在变化前 3 帧内稳定（极差 ≤ 12 灰度级）、变化后 3 帧内也稳定，且均值变化 ≥ 40，记为阶跃像素。烧录字幕在两次切换之间静止、在一帧内整体切换，字形像素会同时阶跃；手、脸、运镜不稳定，不产生阶跃。在带内取一行字幕高的窗口（画面高度 5%），阶跃像素占比 ≥ 10%，且其中“亮字形”阶跃（变化前或后的均值 ≥ 200，即白/黄字）占比 ≥ 5%，判为字幕变化。若同一时刻带外整帧平均绝对差 ≥ 30（灰度级），判为整帧镜头切换，视为对齐，不算字幕变化。
+  - 入点：入点之后 ≤0.5 s（源时间）内出现字幕变化、而入点本身（±半帧）没有变化 → warn（入点时仍显示上一行字幕），建议把入点移到变化时刻；入点正好落在变化上记 aligned。出点：出点之前 ≤0.5 s 内出现字幕变化 → warn（下一行字幕在出点前闪现），建议出点提前到变化时刻。`measured` 记录 `method`、字幕带、阈值和每个剪辑点（item、in/out、源时间、成片时间、结果、附近的字幕变化与镜头切换、`suggested_source_seconds`/`suggested_shift_seconds`）；`refs` 指向成片剪辑点时间、item 与剪辑点采样帧。
+  - 阈值实测（`byq-cream-01` 真实口播/实测/促销素材，竖屏 1080×1920 30 fps，只读）：人工核对过的字幕切换 `line_share` 0.11–0.41、亮字形占比 0.066–0.19；手和刷子掠过字幕带的误检 `line_share` 可达 0.12，但亮字形占比 ≤ 0.023，所以亮字形判据取 0.05；真实镜头切换的带外平均差 41–133，同一机位的跳切（字幕同时切换）约 17，所以镜头阈值取 30。在该素材修订 1 上，recap 入点（源 31.47 s）被 warn 并建议 31.60 s；修订 2（入点 31.60 s）记为 aligned，全片 8 个剪辑点无 warn。smoke 中无字幕的测试图案素材不报。
+  - 局限：这是帧差启发式，不是 OCR：不能读字幕内容、不能判断字幕与语音是否对应；只识别亮色（白/黄）字幕，深色或彩色字幕、字幕带外的字幕会漏报；字幕淡入淡出、滚动字幕不是一帧阶跃，可能漏报；字幕带内持续静止后突然变化的亮色画面元素（如贴纸、产品特写）可能误报；字幕消失（变为空白）通常不触发。窗口在源时间上计（变速 item 同样按源秒 0.5 s）。无字幕素材应基本不报。解码失败的剪辑点记 unknown。
+- **按镜头采样**（`shot-sampled`，category video）：对渲染成片做镜头检测（ffmpeg `select='gt(scene,T)'`，T 默认 0.3，可配置），把成片切成镜头；每个镜头若已有采样帧（item 中点、剪辑点、字幕）则不重复，否则在镜头中点加一帧 `reason: "shot"` 的采样，短镜头（<1 s）同样覆盖。`measured.shots` 记录每个镜头的起止与采样 id；有镜头取不到帧记 fail。局限：crossfade/淡变等渐变转场不产生场景分数峰值，渐变中的镜头边界由剪辑点采样覆盖；阈值以下的跳切（同机位小变化）不单独成镜头。
 
-采样合成后的成片帧（不是源素材帧）：每个 media 与 graphic item 中点、每个视频剪辑点前后各一帧、每条字幕中点，PNG 写入 `frames/` 并记 SHA-256；采样按帧号精确定位（`-ss` 提前 1/4 帧，避免落到下一帧）。用 ffmpeg `tile` 把采样（超过 40 张时均匀抽取）拼成 `contact-sheet.png`；每个剪辑点前后各 1 秒导出 `clips/cut-<帧号>.mp4` 供听看。
+采样合成后的成片帧（不是源素材帧）：每个 media 与 graphic item 中点、每个视频剪辑点前后各一帧、每条字幕中点、每个尚无采样的镜头中点，PNG 写入 `frames/` 并记 SHA-256；采样按帧号精确定位（`-ss` 提前 1/4 帧，避免落到下一帧）。用 ffmpeg `tile` 把采样按时间顺序拼成 `contact-sheet.png`：最多 40 张（镜头多于 40 个时为镜头数），超出时先保证每个镜头一张，再均匀抽取其余采样；每个剪辑点前后各 1 秒导出 `clips/cut-<帧号>.mp4` 供听看。
 
-`verdict`：任一 fail → fail；否则有 warn → pass_with_warnings；否则 pass。`review` 初始为 `{status:"pending", reviewer:null, decision:"pending", findings:[]}`，由 Agent 或人工依据采样填写；`unverified` 固定声明人工听检、创意质量、合成画面评审与字幕可读性未验证。自动检查只反映技术信号：不检测音画同步、字幕与语音是否对应、画面内容是否正确，也不替代对合成画面的评审。
+`verdict`：任一 fail → fail；否则有 warn → pass_with_warnings；否则 pass。`review` 初始为 `{status:"pending", reviewer:null, decision:"pending", findings:[]}`，由 Agent 或人工依据采样填写；`unverified` 固定声明人工听检、创意质量、合成画面评审、字幕可读性未验证，以及烧录字幕检查只是帧差启发式。自动检查只反映技术信号：不检测音画同步、字幕与语音是否对应、画面内容是否正确，也不替代对合成画面的评审。
 
 ## 验证与限制
 
-`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
+`npm test` 覆盖：共享样例（valid 全部通过、invalid 逐文件按违反规则拒绝）、Python 侧附加规则的内联负向用例、11 个操作、批次原子性、过期修订、锁定轨道、dry-run 零写入、split 字幕归属、replace_media 字幕规则、revert_to 单独成批、规范化 operations 摘要、v1 迁移（时序/字幕/音轨分道与截断）与 v2 工程拒绝 v1 操作、多轨编译（z 序/transform/opacity/独立音频/转义）、lint 关卡放行与阻断；P2：16 个新增共享 invalid 样例的拒绝原因、与 Python 对齐的附加规则内联负例（graphic 字段白名单、duck 指向字幕轨、crossfade 起点须严格晚于前驱、全量重叠扫描）、P2 编译（playback rate、volume lane 用 HyperFrames engine/core 解析并取样核对增益、透明度补间、图形转义、变速字幕换算、lint 零发现）、模板与变量类型校验、P2 编辑操作（props、graphic、duck、split/trim 规则、锁定轨道 duck、revert_to 保持锁定轨道的 duck）、512 点 volume 自动化上限在 create 与编辑（含 dry-run）时即拒绝、约 1000 item/100 crossfade/400 段被闪避音乐的编译耗时、安全区布局估算；P2.1：模板命名位置（缺省=旧位置、非法 placement 拒绝、lint 零发现）、最小字号（加载时抬高、抬高后仍须放得下、CSS 只能用 --fs 变量）、烧录字幕剪辑点判定（入点晚于字幕切换 warn 并给出变化时刻、对齐不报、出点前闪现 warn、无字幕素材与错位字幕带不报、整帧镜头切换不算字幕变化）与镜头检测（文件内 0.6 s 短镜头被切出、阈值可配置）；以及原有的字幕重定位、路径约束、版本冲突、并发发布、父版本变化、输入变化与取消。
 
 `npm run smoke` 用自有测试图案和测试音（无客户素材），输出在根 `dist/local-production/<timestamp>/`：
 
@@ -216,7 +224,8 @@ node cli.mjs qa /absolute/project /absolute/render-dir /absolute/new-qa-dir
 3. v2 多轨：主轨 + 补导入 B-roll（transform 叠放）+ 音乐轨 + link 字幕 + 非 link 字幕；dry-run 不发布不复制、过期修订拒绝、锁定轨道拒绝、split、revert_to；导出后核对 B-roll 框内为 B-roll、框外为主画面、开始前不可见，以及主轨音调与 660 Hz 音乐同时存在。
 4. CLI `qa` 生成 `qa.json`。再复制该导出、剥离音轨并改写回执摘要，模拟“声称完成但丢音轨”的导出器，QA 必须给出 `verdict = fail`。
 5. P2 品牌包装（`packaging/`，24 fps 1280×720）：标题卡（0–36 帧）+ 下三分之一（76–116 帧）、两段主画面 crossfade（口播 0–72 淡入，色条 60–120 以 12 帧 crossfade 进入）、一段 1.5× 变速（口播源 2.5 s 起）带淡出、音乐轨在主画面轨下 −12 dB 闪避并淡入淡出、变速段上的 link 字幕。断言：lint 0 error/0 warning 且无 `audio_volume_double_automation`、三个 `<audio>` 全为 volume lane、VTT 中变速字幕为 5.667→6.333 s。信号检查：变速段第 132 帧与源 3.25 s 的画面 MAE 远小于与 1× 位置 3.0 s；crossfade 中点（第 66 帧）与两源平均帧的 MAE 远小于与任一单源；淡入首帧为黑、淡出末帧亮度降到 20% 以下；660 Hz 音乐能量在口播区间相对非口播区间约为 depth_db（±2 dB）；音乐淡入首窗明显更低；标题卡与下三分之一区域与下层画面显著不同且含白字与深色底。导出 QA 的 `graphic-safe-area`/`caption-safe-area`/lint 为 pass，`true-peak` 引用 `audio_lowered_db`。人为失败：新增一条 fontHeight 0.08、centerY 0.9 的两行字幕，预览 QA 必须在 `caption-safe-area` 上 fail。
-6. 以带 jsonschema 的 Python（`CREATIVE_PYTHON`，默认仓库根 `.venv/bin/python`）按 Draft 2020-12 校验全部 v2 修订文件（含品牌包装工程）与 4 份 qa.json，缺少 Python/jsonschema 时 smoke 直接失败。
+6. P2.1 竖屏 QA（`portrait/`，30 fps 360×640 预览）：合成素材 `captioned.mp4`（移动测试图案 + 约 70% 高度的白色“字形”方块与深色描边，1.5 s 时从 A 行切到 B 行）与 `short-shot.mp4`（0.6–1.2 s 为一段色条短镜头）。item `late` 入点 1.3 s（字幕晚 0.2 s 切换，正例）、`shots` 含短镜头（成片 1.6–2.2 s，远离 item 中点与剪辑点）、`aligned` 入点 1.5 s（负例）；`title-card` 用 `placement: top`、`lower-third` 用 `placement: upper`。断言：lint 0/0；编译 HTML 的位置与 `--fs-*` 字号；`burned-caption-cut-points` 为 warn 且只有 `late` 入点 warn、建议 1.5 s，`aligned` 入点为 aligned；`shot-sampled` pass 且有一帧 `reason: "shot"` 落在 1.6–2.2 s，该帧高饱和像素（色条）占比 > 30%；`graphic-safe-area` pass。前面几个场景的测试图案素材在该检查上都是 pass（无字幕不报）。
+7. 以带 jsonschema 的 Python（`CREATIVE_PYTHON`，默认仓库根 `.venv/bin/python`）按 Draft 2020-12 校验全部 v2 修订文件（含品牌包装与竖屏工程）与 5 份 qa.json，缺少 Python/jsonschema 时 smoke 直接失败。
 
 合成样例不能证明真实口播语义、品牌一致性、商业表现或专业剪辑效果；样例响度（约 -19.7 LUFS）落在目标外，QA 如实给出 pass_with_warnings。输入时长上限 30 分钟，成片上限 10 分钟是当前合同限制，尚非长时长性能验收结果；QA 对每个采样单独调用 ffmpeg，长工程/大量 item 时耗时随采样数线性增长。无生成、云凭据、上传、发布、自动剪辑决策；用户/Agent 自行给出合法选片和已获授权素材。
 
