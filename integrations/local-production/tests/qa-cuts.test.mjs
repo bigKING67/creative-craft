@@ -4,7 +4,10 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { burnedCaptionCheck, captionBand, decodeWindow, judgeCutPoint, splitFrames, CAPTION_BAND } from '../burned-captions.mjs';
-import { detectShots, qaOptions } from '../qa.mjs';
+import { detectShots, extractFrame, frameMid, qaOptions } from '../qa.mjs';
+import { run } from '../project.mjs';
+import { mediaTool } from '../media-analysis.mjs';
+import { cutFragmentCheck, judgeFragment } from '../cut-fragments.mjs';
 import { captionSource } from '../verify-smoke.mjs';
 
 // Self-authored synthetic sources only (ffmpeg lavfi), no customer media.
@@ -18,7 +21,16 @@ const docWith = (asset, items) => ({ canvas: { width: 360, height: 640, fps: 30 
 
 test('cut-point judgement: in-point before a caption change warns, at it is aligned; out-point after one warns', () => {
   const change = [{ source_seconds: 1.5, kind: 'caption' }], frame = 1 / 30;
-  assert.deepEqual(judgeCutPoint('in', 1.3, change, { frame }), { result: 'warn', suggested_source_seconds: 1.5, suggested_shift_seconds: 0.2 });
+  // Suggestions are the changed frame's midpoint (not its start; µs precision, not 4 decimals).
+  assert.deepEqual(judgeCutPoint('in', 1.3, change, { frame }), { result: 'warn', suggested_source_seconds: 1.516667, suggested_shift_seconds: 0.216667 });
+  assert.equal(judgeCutPoint('in', 1.3, [{ source_seconds: 1.5, frame_mid_seconds: 1.51, kind: 'caption' }], { frame }).suggested_source_seconds, 1.51);
+  assert.equal(judgeCutPoint('out', 1.7, change, { frame }).suggested_source_seconds, 1.516667);
+  // An in-point a hair before the changed frame (24.4333 < 733/30) still shows frame 732: warn, suggest frame 733's midpoint.
+  const real = [{ source_seconds: 24.433333, frame_mid_seconds: 24.45, kind: 'caption' }];
+  assert.deepEqual(judgeCutPoint('in', 24.4333, real, { frame }), { result: 'warn', suggested_source_seconds: 24.45, suggested_shift_seconds: 0.0167 });
+  assert.equal(judgeCutPoint('in', 24.45, real, { frame }).result, 'aligned', 'the midpoint shows the changed frame first');
+  assert.equal(judgeCutPoint('out', 24.45, real, { frame }).result, 'aligned', 'out at the midpoint: last shown frame is 732');
+  assert.equal(judgeCutPoint('out', 24.4667, real, { frame }).result, 'warn', 'out a hair after frame 733 ends shows it');
   assert.deepEqual(judgeCutPoint('in', 1.5, change, { frame }), { result: 'aligned' });
   assert.deepEqual(judgeCutPoint('in', 0.9, change, { frame }), { result: 'clear' }, 'more than 0.5 s inside the item');
   assert.equal(judgeCutPoint('out', 1.7, change, { frame }).result, 'warn');
@@ -37,7 +49,7 @@ test('burned-in caption check: caption switching after the in-point warns with t
   assert.equal(late.status, 'warn', late.observation);
   const point = late.measured.points.find(p => p.edge === 'in');
   assert.equal(point.result, 'warn');
-  assert.ok(Math.abs(point.suggested_source_seconds - 1.5) < 0.02, JSON.stringify(point));
+  assert.ok(Math.abs(point.suggested_source_seconds - 45.5 / 30) < 1e-3, `midpoint of the first changed frame (45): ${JSON.stringify(point)}`);
   assert.deepEqual(late.refs, [{ time_seconds: 0, item_id: 'm0' }]);
   assert.match(late.measured.method, /not OCR/);
   // Out-point 1.3 + 1 s = 2.3 s: the change at 1.5 s is 0.8 s before it (outside the window).
@@ -75,7 +87,7 @@ test('variable frame rate source: every decoded frame keeps its own source time'
   const late = await burnedCaptionCheck(docWith('vfr.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 2.8 }]), dir);
   const point = late.measured.points.find(p => p.edge === 'in');
   assert.equal(point.result, 'warn', JSON.stringify(point));
-  assert.ok(Math.abs(point.suggested_source_seconds - 3) < 0.02, JSON.stringify(point));
+  assert.ok(Math.abs(point.suggested_source_seconds - (3 + 1 / 30)) < 1e-3, `midpoint of the 1/15 s frame at 3.0 s: ${JSON.stringify(point)}`);
   const aligned = await burnedCaptionCheck(docWith('vfr.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 3 }]), dir);
   assert.equal(aligned.measured.points.find(p => p.edge === 'in').result, 'aligned', aligned.observation);
 });
@@ -104,4 +116,80 @@ test('summary: any warn wins, otherwise any unchecked point makes the check unkn
   assert.equal(partial.status, 'unknown', partial.observation);
   assert.match(partial.observation, /2 analysed point\(s\).*incomplete\. 2 of 4 cut point\(s\) were not checked/);
   assert.deepEqual(partial.measured.points.map(p => p.result), ['aligned', 'clear', 'unknown', 'unknown']);
+});
+
+// Synthetic CFR file: red frames 0–44, blue from frame 45 on (a cut at frame 45).
+const colourCut = async (file, { cutFrame = 45, seconds = 3, fps = 30 } = {}) => run(mediaTool('ffmpeg'), ['-v', 'error', '-n', '-f', 'lavfi', '-i',
+  `color=c=red:s=64x64:r=${fps}:d=${seconds},drawbox=x=0:y=0:w=64:h=64:color=blue:t=fill:enable='gte(n,${cutFrame})'`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
+const pixel = async png => {
+  const { stdout } = await run(mediaTool('ffmpeg'), ['-v', 'error', '-i', png, '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer' });
+  return stdout[0] > stdout[2] ? 'red' : 'blue';
+};
+
+test('QA samples are frame-exact: last frame before a cut and first frame after it', { timeout: 60000 }, async t => {
+  const dir = await scratch(t), file = path.join(dir, 'cut.mp4');
+  await colourCut(file);
+  const colours = {};
+  for (const frame of [0, 43, 44, 45, 46, 89]) {
+    const png = path.join(dir, `f${frame}.png`);
+    await extractFrame(file, frame, 30, png);
+    colours[frame] = await pixel(png);
+  }
+  assert.deepEqual(colours, { 0: 'red', 43: 'red', 44: 'red', 45: 'blue', 46: 'blue', 89: 'blue' });
+  assert.equal(frameMid(45, 30), 45.5 / 30);
+});
+
+// Synthetic source (30 fps, 5 s): moving test pattern, colour bars from 1.5 s
+// (frame 45) to 3.0 s, a 2-frame white flash on frames 90–91, then the test
+// pattern again from frame 92.
+const shotsSource = file => run(mediaTool('ffmpeg'), ['-v', 'error', '-n', '-f', 'lavfi', '-i', 'testsrc2=size=360x640:rate=30:duration=5',
+  '-f', 'lavfi', '-i', 'smptehdbars=size=360x640:rate=30:duration=5', '-filter_complex',
+  "[0:v][1:v]overlay=enable='between(n,45,89)',drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='between(n,90,91)'[v]",
+  '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
+
+test('cut-boundary fragments: judgement rules', () => {
+  const frame = 1 / 30, times = Array.from({ length: 120 }, (_, k) => k / 30), base = { times, step: frame, frame, itemFrames: 60 };
+  // Shot changes at frames 30, 50 (a 0.67 s shot), 75 and 100 (a 0.83 s shot).
+  const changes = [30, 50, 75, 100];
+  const at = (edge, source, first, last) => judgeFragment(edge, { ...base, changes, at: source, first, last });
+  assert.deepEqual(at('in', 0.8, 0.8, 2.766667), { result: 'warn', kind: 'fragment', fragment_frames: 6, change_seconds: 1,
+    suggested_source_in_seconds: 1.016667, suggested_shift_seconds: 0.216667 }, 'opens with 6 frames of the previous shot');
+  assert.equal(at('in', 0.99999, 0.99999, 2.98).fragment_frames, 1, 'a hair before frame 30 (1.0 s) still shows frame 29');
+  assert.equal(at('in', 1.016667, 1.016667, 2.98).result, 'aligned', 'midpoint of the first frame of the shot');
+  assert.equal(at('in', 1.1, 1.1, 3).result, 'clear', 'the 0.67 s shot is shown from frame 33 on: mostly inside the item');
+  // Out-point 1.7 s (last shown frame 50, the first of the new shot): ends with 1 frame of the next shot.
+  assert.deepEqual(at('out', 1.7, 0, 1.666667), { result: 'warn', kind: 'fragment', fragment_frames: 1, change_seconds: 1.666667,
+    suggested_source_out_seconds: 1.683333, suggested_frames: 50, drop_output_frames: 10 });
+  assert.equal(at('out', 1.6666667, 0, 1.633333).result, 'aligned', 'the change is the first frame after the cut');
+  assert.equal(at('out', 3.3, 1.6, 3.266667).result, 'clear', 'the 0.83 s shot 75–99 cut 1 frame early is mostly shown, not a fragment');
+});
+
+test('cut-boundary fragments on a synthetic source: shot tail, flash and next-shot head warn; aligned cuts pass', { timeout: 60000 }, async t => {
+  const dir = await scratch(t);
+  await shotsSource(path.join(dir, 'shots.mp4'));
+  const items = [
+    { start_frame: 0, frames: 30, source_in_seconds: 1.3 }, // m0: opens with 6 frames of the test pattern
+    { start_frame: 30, frames: 30, source_in_seconds: 1.5 }, // m1: in-point on the bars' first frame
+    { start_frame: 60, frames: 30, source_in_seconds: 2.95 }, // m2: 2 bars frames + the 2-frame white flash
+    { start_frame: 90, frames: 40, source_in_seconds: 0.2 }, // m3: ends with 1 frame of the bars
+    { start_frame: 130, frames: 30, source_in_seconds: 0.5 }, // m4: ends exactly before the bars
+  ];
+  const result = await cutFragmentCheck(docWith('shots.mp4', items), dir);
+  const point = (id, edge) => result.measured.points.find(p => p.item_id === id && p.edge === edge);
+  assert.equal(result.status, 'warn', result.observation);
+  assert.deepEqual(result.measured.points.filter(p => p.result === 'warn').map(p => `${p.item_id}:${p.edge}`), ['m0:in', 'm2:in', 'm2:out', 'm3:out'], result.observation);
+  assert.equal(point('m0', 'in').fragment_frames, 6);
+  assert.ok(Math.abs(point('m0', 'in').suggested_source_in_seconds - 45.5 / 30) < 1e-3, JSON.stringify(point('m0', 'in')));
+  assert.equal(point('m1', 'in').result, 'aligned');
+  assert.equal(point('m2', 'in').kind, 'flash');
+  assert.equal(point('m2', 'in').fragment_frames, 4, 'two bars frames and the two-frame flash');
+  assert.ok(Math.abs(point('m2', 'in').suggested_source_in_seconds - 92.5 / 30) < 1e-3, JSON.stringify(point('m2', 'in')));
+  assert.equal(point('m3', 'out').fragment_frames, 1);
+  assert.equal(point('m3', 'out').suggested_frames, 39);
+  assert.equal(point('m4', 'out').result, 'aligned');
+  // m2 also ends with the flash and 0.88 s of the following shot: keep only its 2 bars frames.
+  assert.deepEqual([point('m2', 'out').kind, point('m2', 'out').suggested_frames], ['flash', 2]);
+  assert.deepEqual(result.refs.map(r => r.item_id), ['m0', 'm2', 'm2', 'm3']);
+  assert.deepEqual([result.measured.thresholds.shot_mad, result.measured.thresholds.scene_jump], [30, 30]);
+  assert.match(result.observation, /m0 in-point opens with 6 frame\(s\) of the previous source shot/);
 });
