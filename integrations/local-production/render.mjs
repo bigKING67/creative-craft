@@ -73,7 +73,22 @@ export async function lintComposition(html) {
     findings: result.findings.map(({ code, severity, message, elementId }) => ({ code, severity, message, ...(elementId ? { element_id: elementId } : {}) })) };
 }
 
-export async function renderProject(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
+// Concurrent renders in one process corrupt each other's captures (measured:
+// frames filled only at the top, black below), so renders in a process run one
+// at a time. Cancellation stays with the render itself: a render aborted while
+// queued still runs its cancellation path and writes a cancelled receipt.
+let renderQueue = Promise.resolve();
+export function withRenderLock(task) {
+  const run = renderQueue.then(task);
+  renderQueue = run.catch(() => {});
+  return run;
+}
+
+export function renderProject(root, destination, options = {}) {
+  return withRenderLock(() => renderProjectNow(root, destination, options));
+}
+
+async function renderProjectNow(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
   const { doc: project, templates } = await loadProject(root, revision);
   // Source frame alignment: the compiled view is computed once here and shared by
   // the font glyph checks (verifyAssets, copyCaptionFont) and compose, which use

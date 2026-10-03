@@ -321,6 +321,10 @@ P2 的已知限制：闪避依据参照轨上**有声 item 的区间**，不是�
 
 实际浏览器故障回归：配置已安装的 `PRODUCER_HEADLESS_SHELL_PATH` 后运行 `node --test tests/font-render.integration.mjs`。使用1秒合成黑色视频验证400/900字重，再故意让字体URL不存在；必须失败，不能输出可交付结果。producer 0.8.53会覆盖内部tween-building标志，且把已拒绝的buildReady当作结束，因此字体门槛使用独立buildReady项，加载失败后保持未就绪，交给其有界超时中止；该门槛在 0.8.108 上经同一回归测试复核通过。不要以`document.fonts.ready`已完成替代加载成功检查。
 
+### 同进程渲染串行
+
+实测同一进程内并发调用 `renderProject` 会互相破坏截图（画面只占上部、下部为黑）。`renderProject` 在进程内排队依次执行（`withRenderLock`）；排队中被取消的渲染轮到时仍走取消路径并写 `cancelled` 回执。需要并行时请使用多个进程或 worker，并为每个渲染使用独立输出目录。
+
 ### 模板版本与回执
 
 图形模板随修订固定（合同见 `docs/content-production-architecture.md`“图形模板固定到修订”）。做法与固定字幕字体相同：按内容寻址把模板 JSON 原始字节复制进工程。
