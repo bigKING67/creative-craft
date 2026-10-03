@@ -129,6 +129,15 @@ context. OCR subtitles and silence detection can nominate boundaries but cannot
 prove speech completeness. Without listening, label the cut a candidate rather
 than an approved speech edit.
 
+Source footage often carries burned-in subtitles and disclaimers. Keep them, do
+not add duplicate captions, and keep graphics clear of them. Burned subtitles can
+lag speech: a cut must fall in a speech gap *and* after the subtitle changes, or
+viewers read a line whose audio was cut. Music under voice defeats silence
+detection; use ASR timing plus audio-energy valleys. Begin audio crossfades after
+the previous line ends, sample at least one frame per shot (fixed intervals miss
+short shots), match segment loudness, and flag likenesses, endorsements or
+promotions inherited from the source instead of extending them.
+
 Where the host supports independent audio/video editing, continuous source
 speech may span several picture cuts. Keep its source timing and caption alignment
 explicit; check visible lip sync and whether covering footage misleadingly appears
