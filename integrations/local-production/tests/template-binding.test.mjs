@@ -38,17 +38,22 @@ const htmlOf = async (root, revision) => { const { doc, templates } = await load
 const stored = async root => (await fs.readdir(path.join(root, 'templates'))).sort();
 const revisionCount = async root => (await fs.readdir(path.join(root, 'revisions'))).filter(n => n.endsWith('.json')).length;
 // A simulated execution-layer upgrade: title-card v3 drops the subtitle var and widens the gap.
-async function upgradedRuntime(t) {
+async function runtimeWith(t, name, change) {
   const dir = await tempDir(t, 'template-runtime-');
-  for (const name of await fs.readdir(runtimeDir)) await fs.copyFile(path.join(runtimeDir, name), path.join(dir, name));
-  const v3 = JSON.parse(await fs.readFile(path.join(dir, 'title-card.json'), 'utf8'));
+  for (const file of await fs.readdir(runtimeDir)) await fs.copyFile(path.join(runtimeDir, file), path.join(dir, file));
+  const template = JSON.parse(await fs.readFile(path.join(dir, `${name}.json`), 'utf8'));
+  change(template);
+  await fs.writeFile(path.join(dir, `${name}.json`), JSON.stringify(template, null, 2));
+  return dir;
+}
+const upgradedRuntime = t => runtimeWith(t, 'title-card', v3 => {
   v3.version = 3;
   delete v3.vars.subtitle;
   v3.html = v3.html.replace('<span class="gfx-title-card-subtitle">{{subtitle}}</span>', '');
   v3.css = v3.css.replace('gap:1.2em', 'gap:2em');
-  await fs.writeFile(path.join(dir, 'title-card.json'), JSON.stringify(v3, null, 2));
-  return dir;
-}
+});
+// A compatible upgrade (same vars): only the layout changes.
+const widerGap = (t, name = 'title-card') => runtimeWith(t, name, v3 => { v3.version = 3; v3.css = v3.css.replace(/gap:[0-9.]+em|padding:1em/, 'gap:2em'); });
 
 test('create and edit pin the templates graphics use; dry-run reports new bindings without writing', async t => {
   const root = await project(t), runtime = runtimeTemplate('title-card');
@@ -111,13 +116,35 @@ test('an execution-layer template change leaves pinned revisions alone until reb
   const html = await htmlOf(root);
   assert.ok(html.includes('data-template-version="3"') && html.includes('gap:2em') && !html.includes('副标题'));
   await assert.rejects(editBatch(root, batch(4, [{ type: 'rebind_template', template: 'title-card' }])), /already bound to the current template bytes \(no change\)/);
-  // revert_to restores content, not bindings: the rebind decision stays (like track locks).
-  await editBatch(root, batch(4, [{ type: 'revert_to', revision: 3 }]));
+  // revert_to restores the target's bindings with its content: revision 1's
+  // vars and template bytes, and the same compiled HTML.
+  const reverted = await editBatch(root, batch(4, [{ type: 'revert_to', revision: 1 }]));
+  assert.deepEqual(reverted.diff.graphic_templates.changed, [{ id: 'title-card', from: { version: 3, sha256: upgraded }, to: { version: 2, sha256: original } }]);
+  const back = await readProject(root);
+  assert.deepEqual([back.graphic_templates, back.items], [rev1.graphic_templates, rev1.items]);
+  assert.equal(await htmlOf(root), before);
+  // Reverting to the rebound revision brings its bytes back.
+  await editBatch(root, batch(5, [{ type: 'revert_to', revision: 4 }]));
   assert.equal((await readProject(root)).graphic_templates[0].sha256, upgraded);
   restore();
-  // Back on the shipped runtime: the rebound revisions still render v3, the first still v2.
+  // Back on the shipped runtime: pinned revisions still render their own bytes.
   assert.match(await htmlOf(root), /gap:2em/);
   assert.equal(await htmlOf(root, 1), before);
+  assert.equal(await htmlOf(root, 5), before);
+});
+
+test('rebind_template and revert_to never change the template bytes of graphics on locked tracks', async t => {
+  const root = await project(t), original = runtimeTemplate('title-card').sha256;
+  t.after(useRuntimeTemplates(await widerGap(t)));
+  await editBatch(root, batch(1, [{ type: 'edit_track', track_id: 'v_gfx', locked: true }]));
+  await assert.rejects(editBatch(root, batch(2, [{ type: 'rebind_template', template: 'title-card' }]), { dryRun: true }), /Track is locked: v_gfx \(graphic card would render template title-card from different bytes\)/);
+  await editBatch(root, batch(2, [{ type: 'edit_track', track_id: 'v_gfx', locked: false }]));
+  await editBatch(root, batch(3, [{ type: 'rebind_template', template: 'title-card' }]));
+  await editBatch(root, batch(4, [{ type: 'edit_track', track_id: 'v_gfx', locked: true }]));
+  // Same items on the locked track, but revision 1 renders them from other bytes.
+  await assert.rejects(editBatch(root, batch(5, [{ type: 'revert_to', revision: 1 }])), /Track is locked: v_gfx \(graphic card would render template title-card/);
+  await editBatch(root, batch(5, [{ type: 'revert_to', revision: 4 }]));
+  assert.notEqual((await readProject(root)).graphic_templates[0].sha256, original);
 });
 
 test('missing, altered, symlinked or invalid bound templates fail the read and the render', async t => {
@@ -182,14 +209,24 @@ test('historical revisions without bindings render with runtime templates and ga
   const legacy = await readProject(root);
   assert.ok(compose(legacy).html.includes('gfx-lower-third'));
   assert.deepEqual(templateProvenance(legacy).map(p => [p.id, p.pinned, p.source]), [['lower-third', false, 'runtime']]);
+  // It already renders the execution-layer bytes, so a rebind would change nothing.
+  await assert.rejects(editBatch(root, batch(1, [{ type: 'rebind_template', template: 'lower-third' }])), /revision 1 is not pinned and already renders lower-third from the current template bytes \(no change\)/);
   const result = await editBatch(root, batch(1, [{ type: 'move_item', item_id: 'lower', start_frame: 2 }]));
   assert.match(result.notes.join(' '), /predates graphic template pinning; this revision binds lower-third/);
   assert.deepEqual(result.diff.graphic_templates.added.map(b => b.id), ['lower-third']);
   const pinned = await readProject(root);
   assert.equal(pinned.graphic_templates[0].sha256, runtimeTemplate('lower-third').sha256);
   assert.ok(!('graphic_templates' in await readProject(root, 1)), 'the historical revision is not rewritten');
+  // Reverting to the unpinned revision binds what it renders with now: the
+  // current execution-layer bytes, with a note.
+  const restore = useRuntimeTemplates(await widerGap(t, 'lower-third'));
+  const reverted = await editBatch(root, batch(2, [{ type: 'revert_to', revision: 1 }]));
+  assert.match(reverted.notes.join(' '), /Revision 1 predates graphic template pinning; reverting to it binds lower-third to the current execution-layer template bytes/);
+  assert.equal((await readProject(root)).graphic_templates[0].sha256, runtimeTemplate('lower-third').sha256);
+  assert.notEqual(runtimeTemplate('lower-third').sha256, pinned.graphic_templates[0].sha256);
+  restore();
   // Removing the last graphic drops its binding.
-  const none = await editBatch(root, batch(2, [{ type: 'remove_item', item_id: 'lower' }]));
+  const none = await editBatch(root, batch(3, [{ type: 'remove_item', item_id: 'lower' }]));
   assert.deepEqual(none.diff.graphic_templates.removed, ['lower-third']);
 });
 

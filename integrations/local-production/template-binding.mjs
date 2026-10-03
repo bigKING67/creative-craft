@@ -46,27 +46,34 @@ export async function loadPinnedTemplates(root, bindings) {
   return templates;
 }
 
+// sha256 of the bytes a revision renders template `id` with: its binding when
+// pinned, else (historical revision) the current execution-layer bytes.
+export const renderedTemplateSha = (doc, id) => (doc.graphic_templates ? doc.graphic_templates.find(b => b.id === id)?.sha256 : runtimeTemplate(id).sha256);
+
 // Bindings of a new revision `next` built from `base` (null on create), whose
 // loaded template set is `baseTemplates` (reused, not re-read). Every template a
-// graphic uses keeps its existing binding; otherwise it reuses the revert
-// target's binding (`earlier`: {doc, templates}), else pins the current
-// execution-layer bytes. `rebind` forces one template to the execution-layer
-// bytes. Bindings no graphic uses are dropped. Returns the files to write
-// (nothing is written here), notes for the batch result and the template set of
-// `next` for validation.
-export function planTemplateBindings(base, next, { baseTemplates = null, rebind = null, earlier = null } = {}) {
+// graphic uses keeps its existing binding, except:
+// - `rebind`: that template moves to the current execution-layer bytes;
+// - `revert` ({doc, templates} of the revert target): templates take the
+//   target's bindings (its bound files are still in the project and were
+//   checked when it was loaded); an unpinned target binds the current
+//   execution-layer bytes, with a note.
+// Templates first used here pin the execution-layer bytes. Bindings no graphic
+// uses are dropped. Returns the files to write (nothing is written here),
+// notes for the batch result and the template set of `next` for validation.
+export function planTemplateBindings(base, next, { baseTemplates = null, rebind = null, revert = null } = {}) {
   const used = usedTemplates(next), writes = [], notes = [], templates = new Map();
   if (!used.length && !base?.graphic_templates) {
     delete next.graphic_templates;
     return { writes, notes, templates };
   }
-  const current = new Map((base?.graphic_templates ?? []).map(b => [b.id, b]));
-  const previous = new Map((earlier?.doc.graphic_templates ?? []).map(b => [b.id, b]));
+  const [source, sourceTemplates] = revert ? [revert.doc, revert.templates] : [base, baseTemplates];
+  const kept = new Map((source?.graphic_templates ?? []).map(b => [b.id, b]));
   const bindings = [];
   for (const id of used) {
-    let binding = id === rebind ? null : current.get(id), template = binding && baseTemplates?.get(id);
-    if (!binding && previous.has(id)) [binding, template] = [previous.get(id), earlier.templates?.get(id)];
+    let binding = id === rebind ? null : kept.get(id), template = binding && sourceTemplates?.get(id);
     if (binding) template ?? fail(`Graphic template ${id}: the bound template set is not loaded`);
+    else if (revert?.doc.graphic_templates) fail(`Graphic template ${id}: revert target revision ${revert.doc.revision} has no binding`);
     else {
       const runtime = runtimeTemplate(id);
       binding = { id, version: runtime.template.version, sha256: runtime.sha256, file: bindingFile(runtime.sha256) };
@@ -77,10 +84,23 @@ export function planTemplateBindings(base, next, { baseTemplates = null, rebind 
     bindings.push({ ...binding });
   }
   next.graphic_templates = bindings;
-  if (base && !base.graphic_templates && used.length) {
+  if (revert && !revert.doc.graphic_templates && used.length) {
+    notes.push(`Revision ${revert.doc.revision} predates graphic template pinning; reverting to it binds ${used.join(', ')} to the current execution-layer template bytes`);
+  } else if (!revert && base && !base.graphic_templates && used.length) {
     notes.push(`Revision ${base.revision} predates graphic template pinning; this revision binds ${used.join(', ')} to the current execution-layer template bytes`);
   }
   return { writes, notes, templates };
+}
+
+// Locked tracks are frozen, including how their graphics render: no batch
+// (rebind_template, revert_to, ...) may change the template bytes a graphic on a
+// track locked in `base` renders with.
+export function checkLockedTemplates(base, next) {
+  const locked = new Set(base.tracks.filter(t => t.locked).map(t => t.id));
+  for (const item of next.items) {
+    if (item.kind !== 'graphic' || !locked.has(item.track_id) || renderedTemplateSha(next, item.template) === renderedTemplateSha(base, item.template)) continue;
+    fail(`Track is locked: ${item.track_id} (graphic ${item.id} would render template ${item.template} from different bytes)`);
+  }
 }
 
 // Content-addressed copies; an existing identical file is reused, never replaced.

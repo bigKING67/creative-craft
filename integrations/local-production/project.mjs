@@ -8,7 +8,7 @@ import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCa
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
 import { checkVolumeAutomation } from './timeline.mjs';
 import { TEMPLATES, TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
-import { installTemplates, loadPinnedTemplates, planTemplateBindings, usedTemplates } from './template-binding.mjs';
+import { checkLockedTemplates, installTemplates, loadPinnedTemplates, planTemplateBindings, renderedTemplateSha, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 import { digest, sha256, writeOnce } from './content-store.mjs';
 
@@ -237,9 +237,8 @@ async function revertContent(root, base, op) {
   keys(op, ['type', 'revision']);
   if (!integer(op.revision, 1, base.revision - 1)) fail('revert_to requires an earlier revision');
   const loaded = await loadProject(root, op.revision), target = asV2(loaded.doc);
-  // Template bindings follow the general rule (planTemplateBindings): current
-  // bindings stay; templates the current revision does not bind reuse the
-  // target's binding when it had one.
+  // Template bindings come from the target (planTemplateBindings); graphics on
+  // locked tracks must keep their template bytes (checkLockedTemplates).
   for (const track of base.tracks.filter(t => t.locked)) {
     const on = doc => JSON.stringify(doc.items.filter(i => i.track_id === track.id));
     if (!target.tracks.some(t => t.id === track.id) || on(base) !== on(target)) fail(`Track is locked: ${track.id}`);
@@ -254,13 +253,18 @@ async function revertContent(root, base, op) {
 }
 
 // rebind_template {template}: the explicit, single-operation decision that moves
-// one used template's binding to the current execution-layer bytes.
+// one used template's binding to the current execution-layer bytes. Refused
+// when the revision already renders it from those bytes (bound to them, or an
+// unpinned historical revision, which renders the execution layer) and, via
+// checkLockedTemplates, when a graphic using it is on a locked track.
 function checkRebind(base, op) {
   keys(op, ['type', 'template']);
   if (typeof op.template !== 'string' || !TEMPLATE_ID.test(op.template)) fail('rebind_template requires a template id');
   if (!usedTemplates(base).includes(op.template)) fail(`rebind_template: template ${op.template} is not used by any graphic in revision ${base.revision}`);
-  const bound = base.graphic_templates?.find(b => b.id === op.template);
-  if (bound && bound.sha256 === runtimeTemplate(op.template).sha256) fail(`rebind_template: ${op.template} is already bound to the current template bytes (no change)`);
+  if (renderedTemplateSha(base, op.template) === runtimeTemplate(op.template).sha256) {
+    fail(base.graphic_templates ? `rebind_template: ${op.template} is already bound to the current template bytes (no change)`
+      : `rebind_template: revision ${base.revision} is not pinned and already renders ${op.template} from the current template bytes (no change)`);
+  }
   return op.template;
 }
 
@@ -290,16 +294,18 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   }
   const imports = [], alone = type => batch.operations.some(op => op?.type === type) &&
     (batch.operations.length === 1 || fail(`${type} must be the only operation in its batch`));
-  let next, earlier = null, rebind = null;
-  if (alone('revert_to')) ({ next, target: earlier } = await revertContent(root, base, batch.operations[0]));
+  let next, revert = null, rebind = null;
+  if (alone('revert_to')) ({ next, target: revert } = await revertContent(root, base, batch.operations[0]));
   else if (alone('rebind_template')) { rebind = checkRebind(base, batch.operations[0]); next = structuredClone(base); }
   else next = await applyOperations(base, batch.operations, { importAsset, imports });
   const operations_sha256 = operationsSha256(batch.operations);
   Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
-  // Template bindings: kept as they are unless rebound; new templates pinned to
-  // the execution-layer bytes; unused ones dropped. Vars are typed against them.
-  const { writes: templateWrites, notes, templates } = planTemplateBindings(base, next, { baseTemplates, rebind, earlier });
+  // Template bindings: kept as they are unless rebound or reverted; new
+  // templates pinned to the execution-layer bytes; unused ones dropped. Vars are
+  // typed against them; graphics on locked tracks keep their template bytes.
+  const { writes: templateWrites, notes, templates } = planTemplateBindings(base, next, { baseTemplates, rebind, revert });
+  checkLockedTemplates(base, next);
   validateV2(next, { templates });
   checkVolumeAutomation(next); // Same envelope code as compilation; refused before dry-run or publish.
   // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
