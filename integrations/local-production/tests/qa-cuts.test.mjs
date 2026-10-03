@@ -4,7 +4,9 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { burnedCaptionCheck, captionBand, decodeWindow, judgeCutPoint, splitFrames, CAPTION_BAND } from '../burned-captions.mjs';
-import { detectShots, qaOptions } from '../qa.mjs';
+import { detectShots, extractFrame, frameMid, qaOptions } from '../qa.mjs';
+import { run } from '../project.mjs';
+import { mediaTool } from '../media-analysis.mjs';
 import { captionSource } from '../verify-smoke.mjs';
 
 // Self-authored synthetic sources only (ffmpeg lavfi), no customer media.
@@ -104,4 +106,25 @@ test('summary: any warn wins, otherwise any unchecked point makes the check unkn
   assert.equal(partial.status, 'unknown', partial.observation);
   assert.match(partial.observation, /2 analysed point\(s\).*incomplete\. 2 of 4 cut point\(s\) were not checked/);
   assert.deepEqual(partial.measured.points.map(p => p.result), ['aligned', 'clear', 'unknown', 'unknown']);
+});
+
+// Synthetic CFR file: red frames 0–44, blue from frame 45 on (a cut at frame 45).
+const colourCut = async (file, { cutFrame = 45, seconds = 3, fps = 30 } = {}) => run(mediaTool('ffmpeg'), ['-v', 'error', '-n', '-f', 'lavfi', '-i',
+  `color=c=red:s=64x64:r=${fps}:d=${seconds},drawbox=x=0:y=0:w=64:h=64:color=blue:t=fill:enable='gte(n,${cutFrame})'`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', file]);
+const pixel = async png => {
+  const { stdout } = await run(mediaTool('ffmpeg'), ['-v', 'error', '-i', png, '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer' });
+  return stdout[0] > stdout[2] ? 'red' : 'blue';
+};
+
+test('QA samples are frame-exact: last frame before a cut and first frame after it', { timeout: 60000 }, async t => {
+  const dir = await scratch(t), file = path.join(dir, 'cut.mp4');
+  await colourCut(file);
+  const colours = {};
+  for (const frame of [0, 43, 44, 45, 46, 89]) {
+    const png = path.join(dir, `f${frame}.png`);
+    await extractFrame(file, frame, 30, png);
+    colours[frame] = await pixel(png);
+  }
+  assert.deepEqual(colours, { 0: 'red', 43: 'red', 44: 'red', 45: 'blue', 46: 'blue', 89: 'blue' });
+  assert.equal(frameMid(45, 30), 45.5 / 30);
 });

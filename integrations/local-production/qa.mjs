@@ -27,7 +27,7 @@ async function probeRender(file) {
   const [num, den] = String(video.avg_frame_rate || video.r_frame_rate).split('/').map(Number);
   const duration = Number(video.duration) || Number(result.format.duration);
   return { width: video.width, height: video.height, fps: den ? num / den : num, duration,
-    has_audio: result.streams.some(s => s.codec_type === 'audio') };
+    start_time: Number(video.start_time) || 0, has_audio: result.streams.some(s => s.codec_type === 'audio') };
 }
 
 // Shot boundaries of the rendered file: frames whose ffmpeg scene score (0–1,
@@ -43,6 +43,20 @@ export function qaOptions({ captionBand: band, sceneThreshold = SCENE_THRESHOLD 
   if (typeof sceneThreshold !== 'number' || !(sceneThreshold > 0 && sceneThreshold < 1)) fail('Scene threshold must be a number between 0 and 1 (exclusive)');
   return { band: captionBand(band), sceneThreshold };
 }
+
+// Frame-exact still of output frame `frame` (0-based) of a constant-frame-rate
+// file. Input -ss seeking alone is ambiguous at frame boundaries (it can land
+// one frame early or late next to a cut), so seek coarsely two frames early,
+// keep the original timestamps (-copyts) and select the first frame whose pts
+// reaches the half-frame before `frame`: the frame displayed at the frame
+// midpoint (frame + 0.5) / fps. -fps_mode passthrough writes that decoded frame
+// as is, never a duplicated neighbour.
+export async function extractFrame(file, frame, fps, out, startTime = 0) {
+  const seek = Math.max(0, (frame - 2) / fps), from = startTime + (frame - 0.5) / fps;
+  await run(ffmpeg(), ['-v', 'error', '-copyts', '-ss', String(seek), '-i', file, '-an', '-sn',
+    '-vf', `select='gte(t,${from.toFixed(6)})'`, '-fps_mode', 'passthrough', '-frames:v', '1', '-n', out], { timeout: 60000 });
+}
+export const frameMid = (frame, fps) => (frame + 0.5) / fps;
 
 async function ffmpegVersion() {
   const { stdout } = await run(ffmpeg(), ['-version'], { timeout: 10000 });
@@ -158,7 +172,7 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   for (const { item, start, end } of captions) {
     const frame = Math.floor((start + end) / 2 * fps);
     want(`s-${item.id}-caption`, frame, 'caption', item.id);
-    captionSample.set(item.id, { id: `s-${item.id}-caption`, time: frame / fps });
+    captionSample.set(item.id, { id: `s-${item.id}-caption`, time: frameMid(frame, fps) });
   }
   // Shots of the rendered file (scene detection): every shot, however short,
   // gets at least one sample; a shot already holding a planned sample adds none.
@@ -174,11 +188,10 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   }
   const samples = [];
   for (const sample of wanted) {
-    // Input seeking keeps the first frame with pts >= ss, so seek a quarter
-    // frame early to land on frame k itself rather than k + 1.
-    const time = sample.frame / fps, seek = Math.max(0, (sample.frame - 0.25) / fps);
-    const file = `frames/${sample.id}.png`;
-    await run(ffmpeg(), ['-v', 'error', '-ss', String(seek), '-i', video, '-frames:v', '1', '-n', path.join(qaDir, file)], { timeout: 60000 });
+    // Frame-exact: the sample is output frame `sample.frame`, recorded at its
+    // frame-midpoint time (cut_before = last frame before the cut, cut_after = first after it).
+    const time = frameMid(sample.frame, fps), file = `frames/${sample.id}.png`;
+    await extractFrame(video, sample.frame, fps, path.join(qaDir, file), media.start_time);
     const stat = await fs.stat(path.join(qaDir, file)).catch(() => null);
     if (!stat?.size) continue;
     samples.push({ id: sample.id, time_seconds: round(time, 6), reason: sample.reason, ...(sample.item_id ? { item_id: sample.item_id } : {}),
@@ -208,7 +221,7 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
     'compiled-layout-estimate', n => `All ${n} caption box(es) are inside the 5% safe margin (layout estimate, not a pixel detection).`);
   const graphicItems = doc.items.filter(i => i.kind === 'graphic'), graphicTemplates = graphicItems.length ? templateSet(doc, templates) : null;
   safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(i, graphicTemplates), frame: i.start_frame + Math.floor(i.frames / 2) })),
-    e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic', 'template-load-guarantee',
+    e => ({ id: `s-${e.id}-mid`, time: frameMid(e.frame, fps) }), 'graphic', 'template-load-guarantee',
     n => `${n} graphic(s) render in their template box; template load validation guarantees every template box lies inside the 5% safe margin. Not a pixel detection, and text fit inside the box is not measured.`);
 
   const unsampled = shots.filter(s => !sampled.has(s.sample));
