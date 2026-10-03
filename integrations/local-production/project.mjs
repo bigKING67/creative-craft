@@ -11,6 +11,7 @@ import { TEMPLATES, TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
 import { checkLockedTemplates, installTemplates, loadPinnedTemplates, planTemplateBindings, renderedTemplateSha, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 import { digest, sha256, writeOnce } from './content-store.mjs';
+import { probedFrameRate } from './source-frames.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -37,14 +38,17 @@ export async function ffprobeJson(file) {
   return JSON.parse(stdout);
 }
 
-export async function probe(file) {
+// { frameRate: true } (asset import) adds frame_rate: the exact source frame
+// rate for compile-time frame snapping, when probedFrameRate trusts it.
+export async function probe(file, { frameRate = false } = {}) {
   const result = await ffprobeJson(file);
   const video = result.streams.find(s => s.codec_type === 'video');
   const audio = result.streams.find(s => s.codec_type === 'audio');
   const duration = Number(result.format.duration);
   if (!number(duration, 0.001, 1800)) fail('Media duration must be 0–1800 seconds');
+  const rate = frameRate && video ? probedFrameRate(result) : null;
   return { duration, video: Boolean(video), audio: Boolean(audio),
-    width: video?.width ?? 0, height: video?.height ?? 0 };
+    width: video?.width ?? 0, height: video?.height ?? 0, ...(rate ? { frame_rate: rate } : {}) };
 }
 
 export function validate(project) {
@@ -143,7 +147,7 @@ async function importAsset(file) {
   const source = await safePath(file);
   if (!(await fs.stat(source)).isFile()) fail('Source must be a file');
   const sha256 = await digest(source);
-  return { source, asset: { file: `assets/${sha256}.media`, sha256, ...await probe(source) } };
+  return { source, asset: { file: `assets/${sha256}.media`, sha256, ...await probe(source, { frameRate: true }) } };
 }
 
 // Content-addressed copies; an existing identical file is reused, never replaced.
@@ -168,7 +172,9 @@ export async function createProject(root, spec) {
     const origin = item.origin ?? { kind: 'import' };
     if (!v1) validateNewAssetOrigin(origin);
     const imported = await importAsset(item.path);
-    imported.asset = { id: item.id, ...imported.asset, ...(v1 ? {} : { origin }) };
+    // local-edit.v1 assets have no frame_rate field.
+    const { frame_rate: frameRate, ...probed } = imported.asset;
+    imported.asset = { id: item.id, ...probed, ...(v1 ? {} : { origin, ...(frameRate ? { frame_rate: frameRate } : {}) }) };
     imports.push(imported);
   }
   let project;
