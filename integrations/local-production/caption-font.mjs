@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isV2, resolveCaptions } from './timeline.mjs';
-import { snapSourceFrames } from './source-frames.mjs';
+import { compiledView } from './source-frames.mjs';
 import { graphicTexts, templateSet } from './templates.mjs';
 
 // Versioned renderer resource, not an assertion about the original video's font.
@@ -21,8 +21,9 @@ export function validateCaptionFont(binding) {
 }
 
 export function activeCaptions(project) {
-  // The captions compilation shows (source-frame-snapped windows).
-  if (isV2(project)) return resolveCaptions(snapSourceFrames(project)).map(caption => caption.item);
+  // The captions compilation shows (windows of the compiled view; a view passed
+  // in by compose is used as is).
+  if (isV2(project)) return resolveCaptions(compiledView(project)).map(caption => caption.item);
   return project.clips.flatMap(clip => clip.captions.filter(caption =>
     caption.to > clip.in_seconds && caption.from < clip.in_seconds + clip.frames / project.canvas.fps));
 }

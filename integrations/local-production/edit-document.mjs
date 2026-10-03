@@ -1,5 +1,5 @@
 import { validateCaptionFont } from './caption-font.mjs';
-import { outputFrames, sourceSeconds } from './timeline.mjs';
+import { SOURCE_END_TOLERANCE, outputFrames, sourceSeconds } from './timeline.mjs';
 import { validFrameRate } from './source-frames.mjs';
 import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, templateSet, validateGraphicVars } from './templates.mjs';
 
@@ -147,7 +147,7 @@ export function validateV2(doc, { templates, structuralOnly = false } = {}) {
       if (!integer(item.start_frame, 0, limit) || !integer(item.frames, 1, limit) || !number(item.source_in_seconds, 0, 1800) ||
           !number(item.volume, 0, 1)) fail(`Media item ${item.id} requires asset_id/start_frame/frames/source_in_seconds/volume`);
       if ('speed' in item && !number(item.speed, 0.1, 10)) fail(`Invalid speed: ${item.id}`);
-      if (item.source_in_seconds + sourceSeconds(item, fps) > asset.duration + 0.001) fail(`Source range exceeds asset (speed-scaled): ${item.id}`);
+      if (item.source_in_seconds + sourceSeconds(item, fps) > asset.duration + SOURCE_END_TOLERANCE) fail(`Source range exceeds asset (speed-scaled): ${item.id}`);
       validateFades(item);
       if ('transition_in' in item) {
         keys(item.transition_in, ['kind', 'frames']);
@@ -191,7 +191,7 @@ export function validateV2(doc, { templates, structuralOnly = false } = {}) {
     if (item.kind !== 'caption' || !item.link) continue;
     const media = items.get(item.link.item_id);
     if (media?.kind !== 'media') fail(`Caption ${item.id} links to unknown media item: ${item.link.item_id}`);
-    if (item.link.source_to > assets.get(media.asset_id).duration + 0.001) fail(`Caption link exceeds asset: ${item.id}`);
+    if (item.link.source_to > assets.get(media.asset_id).duration + SOURCE_END_TOLERANCE) fail(`Caption link exceeds asset: ${item.id}`);
   }
   // Same-track items never overlap, except a crossfade: the later media item
   // declares transition_in and overlaps its immediate predecessor by exactly

@@ -3,7 +3,7 @@ import { validateV2 } from './edit-document.mjs';
 import { envelopeIndex, isV2, itemEnvelope, resolveCaptions, volumeEnvelope } from './timeline.mjs';
 import { getTemplate, renderGraphic, templateSet, escapeHtml as escape } from './templates.mjs';
 import { captionFontCss, captionFontReady } from './caption-font.mjs';
-import { snapSourceFrames } from './source-frames.mjs';
+import { compiledView } from './source-frames.mjs';
 
 const seconds = value => String(Math.round(value * 1e9) / 1e9);
 // Half-open intervals must include the frame at their start, exclude the frame
@@ -73,10 +73,10 @@ export function compose(project, canvas = project.canvas, { templates } = {}) {
 // execution-layer templates.
 function composeV2(doc, canvas, templates) {
   const { duration, frames } = validateV2(doc, { templates });
-  // Source frame snapping: media items of video assets with frame_rate play from
-  // the midpoint of their snapped source frame. Everything below (data-media-start
-  // of picture and sound, linked caption windows) uses this one compiled view.
-  doc = snapSourceFrames(doc);
+  // Source frame alignment: the compiled view (truncated in-points of video-track
+  // items corrected), computed once. Everything below (data-media-start, linked
+  // caption windows, the font runs of page()) uses it.
+  doc = compiledView(doc);
   const { width, height } = canvas;
   const { fps } = doc.canvas;
   const assets = new Map(doc.assets.map(a => [a.id, a]));

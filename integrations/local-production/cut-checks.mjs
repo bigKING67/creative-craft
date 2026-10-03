@@ -25,10 +25,11 @@ export async function runCutChecks(doc, root, checks, { sampleAt = () => null, d
   if (!points.length) return checks.map(check => ({ status: 'not_applicable', observation: check.none, measured: { ...check.measured, points: [] } }));
   const results = await mapLimit(points, CAPTION_CUT.concurrency, async point => {
     const file = path.join(root, assets.get(point.item.asset_id).file), ranges = checks.map(check => check.range(point));
-    // source_seconds is the time the render plays (snapped for assets with
-    // frame_rate, see cutPoints); the written in-point and its frame are kept.
-    const snapped = 'source_frame' in point ? { document_source_seconds: point.document_source_seconds, source_frame: point.source_frame } : {};
-    const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round6(point.source_seconds), ...snapped, output_seconds: round6(point.output_frame / fps) };
+    // source_seconds is the time the render plays (the compiled view, see
+    // cutPoints); a corrected in-point also keeps the document's value and frame.
+    const written = 'document_source_seconds' in point ? { document_source_seconds: round6(point.document_source_seconds) } : {};
+    const frame = 'source_frame' in point ? { source_frame: point.source_frame } : {};
+    const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round6(point.source_seconds), ...written, ...frame, output_seconds: round6(point.output_frame / fps) };
     const unknown = error => ({ ...entry, result: 'unknown', error: error.message.slice(0, 200) });
     let window;
     try {

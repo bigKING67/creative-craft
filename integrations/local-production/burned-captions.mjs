@@ -1,7 +1,7 @@
 import { ffprobeJson, run } from './project.mjs';
 import { sourceSeconds, speedOf } from './timeline.mjs';
 import { mediaTool } from './media-analysis.mjs';
-import { snappedSourceIn } from './source-frames.mjs';
+import { compiledView, correctionOf } from './source-frames.mjs';
 
 // Burned-in caption cut points. Source footage often carries captions that are
 // part of the picture and switch slightly after the speech they belong to; an
@@ -217,22 +217,23 @@ export function judgeCutPoint(edge, at, events, { frame, step = frame, window = 
 }
 
 // Cut points of every video-track media item whose asset has picture, as the
-// render plays them. For a video asset with frame_rate the in-point is the
-// compiled one (sourceFrameAt: midpoint of the snapped source frame, the same
-// function compilation uses) and the out-point follows from it; point.item is
-// then the compiled item, and document_source_seconds / source_frame record the
-// written in-point and the frame it snapped to. Without frame_rate the written
-// times are judged with the renderer's rule (shownAtIn / shownBeforeOut).
+// render plays them: the items of the compiled view (compiledView, the same view
+// compilation uses; a view passed in is used as is), so point.item carries the
+// compiled in-point and point.document the document's own item. When an in-point was corrected (truncated decimal), the
+// point also records the document's values: document_source_seconds is the
+// written in-point (in) or the written in-point + duration (out), and the in
+// point names the source_frame it was corrected to. Uncorrected in-points are
+// judged with the renderer's rule (shownAtIn / shownBeforeOut).
 export function cutPoints(doc) {
-  const fps = doc.canvas.fps, assets = new Map(doc.assets.map(a => [a.id, a]));
-  const video = new Set(doc.tracks.filter(t => t.kind === 'video').map(t => t.id));
-  return doc.items.filter(i => i.kind === 'media' && video.has(i.track_id) && assets.get(i.asset_id)?.video !== false).flatMap(written => {
-    const snap = snappedSourceIn(written, assets.get(written.asset_id));
-    const item = snap.snapped ? { ...written, source_in_seconds: snap.seconds } : written;
-    const snapped = snap.snapped ? { document_source_seconds: written.source_in_seconds, source_frame: snap.frame } : {};
-    const sourceOut = item.source_in_seconds + sourceSeconds(item, fps);
-    return [{ item, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame, ...snapped },
-      { item, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames, ...snapped }];
+  const view = compiledView(doc), fps = view.canvas.fps, assets = new Map(view.assets.map(a => [a.id, a]));
+  const video = new Set(view.tracks.filter(t => t.kind === 'video').map(t => t.id));
+  return view.items.filter(i => i.kind === 'media' && video.has(i.track_id) && assets.get(i.asset_id)?.video !== false).flatMap(item => {
+    const correction = correctionOf(item), written = correction?.written;
+    const sourceOut = item.source_in_seconds + sourceSeconds(item, fps), document = written ?? item;
+    return [{ item, document, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame,
+      ...(written ? { document_source_seconds: written.source_in_seconds, source_frame: correction.frame } : {}) },
+    { item, document, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames,
+      ...(written ? { document_source_seconds: written.source_in_seconds + sourceSeconds(written, fps) } : {}) }];
   });
 }
 
