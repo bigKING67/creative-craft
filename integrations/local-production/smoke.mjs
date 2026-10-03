@@ -247,6 +247,8 @@ assert.ok(lateIn.result === 'warn' && Math.abs(lateIn.suggested_source_seconds -
 assert.equal(burned.measured.points.find(p => p.item_id === 'aligned' && p.edge === 'in').result, 'aligned');
 assert.deepEqual(burned.measured.points.filter(p => p.result === 'warn').map(p => `${p.item_id}:${p.edge}`), ['late:in'], 'caption-free source and aligned cut stay quiet');
 assert.equal(portraitCheck('shot-sampled').status, 'pass');
+// The 'shots' item opens on the file's first frame and shows its 0.6 s bars shot whole: no fragment anywhere.
+assert.equal(portraitCheck('cut-boundary-fragments').status, 'pass', portraitCheck('cut-boundary-fragments').observation);
 const shotSample = portraitQa.samples.find(s => s.reason === 'shot' && s.time_seconds >= 1.6 && s.time_seconds < 2.2);
 assert.ok(shotSample, `the 0.6 s shot is sampled: ${JSON.stringify(portraitCheck('shot-sampled').measured.shots)}`);
 assert.equal(portraitCheck('graphic-safe-area').status, 'pass');

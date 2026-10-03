@@ -6,6 +6,7 @@ import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
 import { templateSet } from './templates.mjs';
 import { burnedCaptionCheck, captionBand } from './burned-captions.mjs';
+import { cutFragmentCheck } from './cut-fragments.mjs';
 import { logSegments, mediaTool, overlap, silenceFilter, silences, union } from './media-analysis.mjs';
 
 // Technical checks on one actual rendered file of one revision. Automated
@@ -240,6 +241,9 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   };
   const burned = await burnedCaptionCheck(doc, root, { band, sampleAt: atCut });
   check('burned-caption-cut-points', 'captions', burned.status, burned.observation, { measured: burned.measured, ...(burned.refs ? { refs: burned.refs } : {}) });
+  // Fragments of adjacent SOURCE shots (or a flash) just inside every video item's in/out point.
+  const fragments = await cutFragmentCheck(doc, root, { sceneThreshold, sampleAt: atCut });
+  check('cut-boundary-fragments', 'video', fragments.status, fragments.observation, { measured: fragments.measured, ...(fragments.refs ? { refs: fragments.refs } : {}) });
 
   // Lint result recorded by the render receipt (render is blocked on errors).
   const lint = receipt.lint;
@@ -291,7 +295,8 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
     unverified: ['human listening (dialogue, music balance, sync)', 'creative quality and edit choices',
       'visual review of composited samples (pending agent/human review)', 'caption legibility and text accuracy',
       'safe-area boxes are layout estimates, not pixel measurements',
-      'burned-in caption cut points are a frame-difference heuristic (not OCR): caption text, colour captions and captions outside the band are not checked'] };
+      'burned-in caption cut points are a frame-difference heuristic (not OCR): caption text, colour captions and captions outside the band are not checked',
+      'cut-boundary fragments are a full-frame difference heuristic on the source: gradual dissolves and same-framing jump cuts below the thresholds are not detected'] };
   const temp = path.join(qaDir, '.qa.json');
   await fs.writeFile(temp, JSON.stringify(qa, null, 2) + '\n', { flag: 'wx' });
   await fs.rename(temp, path.join(qaDir, 'qa.json'));
