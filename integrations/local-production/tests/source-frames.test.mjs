@@ -19,19 +19,32 @@ const fixture = async name => JSON.parse(await fs.readFile(path.resolve(here, '.
 const corrected = (k, num, den) => Math.round((k * den / num + CORRECTION_SECONDS) * 1e9) / 1e9;
 const itemOf = (doc, id) => doc.items.find(i => i.id === id);
 
-test('truncatedFrame at 30/1: only in-points strictly less than 0.01 frame below a frame start', () => {
-  // 733/30 = 24.4333…: the written 24.4333 is 0.001 frame below frame 733.
-  assert.equal(truncatedFrame(24.4333, '30/1'), 733);
-  assert.deepEqual(correctedSourceIn(24.4333, '30/1'), { seconds: corrected(733, 30, 1), frame: 733 });
+test('truncatedFrame at 30/1: in-points at most 2 ms (and less than 0.1 frame) below a frame start', () => {
+  // 733/30 = 24.4333…: 24.433, 24.4327, 24.4333 and 24.433333 are 0.33, 0.63,
+  // 0.033 and 0.0003 ms below frame 733.
+  for (const written of [24.433, 24.4327, 24.4333, 24.433333]) {
+    assert.equal(truncatedFrame(written, '30/1'), 733, String(written));
+    assert.deepEqual(correctedSourceIn(written, '30/1'), { seconds: corrected(733, 30, 1), frame: 733 }, String(written));
+  }
   assert.equal(correctedSourceIn(24.4333, '30/1').seconds, 24.433433333);
-  assert.equal(truncatedFrame(24.433333, '30/1'), 733);
-  assert.equal(truncatedFrame(733 / 30 - 3.3e-5, '30/1'), 733); // ≈ 0.001 frame below
-  assert.equal(truncatedFrame(24.4331, '30/1'), 733); // 732.993 frames
-  // Exactly 0.01 frame below is not a truncation (strictly less than 0.01 is).
-  assert.equal(truncatedFrame(24.433, '30/1'), null); // 732.99 frames
+  assert.equal(truncatedFrame(733 / 30 - 3.3e-5, '30/1'), 733);
+  // Exactly 2 ms below is still a truncation; more than 2 ms below is not.
+  assert.equal(truncatedFrame(0.098, '30/1'), 3); // exactly 2 ms below 3/30 = 0.1
+  assert.equal(truncatedFrame(24.4314, '30/1'), 733); // 1.933 ms below
+  assert.equal(truncatedFrame(24.4313, '30/1'), null); // 2.033 ms below
+  assert.equal(truncatedFrame(0.731334, '30/1'), 22); // 1.9993 ms below 22/30
+  assert.equal(truncatedFrame(0.731333, '30/1'), null); // 2.0003 ms below
+  assert.equal(truncatedFrame(24.43, '30/1'), null); // 3.33 ms below (0.1 frame)
+  assert.equal(truncatedFrame(24.431, '30/1'), null); // 2.33 ms below
   // Inside a frame, on a frame start, on a midpoint: kept as written.
   for (const kept of [24.42, 24.46, 24.45, 1, 0, 1e-7, 0.5]) assert.equal(correctedSourceIn(kept, '30/1'), null, String(kept));
   assert.equal(truncatedFrame(2 / 30 - 1e-7, '30/1'), 2);
+});
+
+test('truncation limit: 2 ms, or 0.1 frame when that is shorter (60/1)', () => {
+  // At 60 fps 0.1 frame = 1.667 ms < 2 ms.
+  assert.equal(truncatedFrame(1.4986, '60/1'), 90); // 1.4 ms below 1.5 s = 0.084 frame
+  assert.equal(truncatedFrame(1.4983, '60/1'), null); // 1.7 ms = 0.102 frame
 });
 
 test('truncatedFrame at 30000/1001 uses exact rational frame times', () => {
@@ -39,10 +52,31 @@ test('truncatedFrame at 30000/1001 uses exact rational frame times', () => {
   for (const k of [1, 100, 733, 1798, 29970]) {
     assert.equal(truncatedFrame(start(k) - 3.3e-5, '30000/1001'), k, `start of ${k} − 3.3e-5 s`);
     assert.equal(truncatedFrame((2 * k + 1) * 1001 / 60000, '30000/1001'), null, `midpoint of ${k}`);
-    assert.equal(truncatedFrame(start(k) - 0.002, '30000/1001'), null, `0.06 frame before ${k}`);
+    assert.equal(truncatedFrame(start(k) - 0.0025, '30000/1001'), null, `2.5 ms before ${k}`);
   }
+  // Millisecond truncation: 733 × 1001 / 30000 = 24.457766…, written 24.457 (0.77 ms below).
+  assert.deepEqual(correctedSourceIn(24.457, '30000/1001'), { seconds: corrected(733, 30000, 1001), frame: 733 });
+  assert.deepEqual(correctedSourceIn(4.504, '30000/1001'), { seconds: corrected(135, 30000, 1001), frame: 135 }); // 4.5045 − 0.5 ms
   assert.equal(truncatedFrame(24.4333, '30000/1001'), null); // 732.266 frames
   assert.deepEqual(correctedSourceIn(4.5044, '30000/1001'), { seconds: corrected(135, 30000, 1001), frame: 135 });
+});
+
+test('truncatedFrame at 24/1: millisecond truncation', () => {
+  // 733 / 24 = 30.541666…: 30.541 is 0.67 ms below frame 733; 11/24 = 0.458333…
+  assert.deepEqual(correctedSourceIn(30.541, '24/1'), { seconds: corrected(733, 24, 1), frame: 733 });
+  assert.equal(truncatedFrame(0.458, '24/1'), 11);
+  assert.equal(truncatedFrame(30.539, '24/1'), null); // 2.67 ms below
+});
+
+test('correctedSourceIn and truncatedFrame accept a rate string or its parsed form alike', () => {
+  for (const [seconds, rate] of [[24.433, '30/1'], [24.457, '30000/1001'], [24.43, '30/1'], [30.541, '24/1']]) {
+    const parsed = parseFrameRate(rate);
+    assert.equal(parseFrameRate(parsed), parsed, 'a parsed rate is returned as is');
+    assert.deepEqual(correctedSourceIn(seconds, parsed), correctedSourceIn(seconds, rate));
+    assert.equal(truncatedFrame(seconds, parsed), truncatedFrame(seconds, rate));
+  }
+  assert.throws(() => correctedSourceIn(1, { num: 0n, den: 1n }), /Invalid frame_rate 0\/1/);
+  assert.throws(() => correctedSourceIn(1, { num: 30, den: 1 }), /Invalid frame_rate/);
 });
 
 test('frame rate parsing, reduction and import rules', () => {
@@ -174,7 +208,7 @@ test('split continuity: 24/1 source on a 60 fps canvas, split after 1 output fra
     assert.ok(Math.abs(tail.source_in_seconds - (head.source_in_seconds + sourceSeconds(head, 60))) < 1e-9, `tail starts where the head ends (${headIn})`);
   }
   // A truncated head (11/24 = 0.458333… written 0.4583) is corrected by 0.1 ms +
-  // 0.0008 frame; its tail (11.399 frames) is kept, and both sides of the seam
+  // 0.0008 frame (0.03 ms); its tail (11.399 frames) is kept, and both sides of the seam
   // still show the same source frame.
   broll.source_in_seconds = 0.4583;
   const split = await applyOperations(doc, [{ type: 'split_item', item_id: 'broll1', at_frame: 1, new_item_id: 'tail' }], { imports: [] });
@@ -182,7 +216,7 @@ test('split continuity: 24/1 source on a 60 fps canvas, split after 1 output fra
   assert.equal(head.source_in_seconds, corrected(11, 24, 1));
   assert.equal(tail.source_in_seconds, itemOf(split, 'tail').source_in_seconds);
   const headEnd = head.source_in_seconds + sourceSeconds(head, 60);
-  assert.ok(headEnd - tail.source_in_seconds <= 0.01 / 24 + CORRECTION_SECONDS);
+  assert.ok(headEnd - tail.source_in_seconds <= 0.002 + CORRECTION_SECONDS);
   assert.equal(Math.floor(headEnd * 24), Math.floor(tail.source_in_seconds * 24));
 });
 
@@ -195,7 +229,7 @@ test('the corrected range stays inside the asset, up to the last source frame', 
   assert.equal(item.source_in_seconds, corrected(224, 30, 1));
   const end = item.source_in_seconds + sourceSeconds(item, 30);
   assert.ok(end <= 8 + SOURCE_END_TOLERANCE, `compiled end ${end}`);
-  assert.ok(end - (7.4666 + sourceSeconds(broll, 30)) <= 0.01 / 30 + CORRECTION_SECONDS + 1e-12, 'shift ≤ 0.01 frame + 0.1 ms');
+  assert.ok(end - (7.4666 + sourceSeconds(broll, 30)) <= 0.002 + CORRECTION_SECONDS + 1e-12, 'shift ≤ 2 ms + 0.1 ms');
   validateV2(compiledView(doc));
   // An asset ending so that the written range fits the tolerance but the
   // corrected one would not: the in-point is kept.

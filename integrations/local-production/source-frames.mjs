@@ -2,29 +2,36 @@
 // pure timeline math), so compilation, font binding and QA can all share it.
 //
 // A media item's source_in_seconds is a decimal the author (or an agent) wrote,
-// sometimes truncated: 24.4333 for frame 733 of a 30 fps source (733/30 =
-// 24.43333…). The renderer shows the frame whose time is ≤ the seek time, so a
-// truncated in-point shows the PREVIOUS frame. Compilation corrects exactly this
-// case and nothing else: for a video-track media item of an asset with
-// frame_rate, an in-point strictly less than TRUNCATION_FRAMES (0.01 frame)
-// below a frame's start plays from that frame's start + CORRECTION_SECONDS
-// (0.1 ms). Every other in-point (on a frame start, or further inside a frame)
-// is kept, so a split stays continuous, an exact audio in-point stays exact and
-// the shift is at most 0.01 frame + 0.1 ms. Audio-track items are never changed.
+// sometimes truncated: 24.4333 or 24.433 for frame 733 of a 30 fps source
+// (733/30 = 24.43333…). The renderer shows the frame whose time is ≤ the seek
+// time, so a truncated in-point shows the PREVIOUS frame. Compilation corrects
+// exactly this case and nothing else: for a video-track media item of an asset
+// with frame_rate, an in-point below a frame's start by at most
+// TRUNCATION_SECONDS (2 ms: a decimal truncated to milliseconds or finer) AND by
+// strictly less than TRUNCATION_FRAMES (0.1 frame) plays from that frame's
+// start + CORRECTION_SECONDS (0.1 ms). Every other in-point (on a frame start,
+// or further inside a frame) is kept, so a split stays continuous, an exact
+// audio in-point stays exact and the shift is at most min(2 ms, 0.1 frame) +
+// 0.1 ms. Audio-track items are never changed.
 // Arithmetic is exact: the in-point is taken as the decimal the document holds
 // (the shortest round-trip form of the JSON number) and the frame rate as an
 // integer ratio, both as BigInt fractions. The document is never rewritten.
 import { SOURCE_END_TOLERANCE, round9, sourceSeconds } from './timeline.mjs';
 
-export const TRUNCATION_FRAMES = Object.freeze({ num: 1n, den: 100n }); // 0.01 frame
+export const TRUNCATION_SECONDS = Object.freeze({ num: 2n, den: 1000n }); // 2 ms, inclusive
+export const TRUNCATION_FRAMES = Object.freeze({ num: 1n, den: 10n }); // 0.1 frame, exclusive
 export const CORRECTION_SECONDS = 0.0001;
 const FRAME_RATE = /^([1-9][0-9]{0,5})\/([1-9][0-9]{0,5})$/;
 
 export const validFrameRate = value => typeof value === 'string' && FRAME_RATE.test(value);
+// "<num>/<den>" → { num, den } (BigInt). An already parsed rate is accepted
+// too: it is checked by the same rule (its "<num>/<den>" form) and returned as
+// is, so a caller parses once and both forms behave the same.
 export function parseFrameRate(value) {
-  const m = FRAME_RATE.exec(String(value ?? ''));
-  if (!m) throw new Error(`Invalid frame_rate ${JSON.stringify(value)} (expected "<num>/<den>", e.g. "30/1" or "30000/1001")`);
-  return { num: BigInt(m[1]), den: BigInt(m[2]) };
+  const parsed = typeof value?.num === 'bigint' && typeof value?.den === 'bigint';
+  const m = FRAME_RATE.exec(parsed ? `${value.num}/${value.den}` : typeof value === 'string' ? value : '');
+  if (!m) throw new Error(`Invalid frame_rate ${parsed ? `${value.num}/${value.den}` : JSON.stringify(value)} (expected "<num>/<den>", e.g. "30/1" or "30000/1001")`);
+  return parsed ? value : { num: BigInt(m[1]), den: BigInt(m[2]) };
 }
 
 // Exact {p, q} with value = p / q for a finite non-negative JS number, from its
@@ -50,25 +57,29 @@ export function reduceFrameRate(value) {
 }
 
 // The source frame k whose start (k / rate) a truncated in-point fell short of:
-// `seconds` is below k / rate by strictly less than 0.01 frame. Null for any
-// other in-point (exactly on a frame start, or 0.01 frame or more inside one).
+// `seconds` is below k / rate by at most 2 ms and by strictly less than 0.1
+// frame. Null for any other in-point (exactly on a frame start, or further
+// inside a frame). frameRate: "<num>/<den>" or parseFrameRate's result.
 export function truncatedFrame(seconds, frameRate) {
-  const { num, den } = typeof frameRate === 'string' ? parseFrameRate(frameRate) : frameRate;
+  const { num, den } = parseFrameRate(frameRate);
   const { p, q } = decimalFraction(seconds);
   // Position in frames: seconds × num / den = P / Q.
   const P = p * num, Q = q * den, rest = P % Q; // 0 ≤ rest < Q
-  // Below the next frame start by (Q − rest) / Q frames.
-  if (!rest || (Q - rest) * TRUNCATION_FRAMES.den >= Q * TRUNCATION_FRAMES.num) return null;
+  if (!rest) return null;
+  // Below the next frame start by gap / Q frames = gap × den / (Q × num) seconds.
+  const gap = Q - rest;
+  if (gap * TRUNCATION_FRAMES.den >= Q * TRUNCATION_FRAMES.num) return null;
+  if (gap * den * TRUNCATION_SECONDS.den > Q * num * TRUNCATION_SECONDS.num) return null;
   return Number(P / Q + 1n);
 }
 
-// Compiled in-point for an in-point on a source of `frameRate`:
-// { seconds: frame start + 0.1 ms, frame } when truncated, else null (keep it).
+// Compiled in-point for an in-point on a source of `frameRate` (string or
+// parsed; parsed once here): { seconds: frame start + 0.1 ms, frame } when
+// truncated, else null (keep it).
 export function correctedSourceIn(seconds, frameRate) {
-  const frame = truncatedFrame(seconds, frameRate);
+  const rate = parseFrameRate(frameRate), frame = truncatedFrame(seconds, rate);
   if (frame === null) return null;
-  const { num, den } = parseFrameRate(frameRate);
-  return { seconds: round9(frame * Number(den) / Number(num) + CORRECTION_SECONDS), frame };
+  return { seconds: round9(frame * Number(rate.den) / Number(rate.num) + CORRECTION_SECONDS), frame };
 }
 
 // The document as compiled, computed once per render or QA pass and shared by
