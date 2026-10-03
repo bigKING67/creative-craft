@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isV2, resolveCaptions } from './timeline.mjs';
-import { attachTemplates, graphicTexts, requireTemplates } from './templates.mjs';
+import { graphicTexts, templateSet } from './templates.mjs';
 
 // Versioned renderer resource, not an assertion about the original video's font.
 const bundle = new URL('./fonts/', import.meta.url);
@@ -27,10 +27,13 @@ export function activeCaptions(project) {
 
 // Every text run the bound font renders: visible captions and graphic template
 // text (graphics reuse the caption font and are bound the same way).
-export function fontRuns(project) {
+// `templates`: the revision's template set (required when it is pinned).
+export function fontRuns(project, templates) {
   const captions = activeCaptions(project).map(caption => ({ text: caption.text, weight: caption.style?.weight ?? 600 }));
-  if (!isV2(project)) return captions;
-  return [...captions, ...project.items.filter(i => i.kind === 'graphic').flatMap(item => graphicTexts(item, requireTemplates(project))).map(({ text, weight }) => ({ text, weight }))];
+  const graphics = isV2(project) ? project.items.filter(i => i.kind === 'graphic') : [];
+  if (!graphics.length) return captions;
+  const set = templateSet(project, templates);
+  return [...captions, ...graphics.flatMap(item => graphicTexts(item, set)).map(({ text, weight }) => ({ text, weight }))];
 }
 
 async function fontBytes(file) {
@@ -70,9 +73,9 @@ function glyphRanges(bytes) {
   throw new Error('Caption font Unicode cmap missing');
 }
 
-function checkGlyphs(bytes, project) {
+function checkGlyphs(bytes, project, templates) {
   const ranges = glyphRanges(bytes);
-  for (const char of new Set(fontRuns(project).flatMap(run => Array.from(run.text)))) {
+  for (const char of new Set(fontRuns(project, templates).flatMap(run => Array.from(run.text)))) {
     if ('\n\r\t'.includes(char)) continue;
     const code = char.codePointAt(0);
     if (!ranges.some(([start, end, glyph]) => code >= start && code <= end && glyph + code - start > 0)) {
@@ -82,9 +85,9 @@ function checkGlyphs(bytes, project) {
 }
 
 // Check glyphs against the bundled font and record the binding (no writes).
-export async function planCaptionFont(project) {
-  if (!fontRuns(project).length) return false;
-  checkGlyphs(await fontBytes(fileURLToPath(new URL(manifest.file, bundle))), project);
+export async function planCaptionFont(project, templates) {
+  if (!fontRuns(project, templates).length) return false;
+  checkGlyphs(await fontBytes(fileURLToPath(new URL(manifest.file, bundle))), project, templates);
   project.caption_font = { ...CAPTION_FONT };
   return true;
 }
@@ -97,26 +100,26 @@ export async function installCaptionFont(root) {
   await fontBytes(target);
 }
 
-export async function bindCaptionFont(root, project) {
-  if (!fontRuns(project).length) return;
-  const binding = attachTemplates({ ...project }, requireTemplates(project));
-  await planCaptionFont(binding);
+export async function bindCaptionFont(root, project, templates) {
+  if (!fontRuns(project, templates).length) return;
+  const binding = { ...project };
+  await planCaptionFont(binding, templates);
   await fs.mkdir(path.join(root, 'fonts'));
   await installCaptionFont(root);
   project.caption_font = binding.caption_font;
 }
 
-export async function verifyCaptionFont(root, project) {
+export async function verifyCaptionFont(root, project, templates) {
   if (!project.caption_font) return; // Legacy projects retain their old rendering contract.
   validateCaptionFont(project.caption_font);
-  checkGlyphs(await fontBytes(path.join(root, project.caption_font.file)), project);
+  checkGlyphs(await fontBytes(path.join(root, project.caption_font.file)), project, templates);
 }
 
-export async function copyCaptionFont(root, destination, project) {
+export async function copyCaptionFont(root, destination, project, templates) {
   if (!project.caption_font) return;
   await fs.mkdir(path.join(destination, 'fonts'));
   await fs.copyFile(path.join(root, project.caption_font.file), path.join(destination, project.caption_font.file), 1);
-  await verifyCaptionFont(destination, project);
+  await verifyCaptionFont(destination, project, templates);
 }
 
 export function captionFontCss(project) {
@@ -124,9 +127,9 @@ export function captionFontCss(project) {
   return `@font-face{font-family:'${FONT_FAMILY}';src:url('${project.caption_font.file}') format('truetype');font-weight:100 900;font-style:normal;font-display:block}.caption,.gfx{font-family:'${FONT_FAMILY}';font-synthesis:none}`;
 }
 
-export function captionFontReady(project) {
+export function captionFontReady(project, templates) {
   if (!project.caption_font) return '';
-  const weights = [...new Set(fontRuns(project).map(run => run.weight))];
+  const weights = [...new Set(fontRuns(project, templates).map(run => run.weight))];
   // Producer's tween interceptor owns __hfTimelinesBuilding, and fonts.ready
   // resolves even on font failure. Use its explicit async build registry.
   // Producer 0.8.53 treated rejected build promises as settled (gate re-verified

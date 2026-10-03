@@ -156,14 +156,15 @@ export function useRuntimeTemplates(dir) {
   return () => swap(saved);
 }
 
-// Template set of a document: revisions with graphic_templates use only the
-// bound bytes loaded from their project (attached by readProject or the edit
-// path); revisions without the field use the execution-layer registry. null
-// means the revision pins templates whose bytes are not loaded here.
-const BOUND = new WeakMap();
-export const attachTemplates = (doc, templates) => { BOUND.set(doc, templates); return doc; };
-export const templatesFor = doc => (doc?.graphic_templates ? BOUND.get(doc) ?? null : TEMPLATES);
-export const requireTemplates = doc => templatesFor(doc) ?? fail('Graphic templates pinned to this revision are not loaded; read the revision from its project');
+// Template set of a document, always passed explicitly: revisions with
+// graphic_templates use only the bound bytes loaded from their project
+// (loadProject returns them with the document); revisions without the field
+// use the execution-layer registry. A pinned document without its set fails.
+export function templateSet(doc, templates) {
+  if (templates) return templates;
+  if (doc?.graphic_templates !== undefined) fail('Graphic templates pinned to this revision are not loaded; read the revision with its template set (loadProject)');
+  return TEMPLATES;
+}
 
 export const getTemplate = (name, templates = TEMPLATES) => templates.get(name) ?? fail(`Unknown graphic template: ${name}`);
 // Receipt provenance: pinned bindings name the project file; unpinned

@@ -4,10 +4,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { bindCaptionFont, installCaptionFont, planCaptionFont, validateCaptionFont, verifyCaptionFont, activeCaptions } from './caption-font.mjs';
 import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCanvas, validateCaptionStyle, validateAssetFields, validateNewAssetOrigin,
-  validateV2, migrateV1 } from './edit-document.mjs';
+  validateV2, validateTemplateBindings, migrateV1 } from './edit-document.mjs';
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
 import { checkVolumeAutomation } from './timeline.mjs';
-import { TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
+import { TEMPLATES, TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
 import { installTemplates, loadPinnedTemplates, planTemplateBindings, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 import { digest, sha256, writeOnce } from './content-store.mjs';
@@ -95,10 +95,15 @@ export function validate(project) {
 }
 
 // Either document generation; v1 revisions stay readable and renderable.
-export const validateDocument = doc => doc?.schema_version === SCHEMA_V2 ? validateV2(doc) : validate(doc);
+// options (v2 only): { templates } or { structuralOnly } as for validateV2.
+export const validateDocument = (doc, options) => doc?.schema_version === SCHEMA_V2 ? validateV2(doc, options) : validate(doc);
 
 const revisionName = (revision) => `${String(revision).padStart(6, '0')}.json`;
-export async function readProject(root, revision) {
+// One revision with its template set: {doc, templates}. templates is the bound
+// set of a pinned revision, the execution-layer set of an unpinned v2 revision
+// and null for v1. Callers that compile, check fonts or validate the document
+// again pass it on explicitly.
+export async function loadProject(root, revision) {
   root = await safePath(root);
   const revisions = await safePath(path.join(root, 'revisions'));
   const names = (await fs.readdir(revisions)).filter(n => /^\d{6}\.json$/.test(n)).sort();
@@ -107,17 +112,25 @@ export async function readProject(root, revision) {
   if (!names.includes(name)) fail('Revision not found');
   const file = await safePath(path.join(revisions, name));
   const project = JSON.parse(await fs.readFile(file, 'utf8'));
-  validateDocument(project); // Structure, including graphic_templates coverage.
-  // Pinned templates: load the bound bytes (hash + template rules) and type the
-  // graphic vars against them. A missing or altered binding file fails here.
-  if (project.schema_version === SCHEMA_V2 && await loadPinnedTemplates(root, project)) validateV2(project);
+  let templates = null;
+  if (project?.schema_version === SCHEMA_V2) {
+    // Pinned templates: only the binding list's shape is checked before the
+    // bound bytes are loaded (hash + template rules); a missing or altered
+    // binding file fails here. Then one full validation types the graphic vars.
+    if ('graphic_templates' in project) templates = await loadPinnedTemplates(root, [...validateTemplateBindings(project.graphic_templates).values()]);
+    else templates = TEMPLATES;
+  }
+  validateDocument(project, { templates });
   if (revisionName(project.revision) !== name) fail('Revision filename mismatch');
   if (project.revision > 1) {
     const previous = await safePath(path.join(revisions, revisionName(project.revision - 1)));
     if (await digest(previous) !== project.parent_sha256) fail('Parent revision changed');
   }
-  return project;
+  return { doc: project, templates };
 }
+
+// The document only (CLI read, callers that need no template set).
+export const readProject = async (root, revision) => (await loadProject(root, revision)).doc;
 
 async function publish(root, project) {
   const dir = await safePath(path.join(root, 'revisions')), bytes = serialize(project);
@@ -168,16 +181,16 @@ export async function createProject(root, spec) {
       canvas: spec.canvas, assets: imports.map(i => i.asset), tracks: spec.tracks, items: spec.items,
       change: { author: 'system', summary: 'Created project', operations_sha256: null } };
   }
-  validateDocument(project);
-  // Graphics pin the execution-layer template bytes they were validated against.
-  const templateWrites = v1 ? [] : (await planTemplateBindings(null, null, project)).writes;
+  // Graphics pin the execution-layer template bytes they are validated against.
+  const { writes: templateWrites, templates } = v1 ? { writes: [], templates: null } : planTemplateBindings(null, project);
+  validateDocument(project, { templates });
   if (!v1) checkVolumeAutomation(project); // Compile limits fail here, not at render.
   root = await safePath(root);
   await fs.mkdir(root); // Existing projects are never replaced.
   await fs.mkdir(path.join(root, 'assets'));
   await fs.mkdir(path.join(root, 'revisions'));
   await copyImports(root, imports);
-  await bindCaptionFont(root, project);
+  await bindCaptionFont(root, project, templates);
   await installTemplates(root, templateWrites);
   await publish(root, project);
   return project;
@@ -223,7 +236,7 @@ const asV2 = doc => doc.schema_version === SCHEMA_V2 ? structuredClone(doc) : mi
 async function revertContent(root, base, op) {
   keys(op, ['type', 'revision']);
   if (!integer(op.revision, 1, base.revision - 1)) fail('revert_to requires an earlier revision');
-  const target = asV2(await readProject(root, op.revision));
+  const loaded = await loadProject(root, op.revision), target = asV2(loaded.doc);
   // Template bindings follow the general rule (planTemplateBindings): current
   // bindings stay; templates the current revision does not bind reuse the
   // target's binding when it had one.
@@ -237,7 +250,7 @@ async function revertContent(root, base, op) {
   const tracks = target.tracks.map(t => locked.has(t.id) ? structuredClone(locked.get(t.id)) : t);
   const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks, items: target.items };
   if (target.caption_font && !next.caption_font) next.caption_font = target.caption_font;
-  return { next, target };
+  return { next, target: { doc: target, templates: loaded.templates ?? TEMPLATES } };
 }
 
 // rebind_template {template}: the explicit, single-operation decision that moves
@@ -261,14 +274,14 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   if (!integer(batch.base_revision, 1, 999999) || !['agent', 'human', 'system'].includes(batch.author) || !text(batch.summary) ||
       !Array.isArray(batch.operations) || !batch.operations.length || batch.operations.length > 100) fail('Invalid edit batch');
   root = await safePath(root);
-  const latest = await readProject(root);
+  const { doc: latest, templates: latestTemplates } = await loadProject(root);
   if (latest.revision !== batch.base_revision) fail('Revision conflict; read the latest project');
-  let base = latest, baseSha = await digest(await safePath(path.join(root, 'revisions', revisionName(latest.revision)))), migration = null;
+  let base = latest, baseTemplates = latestTemplates, baseSha = await digest(await safePath(path.join(root, 'revisions', revisionName(latest.revision)))), migration = null;
   if (latest.schema_version === SCHEMA) {
     migration = { ...migrateV1(latest), revision: latest.revision + 1, parent_sha256: baseSha,
       change: { author: 'migration', summary: `Migrated ${SCHEMA} revision ${latest.revision} to ${SCHEMA_V2}`, operations_sha256: null } };
     validateV2(migration);
-    base = migration;
+    [base, baseTemplates] = [migration, TEMPLATES];
     baseSha = sha256(serialize(migration));
   }
   // A lock change is its own revision, so unlock-then-edit cannot hide in one batch.
@@ -286,14 +299,14 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
   // Template bindings: kept as they are unless rebound; new templates pinned to
   // the execution-layer bytes; unused ones dropped. Vars are typed against them.
-  const { writes: templateWrites, notes } = await planTemplateBindings(root, base, next, { rebind, earlier });
-  validateV2(next);
+  const { writes: templateWrites, notes, templates } = planTemplateBindings(base, next, { baseTemplates, rebind, earlier });
+  validateV2(next, { templates });
   checkVolumeAutomation(next); // Same envelope code as compilation; refused before dry-run or publish.
   // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
   // already had captions without a binding keep the system-font contract.
   let installFont = false;
-  if (next.caption_font) await verifyCaptionFont(root, next);
-  else if (!activeCaptions(base).length) installFont = await planCaptionFont(next);
+  if (next.caption_font) await verifyCaptionFont(root, next, templates);
+  else if (!activeCaptions(base).length) installFont = await planCaptionFont(next, templates);
   else if (next.items.some(i => i.kind === 'graphic')) {
     // Graphics reuse the bound caption font; binding it now would silently restyle
     // this legacy project's system-font captions, so refuse instead.
@@ -310,8 +323,8 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   return result;
 }
 
-export async function verifyAssets(root, project) {
-  await verifyCaptionFont(root, project);
+export async function verifyAssets(root, project, templates) {
+  await verifyCaptionFont(root, project, templates);
   for (const asset of project.assets) {
     const file = await safePath(path.join(root, asset.file));
     if (await digest(file) !== asset.sha256) fail(`Asset changed: ${asset.id}`);

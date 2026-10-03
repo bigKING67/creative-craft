@@ -1,7 +1,7 @@
 import { validate } from './project.mjs';
 import { validateV2 } from './edit-document.mjs';
 import { envelopeIndex, isV2, itemEnvelope, resolveCaptions, volumeEnvelope } from './timeline.mjs';
-import { getTemplate, renderGraphic, requireTemplates, escapeHtml as escape } from './templates.mjs';
+import { getTemplate, renderGraphic, templateSet, escapeHtml as escape } from './templates.mjs';
 import { captionFontCss, captionFontReady } from './caption-font.mjs';
 
 const seconds = value => String(Math.round(value * 1e9) / 1e9);
@@ -16,8 +16,10 @@ const timelineTiming = (start, end) => {
 };
 const captionStyle = (style, height) => style ? `top:${seconds(style.centerY * 100)}%;bottom:auto;transform:translateY(-50%);font-size:${seconds(height * style.fontHeight)}px;font-weight:${style.weight};line-height:1.1;color:${style.color};-webkit-text-stroke:${seconds(height * style.strokeWidth)}px #222222;paint-order:stroke fill;text-shadow:0 1px 1px #222222;background:transparent;padding:0;border-radius:0` : '';
 
-export function compose(project, canvas = project.canvas) {
-  if (isV2(project)) return composeV2(project, canvas);
+// options.templates: the revision's template set (loadProject); required when
+// the revision pins its templates, else the execution-layer templates.
+export function compose(project, canvas = project.canvas, { templates } = {}) {
+  if (isV2(project)) return composeV2(project, canvas, templateSet(project, templates));
   const { duration, frames } = validate(project);
   const { width, height } = canvas;
   const { fps } = project.canvas;
@@ -68,8 +70,7 @@ export function compose(project, canvas = project.canvas) {
 // (vars.placement or the template default); 1 em = 1% of the shorter canvas edge.
 // Templates come from the revision's set: its bound bytes when pinned, else the
 // execution-layer templates.
-function composeV2(doc, canvas) {
-  const templates = requireTemplates(doc);
+function composeV2(doc, canvas, templates) {
   const { duration, frames } = validateV2(doc, { templates });
   const { width, height } = canvas;
   const { fps } = doc.canvas;
@@ -143,16 +144,16 @@ function composeV2(doc, canvas) {
   cues.sort((a, b) => a.start - b.start);
   const graphics = doc.items.filter(i => i.kind === 'graphic').length;
   const css = [...new Set(doc.items.filter(i => i.kind === 'graphic').map(i => i.template))].map(name => getTemplate(name, templates).css).join('');
-  return { html: page(doc, width, height, duration, elements, { css, tweens }), cues, graphics, duration, frames };
+  return { html: page(doc, width, height, duration, elements, { css, tweens, templates }), cues, graphics, duration, frames };
 }
 
-function page(project, width, height, duration, elements, { css = '', tweens = [] } = {}) {
+function page(project, width, height, duration, elements, { css = '', tweens = [], templates } = {}) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escape(project.title)}</title>
 <script src="gsap.min.js"></script>
 <style>html,body{margin:0;background:#000;overflow:hidden}#main{position:relative;width:${width}px;height:${height}px;background:#000}video{position:absolute;inset:0;width:100%;height:100%}.caption{position:absolute;left:7%;right:7%;bottom:8%;text-align:center;color:#fff;white-space:pre-wrap;font:600 ${Math.round(height * 0.052)}px/1.35 'PingFang SC','Noto Sans CJK SC',sans-serif;text-shadow:0 2px 4px #000;background:rgba(0,0,0,.65);padding:8px;border-radius:6px}.gfx{position:absolute;box-sizing:border-box;overflow:hidden;color:#fff}${css}</style></head>
 <body><style>${captionFontCss(project)}</style><div id="main" data-composition-id="main" data-width="${width}" data-height="${height}" data-duration="${seconds(duration)}">${elements.join('\n')}</div>
-<script>${captionFontReady(project)}
+<script>${captionFontReady(project, templates)}
 window.__timelines=window.__timelines||{};const tl=gsap.timeline({paused:true});tl.to({}, {duration:${seconds(duration)}});${tweens.join('')}window.__timelines.main=tl;</script></body></html>`;
 }
 

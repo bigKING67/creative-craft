@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { digest, probe, readProject, safePath, verifyAssets, run } from './project.mjs';
+import { digest, probe, loadProject, safePath, verifyAssets, run } from './project.mjs';
 import { compose, webVtt } from './composition.mjs';
 import { copyCaptionFont } from './caption-font.mjs';
 import { copyBoundTemplates } from './template-binding.mjs';
@@ -36,10 +36,10 @@ export async function lintComposition(html) {
 }
 
 export async function renderProject(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
-  const project = await readProject(root, revision);
-  await verifyAssets(root, project);
+  const { doc: project, templates } = await loadProject(root, revision);
+  await verifyAssets(root, project, templates);
   const { width, height } = outputSize(project.canvas, preview);
-  const compiled = compose(project, { width, height });
+  const compiled = compose(project, { width, height }, { templates });
   destination = await safePath(destination);
   root = await safePath(root);
   if (destination === root || destination.startsWith(root + path.sep)) throw new Error('Render outside the immutable project');
@@ -62,7 +62,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     signal?.throwIfAborted();
     await fs.writeFile(path.join(destination, 'project.json'), JSON.stringify(project, null, 2) + '\n', { flag: 'wx' });
     receipt.project_sha256 = await digest(path.join(destination, 'project.json'));
-    await copyCaptionFont(root, destination, project);
+    await copyCaptionFont(root, destination, project, templates);
     await copyBoundTemplates(root, destination, project); // Pinned template bytes travel with the render.
     await fs.mkdir(path.join(destination, 'assets'));
     for (const asset of project.assets) {

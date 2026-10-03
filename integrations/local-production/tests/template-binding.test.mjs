@@ -5,7 +5,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProject, editBatch, readProject, run, validateV2 } from '../project.mjs';
+import { createProject, editBatch, loadProject, readProject, run, validateV2 } from '../project.mjs';
 import { compose } from '../composition.mjs';
 import { renderProject } from '../render.mjs';
 import { CAPTION_FONT, installCaptionFont } from '../caption-font.mjs';
@@ -33,6 +33,8 @@ async function project(t, items = [card]) {
     items: [{ id: 'one', track_id: 'v_main', kind: 'media', asset_id: 'clip', start_frame: 0, frames: 24, source_in_seconds: 0, volume: 0 }, ...items] });
   return root;
 }
+// Compiled HTML of one revision from its own template set.
+const htmlOf = async (root, revision) => { const { doc, templates } = await loadProject(root, revision); return compose(doc, undefined, { templates }).html; };
 const stored = async root => (await fs.readdir(path.join(root, 'templates'))).sort();
 const revisionCount = async root => (await fs.readdir(path.join(root, 'revisions'))).filter(n => n.endsWith('.json')).length;
 // A simulated execution-layer upgrade: title-card v3 drops the subtitle var and widens the gap.
@@ -79,13 +81,13 @@ test('create and edit pin the templates graphics use; dry-run reports new bindin
 
 test('an execution-layer template change leaves pinned revisions alone until rebind_template', async t => {
   const root = await project(t), original = runtimeTemplate('title-card').sha256;
-  const before = compose(await readProject(root, 1)).html;
+  const before = await htmlOf(root, 1);
   const restore = useRuntimeTemplates(await upgradedRuntime(t));
   t.after(restore);
   const upgraded = runtimeTemplate('title-card').sha256;
   assert.notEqual(upgraded, original);
   const rev1 = await readProject(root, 1);
-  assert.equal(compose(rev1).html, before, 'old revision re-compiles to identical HTML from its bound bytes');
+  assert.equal(await htmlOf(root, 1), before, 'old revision re-compiles to identical HTML from its bound bytes');
   assert.throws(() => validateV2(rev1, { templates: TEMPLATES }), /has no var subtitle/, 'the runtime template would reject these vars');
   // Other operations keep the binding.
   const moved = await editBatch(root, batch(1, [{ type: 'move_item', item_id: 'card', start_frame: 2 }]));
@@ -103,7 +105,7 @@ test('an execution-layer template change leaves pinned revisions alone until reb
   await editBatch(root, batch(3, [{ type: 'rebind_template', template: 'title-card' }]));
   const rebound = await readProject(root);
   assert.deepEqual(rebound.graphic_templates, [{ id: 'title-card', version: 3, sha256: upgraded, file: `templates/${upgraded}.json` }]);
-  const html = compose(rebound).html;
+  const html = await htmlOf(root);
   assert.ok(html.includes('data-template-version="3"') && html.includes('gap:2em') && !html.includes('副标题'));
   await assert.rejects(editBatch(root, batch(4, [{ type: 'rebind_template', template: 'title-card' }])), /already bound to the current template bytes \(no change\)/);
   // revert_to restores content, not bindings: the rebind decision stays (like track locks).
@@ -111,8 +113,8 @@ test('an execution-layer template change leaves pinned revisions alone until reb
   assert.equal((await readProject(root)).graphic_templates[0].sha256, upgraded);
   restore();
   // Back on the shipped runtime: the rebound revisions still render v3, the first still v2.
-  assert.match(compose(await readProject(root)).html, /gap:2em/);
-  assert.equal(compose(await readProject(root, 1)).html, before);
+  assert.match(await htmlOf(root), /gap:2em/);
+  assert.equal(await htmlOf(root, 1), before);
 });
 
 test('missing, altered, symlinked or invalid bound templates fail the read and the render', async t => {
@@ -143,7 +145,7 @@ test('missing, altered, symlinked or invalid bound templates fail the read and t
   await bind({ ...base, css: `${base.css}.gfx-title-card-title{zoom:.5}` });
   await assert.rejects(readProject(root), /fails template validation: .*could change text size/);
   await bind({ ...base, vars: { ...base.vars, subtitle: { ...base.vars.subtitle, font_em: 1.5 } } });
-  assert.match(compose(await readProject(root)).html, /--fs-subtitle:3em/);
+  assert.match(await htmlOf(root), /--fs-subtitle:3em/);
 });
 
 test('historical revisions without bindings render with runtime templates and gain bindings on their next edit', async t => {
@@ -179,4 +181,19 @@ test('render directories receive the bound template files for independent replay
   // Unbound documents cannot compile against bindings that were never loaded.
   const detached = structuredClone(doc);
   assert.throws(() => compose(detached), /pinned to this revision are not loaded/);
+  assert.throws(() => validateV2(detached), /pinned to this revision are not loaded/, 'a clone never skips var typing silently');
+});
+
+test('an edit batch reads each bound template file once (the loaded base set is reused)', async t => {
+  const root = await project(t, [card, strap]);
+  const { promises } = await import('node:fs'), { syncBuiltinESMExports } = await import('node:module');
+  const original = promises.readFile, reads = [];
+  promises.readFile = function (file, ...rest) {
+    if (String(file).startsWith(path.join(root, 'templates'))) reads.push(path.basename(String(file)));
+    return original.call(this, file, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { promises.readFile = original; syncBuiltinESMExports(); });
+  await editBatch(root, batch(1, [{ type: 'move_item', item_id: 'strap', start_frame: 13 }]));
+  assert.equal(reads.length, 2, `one read per binding, got ${reads.join(', ')}`);
 });

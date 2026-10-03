@@ -1,6 +1,6 @@
 import { validateCaptionFont } from './caption-font.mjs';
 import { outputFrames, sourceSeconds } from './timeline.mjs';
-import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, templatesFor, validateGraphicVars } from './templates.mjs';
+import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, templateSet, validateGraphicVars } from './templates.mjs';
 
 export const SCHEMA_V1 = 'creative-craft.local-edit.v1';
 export const SCHEMA_V2 = 'creative-craft.edit-document.v2';
@@ -65,7 +65,7 @@ function validateFades(item) {
 
 // graphic_templates: content-addressed template bindings of this revision.
 // Shape and coverage only (shared with Python); bytes are checked when loaded.
-function validateTemplateBindings(list) {
+export function validateTemplateBindings(list) {
   if (!Array.isArray(list) || list.length > 32) fail('Invalid graphic_templates');
   const bound = new Map();
   for (const binding of list) {
@@ -81,12 +81,15 @@ function validateTemplateBindings(list) {
 
 // Semantic validation of creative-craft.edit-document.v2. JSON Schema covers
 // shape; these rules cover kinds, references, ranges, overlap and output length.
-// Graphic vars are typed against the revision's template set: the bound bytes
-// when graphic_templates is present (loaded by readProject/the edit path, or
-// passed as options.templates), else the execution-layer templates. A bound
-// revision whose bytes are not loaded gets structural validation only.
-export function validateV2(doc, { templates = templatesFor(doc) } = {}) {
+// Graphic vars are typed against the revision's template set, passed as
+// options.templates: the bound bytes when graphic_templates is present (from
+// loadProject or the edit path), else the execution-layer templates by
+// default. A pinned document without its set is refused unless the caller
+// explicitly asks for structural validation only (options.structuralOnly),
+// which skips template existence and var typing.
+export function validateV2(doc, { templates, structuralOnly = false } = {}) {
   keys(doc, ['schema_version', 'project_id', 'revision', 'parent_sha256', 'title', 'canvas', 'caption_font', 'assets', 'tracks', 'items', 'change', 'graphic_templates']);
+  if (!structuralOnly) templates = templateSet(doc, templates);
   if (doc.schema_version !== SCHEMA_V2 || !id(doc.project_id) || !text(doc.title) || !integer(doc.revision, 1, 999999)) fail('Invalid project identity');
   if (doc.revision === 1 ? doc.parent_sha256 !== null : !hex64(doc.parent_sha256)) fail('Invalid parent digest');
   if ('caption_font' in doc) validateCaptionFont(doc.caption_font);
