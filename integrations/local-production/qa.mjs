@@ -2,7 +2,8 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { digest, ffprobeJson, loadProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
 import { audibleItems, resolveCaptions } from './timeline.mjs';
-import { compiledView } from './source-frames.mjs';
+import { legacyAlignment } from './frame-alignment.mjs';
+import { bindAlignment, compiledView } from './source-frames.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
 import { templateSet } from './templates.mjs';
@@ -65,6 +66,15 @@ async function ffmpegVersion() {
   return stdout.split('\n')[0].split(' ')[2] || 'unknown';
 }
 
+// The frame alignment a render compiled with: { alignment, source }. source is
+// 'receipt' when the receipt records frame_alignment, else 'legacy-default'
+// (every recorded frame_rate applied, as renders before 0.7.0 compiled). The
+// alignment must describe the document (bindAlignment refuses one that does not).
+export function renderAlignment(receipt, doc) {
+  return Array.isArray(receipt.frame_alignment) ? { alignment: receipt.frame_alignment, source: 'receipt' }
+    : { alignment: legacyAlignment(doc), source: 'legacy-default' };
+}
+
 export async function qaRender(root, renderDir, qaDir, options = {}) {
   const { band, sceneThreshold } = qaOptions(options);
   root = await safePath(root);
@@ -92,7 +102,12 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   const doc = project.schema_version === SCHEMA_V2 ? project : migrateV1(project);
   const fps = doc.canvas.fps, expectedSeconds = expectedFrames / fps;
   const media = await probeRender(video);
-  const size = outputSize(doc.canvas, receipt.preview);
+  // Expected size: the output size the render recorded (it checked the file
+  // against its own outputSize before writing the receipt), so a render made
+  // under an earlier size rule (e.g. a 0.6.0 preview raised to 704x88) is judged
+  // by its own rule. A receipt without it falls back to today's outputSize.
+  const recorded = Number.isInteger(receipt.output.width) && Number.isInteger(receipt.output.height);
+  const size = recorded ? { width: receipt.output.width, height: receipt.output.height } : outputSize(doc.canvas, receipt.preview);
   const audible = audibleItems(doc);
   const checks = [];
   const check = (id, category, status, observation, extra = {}) => checks.push({ id, category, status, observation, ...extra });
@@ -103,8 +118,10 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
     `Rendered ${media.duration.toFixed(3)} s; revision expects ${expectedFrames} frames at ${fps} fps (${expectedSeconds.toFixed(3)} s, ±1 frame).`,
     { measured: { expected_seconds: round(expectedSeconds), actual_seconds: round(media.duration), expected_frames: expectedFrames } });
   check('resolution', 'structure', media.width === size.width && media.height === size.height ? 'pass' : 'fail',
-    `Rendered ${media.width}x${media.height}; expected ${size.width}x${size.height} (${receipt.preview ? 'preview' : 'export'}).`,
-    { measured: { width: media.width, height: media.height, expected_width: size.width, expected_height: size.height } });
+    `Rendered ${media.width}x${media.height}; expected ${size.width}x${size.height} (${receipt.preview ? 'preview' : 'export'}, ` +
+    `${recorded ? 'output size recorded by the render receipt' : 'the receipt records no output size: current output size rule'}).`,
+    { measured: { width: media.width, height: media.height, expected_width: size.width, expected_height: size.height,
+      expected_source: recorded ? 'receipt' : 'output-size-rule' } });
   check('frame-rate', 'structure', Math.abs(media.fps - fps) < 0.01 ? 'pass' : 'fail', `Rendered ${round(media.fps)} fps; project ${fps} fps.`, { measured: { fps: round(media.fps) } });
   const wantsAudio = audible.length > 0;
   check('audio-stream', 'structure', media.has_audio === wantsAudio ? 'pass' : wantsAudio ? 'fail' : 'warn',
@@ -170,8 +187,12 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   const cuts = [...new Set(videoItems.flatMap(i => [i.start_frame, i.start_frame + i.frames]))].filter(f => f > 0 && f < total).sort((a, b) => a - b);
   for (const cut of cuts) { want(`s-cut${cut}-before`, cut - 1, 'cut_before'); want(`s-cut${cut}-after`, cut, 'cut_after'); }
   // The document as compiled (source frame alignment), computed once for the
-  // caption samples and the cut-point checks.
-  const view = compiledView(doc);
+  // caption samples and the cut-point checks, as the render compiled it: with
+  // the frame_alignment its receipt recorded, not a new probe. A receipt without
+  // it (rendered before 0.7.0) applied every recorded frame_rate.
+  const { alignment, source: alignmentSource } = renderAlignment(receipt, doc);
+  const view = compiledView(bindAlignment({ ...doc }, alignment));
+  const alignmentMeasured = { frame_alignment: alignment, frame_alignment_source: alignmentSource };
   const captions = resolveCaptions(view);
   const captionSample = new Map();
   for (const { item, start, end } of captions) {
@@ -246,8 +267,8 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   // Fragments of adjacent SOURCE shots (or a flash) just inside every video item's
   // in/out point. Both checks share one decode per cut point.
   const { burned, fragments } = await cutPointChecks(view, root, { band, sceneThreshold, sampleAt: atCut });
-  check('burned-caption-cut-points', 'captions', burned.status, burned.observation, { measured: burned.measured, ...(burned.refs ? { refs: burned.refs } : {}) });
-  check('cut-boundary-fragments', 'video', fragments.status, fragments.observation, { measured: fragments.measured, ...(fragments.refs ? { refs: fragments.refs } : {}) });
+  check('burned-caption-cut-points', 'captions', burned.status, burned.observation, { measured: { ...burned.measured, ...alignmentMeasured }, ...(burned.refs ? { refs: burned.refs } : {}) });
+  check('cut-boundary-fragments', 'video', fragments.status, fragments.observation, { measured: { ...fragments.measured, ...alignmentMeasured }, ...(fragments.refs ? { refs: fragments.refs } : {}) });
 
   // Lint result recorded by the render receipt (render is blocked on errors).
   const lint = receipt.lint;

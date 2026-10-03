@@ -98,10 +98,40 @@ export function correctedSourceIn(seconds, frameRate) {
 // validateV2 is the single source of the asset rules (frame_rate only on assets
 // with a picture); this reads frame_rate only and does not validate.
 // The input is never mutated; a view passed in again is returned as is.
-const VIEWS = new WeakSet(), CORRECTIONS = new WeakMap();
+//
+// Which assets' frame_rate applies is decided once, outside: a document read
+// from a project (loadProject) is bound to its frame alignment (bindAlignment;
+// frame-alignment.mjs re-checks every asset with frame_rate against its file),
+// an edit batch carries that decision to the document it builds, and QA binds
+// the alignment the render receipt recorded. A bound document applies exactly
+// the assets its alignment marks applied; a stale one keeps its written
+// in-points. A document that is not bound (built in memory: tests, compose of a
+// literal document, a project being created from files the import rule has
+// just probed) gets the structural view only: every recorded frame_rate is
+// applied as written and no file is looked at.
+const VIEWS = new WeakSet(), CORRECTIONS = new WeakMap(), ALIGNMENTS = new WeakMap();
+
+// Bind `doc` to `alignment`: exactly one { asset_id, frame_rate, applied,
+// reason? } entry per asset with frame_rate (checked, so an alignment from a
+// receipt or an earlier revision that does not describe this document is
+// refused). Returns doc. A compiled view cannot be rebound.
+export function bindAlignment(doc, alignment) {
+  if (VIEWS.has(doc)) throw new Error('A compiled view cannot be bound to another frame alignment');
+  const rated = doc.assets.filter(a => a.frame_rate);
+  if (!Array.isArray(alignment) || alignment.length !== rated.length ||
+      rated.some(a => !alignment.some(e => e?.asset_id === a.id && e.frame_rate === a.frame_rate && typeof e.applied === 'boolean'))) {
+    throw new Error('Frame alignment does not describe this document (one entry per asset with frame_rate expected)');
+  }
+  ALIGNMENTS.set(doc, alignment);
+  return doc;
+}
+// The alignment bound to a document (or to the document a view was compiled from), or null.
+export const alignmentOf = doc => ALIGNMENTS.get(doc) ?? null;
+
 export function compiledView(doc) {
   if (VIEWS.has(doc)) return doc;
-  const fps = doc.canvas.fps, assets = new Map(doc.assets.filter(a => a.frame_rate).map(a => [a.id, a]));
+  const alignment = ALIGNMENTS.get(doc), applied = asset => !alignment || alignment.find(e => e.asset_id === asset.id).applied;
+  const fps = doc.canvas.fps, assets = new Map(doc.assets.filter(a => a.frame_rate && applied(a)).map(a => [a.id, a]));
   const video = new Set(doc.tracks.filter(t => t.kind === 'video').map(t => t.id));
   const items = doc.items.map(item => {
     const asset = item.kind === 'media' && video.has(item.track_id) ? assets.get(item.asset_id) : undefined;
@@ -113,6 +143,7 @@ export function compiledView(doc) {
   });
   const view = { ...doc, items };
   VIEWS.add(view);
+  if (alignment) ALIGNMENTS.set(view, alignment);
   return view;
 }
 
@@ -130,33 +161,60 @@ export function pictureStream(info) {
   return index < 0 ? null : { stream: videos[index], index };
 }
 
-// A stream's start in media time from ffprobe integers: start_pts × time_base
-// (seconds), or null when either is missing or unusable.
+// A stream's start from ffprobe integers, exactly: start_pts × time_base as
+// the fraction { p, q } (BigInt, q > 0) with its value in seconds; null when
+// either is missing or unusable. The single start reading of import
+// (probedFrameRate) and the QA source timing (sourceTiming).
 export function streamStart(stream) {
-  const tb = rational(stream?.time_base), pts = Number(stream?.start_pts);
-  return tb && stream.start_pts !== undefined && stream.start_pts !== null && stream.start_pts !== '' && Number.isInteger(pts)
-    ? pts * tb.num / tb.den : null;
+  const tb = rational(stream?.time_base), pts = stream?.start_pts;
+  if (!tb || pts === undefined || pts === null || pts === '' || !Number.isInteger(Number(pts))) return null;
+  const p = BigInt(pts) * BigInt(tb.num), q = BigInt(tb.den);
+  return { p, q, seconds: Number(pts) * tb.num / tb.den };
+}
+
+// a/b < c/d ⇔ a·d < c·b (denominators positive).
+const earlier = (a, b) => a.p * b.q < b.p * a.q;
+// The earliest streamStart of all streams of an ffprobe JSON (the media time 0
+// of the renderer and the QA timing), or null when no stream reports one.
+export function earliestStart(info) {
+  let first = null;
+  for (const start of (info?.streams ?? []).map(streamStart)) if (start && (!first || earlier(start, first))) first = start;
+  return first;
+}
+
+// Why the frame grid k / rate of an ffprobe JSON's video does not start at
+// media time 0, or null when it does:
+//   - the first video stream is the picture (pictureStream index 0, not cover
+//     art), so the asset's width, height (probe: first video stream, as before
+//     frame_rate existed) and frame_rate describe the same stream;
+//   - its own start (streamStart) equals the earliest start of all streams.
+//     The renderer and the QA timing (sourceTiming) take that earliest start as
+//     media time 0 (measured: in an MKV whose audio starts at -0.067 s, in-point
+//     X shows video time X - 0.067), so only then does frame k start at media
+//     time k / rate. Streams that all start at the same non-zero time qualify;
+//     a file whose audio starts before its video (MKV/WebM can keep a negative
+//     audio start, MP4 AAC priming under an offset) does not. Compared exactly.
+// Import (probedFrameRate) and the load-time re-check (frameAlignment, loadProject) share it.
+export function mediaZeroProblem(info) {
+  const picture = pictureStream(info);
+  if (!picture) return 'no picture stream (only cover art or no video)';
+  if (picture.index !== 0) return 'the first video stream is cover art, the picture is a later stream';
+  const start = streamStart(picture.stream);
+  if (!start) return 'the video stream reports no usable start_pts/time_base';
+  const first = earliestStart(info);
+  return earlier(first, start) ? `the video stream starts at ${start.seconds} s, after the earliest stream start ${first.seconds} s (media time 0), ` +
+    'so frame k does not start at media time k / rate' : null;
 }
 
 // frame_rate recorded at import from one ffprobe JSON (-show_streams
 // -show_format), or null. Recorded only when the frame grid k / rate is
-// trustworthy:
-//   - the first video stream is the picture (pictureStream index 0, not cover
-//     art), so the asset's width, height (probe: first video stream, as before
-//     frame_rate existed) and frame_rate describe the same stream;
-//   - it reports the same rate as r_frame_rate and avg_frame_rate (compared
-//     reduced). They differ for variable-frame-rate sources (and for some
-//     damaged or edited constant-rate files); such sources get no frame_rate
-//     and keep the renderer behaviour;
-//   - its own start (streamStart: start_pts × time_base, the source the QA
-//     timing uses) is 0, so frame k starts at k / rate. Other streams do not
-//     matter: an audio stream starting below 0 (AAC priming) does not move
-//     the picture's frame grid.
-// Audio-only files and cover art get none.
+// trustworthy in media time: mediaZeroProblem finds nothing, and the picture
+// stream reports the same rate as r_frame_rate and avg_frame_rate (compared
+// reduced). They differ for variable-frame-rate sources (and for some damaged
+// or edited constant-rate files); such sources get no frame_rate and keep the
+// renderer behaviour. Audio-only files and cover art get none.
 export function probedFrameRate(info) {
-  const picture = pictureStream(info);
-  if (picture?.index !== 0) return null;
-  const video = picture.stream, rate = reduceFrameRate(video.r_frame_rate);
-  if (!rate || rate !== reduceFrameRate(video.avg_frame_rate)) return null;
-  return streamStart(video) === 0 ? rate : null;
+  if (mediaZeroProblem(info)) return null;
+  const video = pictureStream(info).stream, rate = reduceFrameRate(video.r_frame_rate);
+  return rate && rate === reduceFrameRate(video.avg_frame_rate) ? rate : null;
 }
