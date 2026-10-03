@@ -43,6 +43,12 @@ Gated video production on top of the existing contracts (see
   upgrade, `revert_to` restores the target's bindings, and locked tracks keep
   their template bytes. Unpinned historical revisions render with runtime
   templates and are marked `pinned: false`.
+- second real-footage run fixes (local-production 0.5.1): ASR `phrases` split
+  dense whisper segments at punctuation using token timestamps; QA samples are
+  extracted frame-exactly; burned-caption suggestions and all reported times use
+  frame midpoints; frame times come from integer pts and stream time base; new
+  `cut-boundary-fragments` check flags previous-shot fragments and transition
+  flashes at cut points, while short shots shown whole stay aligned.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in

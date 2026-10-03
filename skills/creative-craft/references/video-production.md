@@ -135,7 +135,10 @@ lag speech: a cut must fall in a speech gap *and* after the subtitle changes, or
 viewers read a line whose audio was cut. Music under voice defeats silence
 detection; use ASR timing plus audio-energy valleys. ASR can hallucinate whole
 sentences over music or tones, so cross-check its text with burned subtitles or
-listening before using it as evidence. Begin audio crossfades after
+listening before using it as evidence. Place in-points at frame midpoints ((n+0.5)/fps):
+a value a hair before a shot's first frame shows the previous shot. Check each
+cut for fragments of an adjacent shot or a transition flash, and verify cut
+frames by frame index, not timestamp seeks. Begin audio crossfades after
 the previous line ends, sample at least one frame per shot (fixed intervals miss
 short shots), match segment loudness, and flag likenesses, endorsements or
 promotions inherited from the source instead of extending them.

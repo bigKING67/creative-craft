@@ -72,14 +72,28 @@ export async function whisperVersion() {
 // Length of the union of [start, end] intervals clipped to [0, duration].
 export const coverageSeconds = (segments, duration = Infinity) => round(unionLength(segments.map(s => [s.start, s.end]), duration));
 
-// Sentences overlapping [from, to] as production-plan evidence. Times are the
-// sentence boundaries reported by ASR, not frame-accurate cut points.
-export function toPlanEvidence(segments, from, to, method) {
+// Sentences (or phrases) overlapping [from, to] as production-plan evidence.
+// Times are the boundaries reported by ASR, not frame-accurate cut points. A
+// phrase marked text_reliable: false (garbled token text, see phrasesFromTokens)
+// is quoted with the text of the segment it lies in, so pass the transcript's
+// segments when the spans are phrases; its times stay the phrase's.
+export function toPlanEvidence(spans, from, to, method, { segments } = {}) {
   if (!(Number.isFinite(from) && Number.isFinite(to) && to > from && from >= 0)) throw new Error('toPlanEvidence needs 0 <= from < to');
   if (typeof method !== 'string' || !method.trim()) throw new Error('toPlanEvidence needs a method description');
-  return segments.filter(s => s.text.trim() && s.end > from && s.start < to)
-    .map(s => ({ modality: 'asr', start_seconds: s.start, end_seconds: s.end, excerpt: s.text.trim(), raw_score: null, method }));
+  return spans.filter(s => s.text.trim() && s.end > from && s.start < to).map(s => {
+    if (s.text_reliable !== false) return { modality: 'asr', start_seconds: s.start, end_seconds: s.end, excerpt: s.text.trim(), raw_score: null, method };
+    const host = segmentOf(s, segments);
+    if (!host) throw new Error(`Phrase ${s.start}–${s.end} s has unreliable text and no overlapping segment was given`);
+    return { modality: 'asr', start_seconds: s.start, end_seconds: s.end, excerpt: host.text.trim(), raw_score: null,
+      method: `${method}; phrase text garbled, excerpt is the enclosing ASR segment` };
+  });
 }
+
+// The segment that overlaps a phrase most (whisper phrases never cross segments).
+const segmentOf = (phrase, segments = []) => segments.reduce((best, s) => {
+  const shared = Math.min(s.end, phrase.end) - Math.max(s.start, phrase.start);
+  return s.text.trim() && shared > 0 && shared > (best?.shared ?? 0) ? { text: s.text, shared } : best;
+}, null);
 
 // The auto rule for --clean auto, exported so the decision itself is testable.
 export function needsCleanRetry(coverage, active) {
@@ -111,13 +125,52 @@ async function activeSeconds(wav, duration, signal) {
 }
 
 async function attempt(wav, out, model, language, extraArgs, duration, signal) {
-  const args = ['-m', model, '-l', language, '-f', wav, '-oj', '-of', out, '-np', ...(language === 'zh' ? ['--prompt', ZH_PROMPT] : []), ...extraArgs];
+  const args = ['-m', model, '-l', language, '-f', wav, '-ojf', '-of', out, '-np', ...(language === 'zh' ? ['--prompt', ZH_PROMPT] : []), ...extraArgs];
   await run(whisperBin(), args, { timeout: Math.max(120000, duration * 20000), maxBuffer: 64 * 1024 * 1024, signal });
   const result = JSON.parse(await fs.readFile(`${out}.json`, 'utf8'));
   const segments = (result.transcription ?? []).map(item => ({
     start: round(item.offsets.from / 1000), end: round(Math.min(duration, item.offsets.to / 1000)), text: item.text.trim(),
   })).filter(s => s.text && s.end > s.start);
-  return { segments, coverage: coverageSeconds(segments, duration) };
+  return { segments, phrases: phrasesFromTokens(result.transcription ?? [], duration), coverage: coverageSeconds(segments, duration) };
+}
+
+// whisper.cpp merges dense speech (music under voice) into 15–30 s segments.
+// Token timestamps from `-ojf` split those at clause punctuation into phrases
+// that can nominate cut points; they still need energy/subtitle checks and
+// listening before a cut is approved.
+// CJK punctuation and ASCII , ! ? ; always end a phrase. ASCII . and : end one
+// only outside numbers and abbreviations: not when the next token starts with a
+// digit (3. + 5倍 is "3.5倍", 10: + 30 is "10:30") and not after a single Latin
+// letter ("A." of "A.B.").
+const PHRASE_END = /[，,。．！!？?；;：、]$/;
+const SOFT_END = /[.:]$/;
+const endsPhrase = (text, next) => PHRASE_END.test(text)
+  || (SOFT_END.test(text) && !/^\d/.test(next?.text.trim() ?? '') && !/^[A-Za-z][.:]$/.test(text));
+// Token text can split a multi-byte UTF-8 character across tokens, so a phrase
+// may contain U+FFFD where whisper's segment text is intact. Such a phrase keeps
+// its timing and is marked text_reliable: false (toPlanEvidence then quotes its segment).
+const REPLACEMENT_CHARACTER = '\uFFFD';
+export function phrasesFromTokens(transcription, duration = Infinity) {
+  const phrases = [];
+  for (const segment of transcription) {
+    let current = [];
+    const flush = () => {
+      const text = current.map(t => t.text).join('').trim();
+      if (text) {
+        const start = round(current[0].offsets.from / 1000), end = round(Math.min(duration, current.at(-1).offsets.to / 1000));
+        if (end > start) phrases.push({ start, end, text, ...(text.includes(REPLACEMENT_CHARACTER) ? { text_reliable: false } : {}) });
+      }
+      current = [];
+    };
+    // Special tokens such as [_BEG_] and tokens without offsets are skipped.
+    const tokens = (segment.tokens ?? []).filter(token => !/^\[_[A-Z_]+/.test(token.text) && token.offsets);
+    tokens.forEach((token, i) => {
+      current.push(token);
+      if (endsPhrase(token.text.trim(), tokens[i + 1])) flush();
+    });
+    flush();
+  }
+  return phrases;
 }
 
 export function parseTranscribeArgs(argv) {
@@ -185,8 +238,9 @@ export async function transcribe(media, output, { lang = 'zh', model = defaultMo
       attempts,
       chosen_attempt: chosen,
       choice_reason: reason,
-      note: 'ASR text may contain wrong characters; timestamps are sentence-level and cut points must be confirmed by listening.',
+      note: 'ASR text may contain wrong characters. segments are whisper sentences (can span 15–30 s in dense speech); phrases split them at punctuation using token timestamps. Cut points must be confirmed by listening.',
       segments: results[chosen].segments,
+      phrases: results[chosen].phrases,
     };
     await fs.writeFile(output, JSON.stringify(transcript, null, 2) + '\n', { flag: 'wx' });
     return { status: 'transcribed', output, chosen_attempt: chosen, choice_reason: reason,
