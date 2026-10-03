@@ -55,14 +55,17 @@ Gated video production on top of the existing contracts (see
   (≤ 2 ms and < 0.1 frame, e.g. 24.4333 or 24.433 at 30 fps) is moved to that
   frame start + 0.1 ms, other in-points are untouched; render, captions and QA
   share one compiled view. QA suggestions are relative to the written value.
-- render size and media time zero (local-production 0.7.0): renders whose output
-  height is below 88 px stall in the capture viewport regardless of codec; previews
-  now keep at least 88 px and smaller canvases fail before the browser starts. A
-  measured support matrix (H.264/HEVC 8/10-bit, HLG, VFR, rotation, VP9/WebM, MKV
-  and common audio codecs all render) replaces the earlier wrong codec conclusion.
-  `frame_rate` is recorded only when the video stream starts at the media time
-  zero (the earliest stream start), fixing truncation correction on MKV/WebM with
-  negative audio starts.
+- render size and media time zero (local-production 0.7.0): captures below 88 px
+  high stall in the Chrome capture viewport regardless of codec (width is not
+  limiting down to 2 px); outputs below the limit are now captured at the
+  smallest integer multiple and scaled back with ffmpeg, so every valid canvas
+  renders and exports at its own size (receipt `capture`). A measured, sequential
+  support matrix (H.264/HEVC 8/10-bit, HLG, VFR, rotation, VP9/WebM, MKV and
+  common audio codecs all render, also at 128x72) replaces the earlier wrong
+  codec conclusion. `frame_rate` is recorded only when the video stream starts at
+  the media time zero (the earliest stream start; measured for MKV and MP4 edit
+  lists), and render/QA re-check it so stale values from 0.6.0 projects are not
+  applied (receipt `frame_alignment`).
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in
