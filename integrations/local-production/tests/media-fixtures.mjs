@@ -75,9 +75,11 @@ export async function synthAudio(file, { acodec = 'aac', seconds = 2, extra = []
 // Colour name (colourOf) of decoded frame `n` (region as frameColor).
 export const frameColour = async (file, n = 0, region) => colourOf(await frameColor(file, n, region));
 
-// Frame regions (ffmpeg crop arguments): the centre quarter, and the middle
-// half-height band of the left and right quarters.
-export const REGION = Object.freeze({ centre: 'iw/2:ih/2', left: 'iw/4:ih/2:0:ih/4', right: 'iw/4:ih/2:iw*3/4:ih/4' });
+// Frame regions (ffmpeg crop arguments): the centre quarter, the middle
+// half-height band of the left and right quarters, the top and bottom eighths
+// of the centre half width (inside the picture of a pillarboxed rotated source).
+export const REGION = Object.freeze({ centre: 'iw/2:ih/2', left: 'iw/4:ih/2:0:ih/4', right: 'iw/4:ih/2:iw*3/4:ih/4',
+  top: 'iw/2:ih/8:iw/4:0', bottom: 'iw/2:ih/8:iw/4:ih*7/8' });
 
 // Mean RGB of a region (default the centre quarter) of decoded frame `n` of `file` (select=eq(n,N)).
 export async function frameColor(file, n = 0, region = REGION.centre) {
