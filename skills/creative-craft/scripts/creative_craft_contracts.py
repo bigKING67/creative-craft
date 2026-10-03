@@ -2346,6 +2346,38 @@ def _check_same_track_timing(
                 )
 
 
+def _check_template_bindings(r: Result, data: dict[str, Any]) -> None:
+    """When present, graphic_templates pins exactly the templates graphics use."""
+    bindings = data.get("graphic_templates")
+    if not isinstance(bindings, list):
+        return
+    used = {
+        str(item.get("template"))
+        for item in data.get("items") or []
+        if isinstance(item, dict) and item.get("kind") == "graphic"
+    }
+    bound: set[str] = set()
+    for index, binding in enumerate(bindings):
+        if not isinstance(binding, dict):
+            continue
+        template_id = str(binding.get("id"))
+        r.require(
+            template_id not in bound,
+            f"graphic_templates[{index}] duplicates binding for {template_id!r}",
+        )
+        bound.add(template_id)
+        r.require(
+            binding.get("file") == f"templates/{binding.get('sha256')}.json",
+            f"graphic_templates[{index}] file must be templates/<sha256>.json",
+        )
+        r.require(
+            template_id in used,
+            f"graphic_templates[{index}] binds {template_id!r}, which no graphic uses",
+        )
+    for template_id in sorted(used - bound):
+        r.errors.append(f"graphic template {template_id!r} has no graphic_templates binding")
+
+
 def validate_edit_document(data: dict[str, Any]) -> Result:
     r = Result()
     revision = data.get("revision")
@@ -2530,6 +2562,7 @@ def validate_edit_document(data: dict[str, Any]) -> Result:
                 )
             )
     _check_same_track_timing(r, by_track)
+    _check_template_bindings(r, data)
     if r.ok and fps:
         duration = edit_document_duration_frames(data)
         r.require(duration >= 1, "edit duration must be at least one frame")
