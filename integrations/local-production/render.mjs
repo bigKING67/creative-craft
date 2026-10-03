@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { digest, probe, loadProject, safePath, verifyAssets, run } from './project.mjs';
+import { digest, ffprobeJson, probe, loadProject, safePath, verifyAssets, run } from './project.mjs';
 import { compose, webVtt } from './composition.mjs';
 import { copyCaptionFont } from './caption-font.mjs';
 import { copyBoundTemplates } from './template-binding.mjs';
@@ -14,30 +14,47 @@ const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
 export const revisionFile = (root, revision) => path.join(root, 'revisions', `${String(revision).padStart(6, '0')}.json`);
 
-// Measured renderer limit (HyperFrames producer 0.8.108, headless Chrome 154,
-// macOS): with an output height of 86 px or less the sequential screenshot
-// capture makes no progress and the producer fails after its stall timeout
-// ("capture stalled", 60 s); 88 px and up render. The container, codec and
-// even the presence of video do not matter, and width does not (64 px wide
-// renders). See README「渲染尺寸下限」.
+// Measured renderer limits (HyperFrames producer 0.8.108, headless Chrome 154,
+// macOS): with a capture (composition) height of 86 px or less the sequential
+// screenshot capture makes no progress and the producer fails after its stall
+// timeout ("capture stalled", 60 s); 88 px and up render, whatever the
+// container, codec or presence of video. Width is not limiting: 2, 4, 6, 8, 10,
+// 16, 32 and 64 px wide captures (160 px high) and 8x88 all render, with the
+// source colour checked down to 4 px. MIN_RENDER_WIDTH keeps a margin above that
+// floor. See README「渲染尺寸下限」.
 export const MIN_RENDER_HEIGHT = 88;
+export const MIN_RENDER_WIDTH = 8;
+// Encoder settings of the downscale, as the producer encodes each quality.
+const DOWNSCALE_ENCODE = { draft: ['-preset', 'ultrafast', '-crf', '28'], standard: ['-preset', 'medium', '-crf', '18'] };
 
-// Preview: longest edge at most 640, but never below MIN_RENDER_HEIGHT high
-// (and never above the canvas), even dimensions. Export: project canvas.
+// Output size. Preview: longest edge at most 640 (never above the canvas),
+// even dimensions. Export: the project canvas.
 export function outputSize(canvas, preview) {
-  const scale = preview ? Math.min(1, Math.max(640 / Math.max(canvas.width, canvas.height), MIN_RENDER_HEIGHT / canvas.height)) : 1;
+  const scale = preview ? Math.min(1, 640 / Math.max(canvas.width, canvas.height)) : 1;
   const even = value => Math.max(2, Math.round(value / 2) * 2);
-  return { width: even(canvas.width * scale), height: Math.min(canvas.height, Math.max(MIN_RENDER_HEIGHT, even(canvas.height * scale))) };
+  return { width: even(canvas.width * scale), height: even(canvas.height * scale) };
 }
 
-// Refused before anything is written or a browser starts: the canvas itself
-// (export size, and the largest a preview can be) is below the renderer limit.
-export function checkRenderSize(canvas) {
-  if (canvas.height < MIN_RENDER_HEIGHT) {
-    throw new Error(`Canvas ${canvas.width}x${canvas.height} is too small to render: the renderer's screenshot capture stalls below ` +
-      `${MIN_RENDER_HEIGHT} px of output height (measured: ≤86 px fails, ≥88 px renders, whatever the media). ` +
-      `Use a canvas at least ${MIN_RENDER_HEIGHT} px high (e.g. a new project or a revert to a revision with a larger canvas)`);
-  }
+// Capture size for an output size: the output itself when it is at least
+// MIN_RENDER_WIDTH x MIN_RENDER_HEIGHT, else the output times the smallest
+// integer factor that reaches both limits. The composition is laid out at the
+// capture size (captions and graphics scale with it) and the capture is scaled
+// back to the output size exactly (same aspect ratio, even dimensions kept).
+export function captureSize({ width, height }) {
+  const factor = Math.max(1, Math.ceil(MIN_RENDER_HEIGHT / height), Math.ceil(MIN_RENDER_WIDTH / width));
+  return { width: width * factor, height: height * factor, factor };
+}
+
+// Scale an upscaled capture back to the output size: area averaging (exact for
+// an integer factor), square pixels, the capture's pixel format and colour
+// tags, the producer's encoder settings for the quality; audio copied.
+async function downscale(capture, output, { width, height }, quality, signal) {
+  const info = await ffprobeJson(capture), video = info.streams.find(s => s.codec_type === 'video');
+  const colour = [['-color_range', video.color_range], ['-colorspace', video.color_space], ['-color_primaries', video.color_primaries],
+    ['-color_trc', video.color_transfer]].filter(([, value]) => value && value !== 'unknown').flat();
+  await run(mediaTool('ffmpeg'), ['-v', 'error', '-i', capture, '-map', '0:v:0', '-map', '0:a?', '-vf', `scale=${width}:${height}:flags=area,setsar=1`,
+    '-fps_mode', 'passthrough', '-c:v', 'libx264', ...DOWNSCALE_ENCODE[quality], '-pix_fmt', video.pix_fmt, ...colour, '-c:a', 'copy',
+    '-movflags', '+faststart', '-n', output], { timeout: 600000, maxBuffer: 4 * 1024 * 1024, signal });
 }
 
 export function expectsAudio(project, frames) {
@@ -58,7 +75,6 @@ export async function lintComposition(html) {
 
 export async function renderProject(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
   const { doc: project, templates } = await loadProject(root, revision);
-  checkRenderSize(project.canvas);
   // Source frame alignment: the compiled view is computed once here and shared by
   // the font glyph checks (verifyAssets, copyCaptionFont) and compose, which use
   // a view passed in as is. Assets whose frame_rate no longer holds (re-probed by
@@ -66,8 +82,8 @@ export async function renderProject(root, destination, { revision, preview = fal
   // project.json keeps the document as written.
   const { view, frame_alignment: alignment } = isV2(project) ? await frameAlignment(root, project) : { view: project, frame_alignment: null };
   await verifyAssets(root, view, templates);
-  const { width, height } = outputSize(project.canvas, preview);
-  const compiled = compose(view, { width, height }, { templates });
+  const { width, height } = outputSize(project.canvas, preview), capture = captureSize({ width, height });
+  const compiled = compose(view, { width: capture.width, height: capture.height }, { templates });
   destination = await safePath(destination);
   root = await safePath(root);
   if (destination === root || destination.startsWith(root + path.sep)) throw new Error('Render outside the immutable project');
@@ -76,6 +92,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     revision: project.revision, document_schema: project.schema_version, revision_sha256: await digest(revisionFile(root, project.revision)),
     engine: '@hyperframes/producer', engine_version: await packageVersion('@hyperframes/producer'), preview,
     started_at: new Date().toISOString(), assets: project.assets.map(({ id, sha256 }) => ({ id, sha256 })), ...(alignment ? { frame_alignment: alignment } : {}),
+    capture: { width: capture.width, height: capture.height, factor: capture.factor, ...(capture.factor > 1 ? { downscale: 'ffmpeg scale flags=area' } : {}) },
     inspection: { structure: 'pending', decode: 'pending', visual: 'unverified', listening: 'unverified' } };
   receipt.caption_font = project.caption_font ? { ...project.caption_font, integrity: 'passed',
     glyph_coverage: 'passed', runtime_load: compiled.cues.length || compiled.graphics ? 'pending' : 'not_required', source_match: 'unverified' } :
@@ -108,11 +125,17 @@ export async function renderProject(root, destination, { revision, preview = fal
     if (receipt.lint.blocked) throw new Error(`HyperFrames lint blocked render: ${receipt.lint.findings.filter(f => f.severity === 'error').map(f => f.code).join(', ')}`);
     signal?.throwIfAborted();
     const { createRenderJob, executeRenderJob } = await import('@hyperframes/producer');
-    const job = createRenderJob({ fps: project.canvas.fps, quality: preview ? 'draft' : 'standard',
-      format: 'mp4', workers: 1, useGpu: false, hdrMode: 'force-sdr', strictness: 'strict' });
-    const output = path.join(destination, 'video.mp4');
-    await executeRenderJob(job, destination, output, (state, message) => onProgress({ status: state.status, progress: state.progress, message }), signal);
+    const quality = preview ? 'draft' : 'standard';
+    const job = createRenderJob({ fps: project.canvas.fps, quality, format: 'mp4', workers: 1, useGpu: false, hdrMode: 'force-sdr', strictness: 'strict' });
+    // Below the capture limits the producer renders the upscaled composition to
+    // capture.mp4, scaled back to video.mp4 here; the capture is then removed.
+    const output = path.join(destination, 'video.mp4'), captured = capture.factor > 1 ? path.join(destination, 'capture.mp4') : output;
+    await executeRenderJob(job, destination, captured, (state, message) => onProgress({ status: state.status, progress: state.progress, message }), signal);
     if (job.status !== 'complete' || job.warnings.length) throw new Error(`Unqualified render outcome: ${job.status}`);
+    if (captured !== output) {
+      await downscale(captured, output, { width, height }, quality, signal);
+      await fs.rm(captured);
+    }
     if (project.caption_font && (compiled.cues.length || compiled.graphics)) receipt.caption_font.runtime_load = 'passed';
     // HyperFrames' AAC true-peak limiter lowers the whole mix when it would pass
     // -1 dBTP and reports the attenuation on the job (absent = not engaged).

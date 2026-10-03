@@ -36,10 +36,12 @@ const encoder = (table, name) => table[name] ?? (() => { throw new Error(`Unknow
 // Video `seconds` long at `rate`, solid `color`, with an optional sine track.
 // options: { vcodec: 'h264'|'hevc'|'vp9', pix: 'yuv420p'…, acodec, size, rate,
 //   seconds, color, vfr (drop 2 of every 5 frames: variable frame rate),
-//   rotate (display-matrix degrees), extra: [...output args] }
+//   rotate (display-matrix degrees), right (colour of the right half, e.g.
+//   'blue': left half `color`, right half `right`), extra: [...output args] }
 export async function synthVideo(file, { vcodec = 'h264', pix = 'yuv420p', acodec = null, size = '320x240', rate = 30, seconds = 2,
-  color = 'red', vfr = false, rotate = null, extra = [] } = {}) {
-  const inputs = ['-f', 'lavfi', '-i', `color=c=${color}:s=${size}:r=${rate}:d=${seconds}`];
+  color = 'red', right = null, vfr = false, rotate = null, extra = [] } = {}) {
+  const halves = right ? `,drawbox=x=iw/2:y=0:w=iw/2:h=ih:color=${right}:t=fill` : '';
+  const inputs = ['-f', 'lavfi', '-i', `color=c=${color}:s=${size}:r=${rate}:d=${seconds}${halves}`];
   if (acodec) inputs.push('-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=48000:duration=${seconds}`);
   const audio = acodec ? ['-map', '1:a', ...encoder(AUDIO, acodec)] : [];
   const target = rotate === null ? file : `${file}.unrotated${file.slice(file.lastIndexOf('.'))}`;
@@ -70,12 +72,16 @@ export async function synthAudio(file, { acodec = 'aac', seconds = 2, extra = []
   return file;
 }
 
-// Colour name (colourOf) of decoded frame `n`.
-export const frameColour = async (file, n = 0) => colourOf(await frameColor(file, n));
+// Colour name (colourOf) of decoded frame `n` (region as frameColor).
+export const frameColour = async (file, n = 0, region) => colourOf(await frameColor(file, n, region));
 
-// Mean RGB of the centre quarter of decoded frame `n` of `file` (select=eq(n,N)).
-export async function frameColor(file, n = 0) {
-  const { stdout } = await run(mediaTool('ffmpeg'), ['-v', 'error', '-i', file, '-vf', `select=eq(n\\,${n}),crop=iw/2:ih/2,scale=16:16`, '-frames:v', '1',
+// Frame regions (ffmpeg crop arguments): the centre quarter, and the middle
+// half-height band of the left and right quarters.
+export const REGION = Object.freeze({ centre: 'iw/2:ih/2', left: 'iw/4:ih/2:0:ih/4', right: 'iw/4:ih/2:iw*3/4:ih/4' });
+
+// Mean RGB of a region (default the centre quarter) of decoded frame `n` of `file` (select=eq(n,N)).
+export async function frameColor(file, n = 0, region = REGION.centre) {
+  const { stdout } = await run(mediaTool('ffmpeg'), ['-v', 'error', '-i', file, '-vf', `select=eq(n\\,${n}),crop=${region},scale=16:16`, '-frames:v', '1',
     '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer', maxBuffer: 1024 * 1024 });
   const sum = [0, 0, 0];
   for (let i = 0; i < stdout.length; i++) sum[i % 3] += stdout[i];
