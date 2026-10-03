@@ -1,5 +1,6 @@
 import { validateCaptionFont } from './caption-font.mjs';
 import { outputFrames, sourceSeconds } from './timeline.mjs';
+import { validFrameRate } from './source-frames.mjs';
 import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, templateSet, validateGraphicVars } from './templates.mjs';
 
 export const SCHEMA_V1 = 'creative-craft.local-edit.v1';
@@ -104,9 +105,14 @@ export function validateV2(doc, { templates, structuralOnly = false } = {}) {
       !Array.isArray(doc.items) || doc.items.length > 2000) fail('Invalid project collections');
   const assets = new Map();
   for (const asset of doc.assets) {
-    validateAssetFields(asset, ['origin']);
+    validateAssetFields(asset, ['origin', 'frame_rate']);
     if (assets.has(asset.id)) fail('Invalid asset');
     validateOrigin(asset.origin);
+    // Exact source frame rate (import ffprobe), only on assets with a picture.
+    if ('frame_rate' in asset) {
+      if (!validFrameRate(asset.frame_rate)) fail(`Invalid frame_rate on asset ${asset.id}`);
+      if (asset.video !== true) fail(`Asset ${asset.id} frame_rate requires a video stream`);
+    }
     assets.set(asset.id, asset);
   }
   const tracks = new Map();
