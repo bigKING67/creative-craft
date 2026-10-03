@@ -191,7 +191,7 @@ test('P2 compile: playback rate, volume lanes only via data-automation, opacity 
   assert.match(html, /tl\.fromTo\("#v-talk2",\{opacity:0\},\{opacity:1,duration:0\.33333333,ease:"none",immediateRender:false\},4\.666666666\)/);
   assert.match(html, /id="v-talk1"[^>]*opacity:0"/, 'animated picture is authored hidden');
   assert.ok(!/tl\.(to|fromTo)\([^)]*volume/.test(html), 'no GSAP volume tween');
-  assert.match(html, /<div id="g-lower" class="clip gfx gfx-lower-third"[^>]*left:6%;top:70%;width:62%;height:20%;font-size:7\.2px;--accent:#e3b341;opacity:0/);
+  assert.match(html, /<div id="g-lower" class="clip gfx gfx-lower-third"[^>]*left:6%;top:70%;width:78%;height:20%;font-size:7\.2px;--fs-title:3\.6em;--fs-subtitle:3em;--accent:#e3b341;opacity:0/);
   assert.match(html, /&lt;b&gt;&amp;&quot;x&#39;/);
   assert.ok(!html.includes('<b>&'), 'template text is escaped');
   const lint = await lintComposition(html);
@@ -244,13 +244,50 @@ test('graphic templates: existence, typed vars, length limits and colour format 
   assert.deepEqual([...TEMPLATES.keys()], ['lower-third', 'title-card']);
   const template = structuredClone(TEMPLATES.get('lower-third'));
   for (const [mutate, reason] of [
-    [t => { t.box.top = 0.8; }, /safe area/], [t => { t.html += '<script>x</script>'; }, /forbidden markup|only contain <span/],
+    [t => { t.placements.bottom.top = 0.8; }, /placement bottom leaves the 5% safe area/], [t => { t.placements.upper.left = 0.02; }, /placement upper leaves/],
+    [t => { t.default_placement = 'middle'; }, /default_placement/], [t => { t.vars.placement = { type: 'boolean' }; }, /reserved/],
+    [t => { t.css += '.gfx-lower-third-title{font-size:1em}'; }, /font-size must be var/], [t => { t.css = t.css.replace('font-size:var(--fs-subtitle)', 'color:red'); }, /subtitle must be sized/], [t => { t.html += '<script>x</script>'; }, /forbidden markup|only contain <span/],
     [t => { t.html = t.html.replace('<span class', '<div class').replace('</span>', '</div>'); }, /only contain <span/],
     [t => { t.css += 'body{color:red}'; }, /scoped/], [t => { t.css += '.gfx-lower-third{background:url(x)}'; }, /forbidden/],
     [t => { t.vars.title.max_length = 40; }, /cannot fit/]]) {
     const copy = structuredClone(template); mutate(copy);
     assert.throws(() => validateTemplate('lower-third', copy), reason);
   }
+});
+test('graphic placement: reserved var picks a named box, defaults to the template default, rejects unknown names', async () => {
+  const base = await load('valid', 'p2-packaging.json');
+  const lower = d => d.items.find(i => i.id === 'lower');
+  assert.match(compose(base).html, /id="g-lower"[^>]*data-placement="bottom"[^>]*left:6%;top:70%;width:78%;height:20%/, 'no placement = old position');
+  const upper = structuredClone(base); lower(upper).vars.placement = 'upper';
+  const html = compose(upper).html;
+  assert.match(html, /id="g-lower"[^>]*data-placement="upper"[^>]*left:6%;top:14%;width:78%;height:20%/);
+  const lint = await lintComposition(html);
+  assert.deepEqual([lint.error_count, lint.warning_count], [0, 0], JSON.stringify(lint.findings));
+  for (const [value, reason] of [['middle', /placement must be one of bottom, upper/], ['top', /placement must be one of bottom, upper/], [3, /placement must be one of/], [true, /placement must be one of/]]) {
+    const doc = structuredClone(base); lower(doc).vars.placement = value;
+    assert.throws(() => validateV2(doc), reason);
+  }
+  const card = structuredClone(base);
+  Object.assign(lower(card), { template: 'title-card', vars: { title: '品牌', placement: 'top' } });
+  assert.match(compose(card).html, /class="clip gfx gfx-title-card"[^>]*data-placement="top"[^>]*left:10%;top:8%;width:80%;height:20%/);
+});
+test('graphic text: every string var renders at ≥ 3% of the shorter canvas edge; smaller template sizes are raised at load', async () => {
+  const { TEMPLATES, MIN_TEXT_EM, enforceMinimumText, validateTemplate } = await import('../templates.mjs');
+  assert.equal(MIN_TEXT_EM, 3);
+  for (const template of TEMPLATES.values()) {
+    for (const [name, def] of Object.entries(template.vars)) if (def.type === 'string') {
+      assert.ok(def.font_em >= MIN_TEXT_EM, `${template.id}.${name}`);
+      assert.ok(1080 / 100 * def.font_em >= 32.4, `${template.id}.${name} on a 1080-wide portrait canvas`);
+    }
+  }
+  const small = structuredClone(TEMPLATES.get('lower-third'));
+  small.vars.subtitle.font_em = 1.7;
+  assert.equal(enforceMinimumText(small).vars.subtitle.font_em, MIN_TEXT_EM);
+  validateTemplate('lower-third', small);
+  // Raising a size still has to fit: the worst-case width check runs on the raised size.
+  const tight = structuredClone(TEMPLATES.get('lower-third'));
+  tight.vars.subtitle.font_em = 1; tight.vars.subtitle.max_length = 30;
+  assert.throws(() => validateTemplate('lower-third', enforceMinimumText(tight)), /cannot fit/);
 });
 test('compiled v2 HTML passes the HyperFrames lint gate', async () => {
   const lint = await lintComposition(compose(v2Fixture()).html);

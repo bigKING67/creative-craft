@@ -142,20 +142,24 @@ node cli.mjs render /absolute/project /absolute/new-export 2
 
 ## 图形模板
 
-模板是执行层资源，位于 `templates/<id>.json`（`schema_version: creative-craft.graphic-template.v1`、整数 `version`、`box`、带类型变量、固定 `html`/`css`），加载时逐项校验，不合格的模板直接使模块加载失败：
+模板是执行层资源，位于 `templates/<id>.json`（`schema_version: creative-craft.graphic-template.v2`、整数 `version`、命名位置 `placements` 与 `default_placement`、带类型变量、固定 `html`/`css`），加载时逐项校验，不合格的模板直接使模块加载失败：
 
-- `box`（画布比例）必须完整位于 5% 安全区内（left/top ≥ 0.05，right/bottom ≤ 0.95）。
-- 变量类型：`string`（`max_length` 1–200、`font_em`、`weight`，可选 `optional`）、`color`（`#rrggbb`）、`boolean`、`number`（`min/max`）；可选变量可带 `default`。按最坏情况（每个字符 1 em 全角）校验 `max_length × font_em ≤ 100 × box.width × 0.95`，保证最长文本也能放进模板框。
+- `placements`：一个或多个命名位置（名称 `^[a-z][a-z0-9_]{0,31}$`），每个是一个 `box`（画布比例 left/top/width/height），**每个**都必须完整位于 5% 安全区内（left/top ≥ 0.05，right/bottom ≤ 0.95）；`default_placement` 必须是其中之一。
+- 变量类型：`string`（`max_length` 1–200、`font_em`、`weight`，可选 `optional`）、`color`（`#rrggbb`）、`boolean`、`number`（`min/max`）；可选变量可带 `default`。`placement` 是保留变量名，模板不得声明。按最坏情况（每个字符 1 em 全角）对**最窄的位置框**校验 `max_length × font_em ≤ 100 × box.width × 0.95`，保证最长文本在任一位置都放得下。
+- **最小字号**：任何文本变量渲染字号 ≥ 3 em = 画布短边的 3%（竖屏 1080 宽 ≥ 32.4 px，720 宽 ≥ 21.6 px）。加载时 `font_em` 小于 3 的字符串变量先被抬到 3 再做上面的放得下校验（抬高后放不下则加载失败）；CSS 里的字号只能写 `font-size:var(--fs-<变量名>)`，编译时由 `font_em` 生成 `--fs-<变量名>:<font_em>em`，因此 CSS 不能绕过该下限。说明：需求表述为“画布宽度的 3%”，竖屏与方形画布上两者相同；横屏若按宽度计（1920 宽需 57.6 px ≈ 5.3 em），现有模板的最长文本放不进框，所以统一按短边计，横屏实际下限为高度的 3%。
 - `html` 只能含 `<span class="…">`（HyperFrames lint 会把计时元素内嵌套的块结构标为 warning），每个字符串变量以 `{{name}}` 恰好出现一次；`html`/`css` 禁止 script、事件属性、`url(`、`@import`、`src/href` 等；CSS 每条规则必须以 `.gfx-<id>` 作用域开头。
-- 编译：字符串值 HTML 转义后填入；颜色/数字写成根元素内联 CSS 自定义属性（`--accent:#2f9e8f`）；布尔写成固定 `data-<name>="true|false"`。不接受任意 HTML、URL 或脚本。根元素字号 = 画布短边 / 100 px（1 em = 短边 1%），各平台比例下同一模板文本相对尺寸一致；文本 `nowrap + ellipsis`，最坏情况仍在框内。
+- 编译：字符串值 HTML 转义后填入；颜色/数字写成根元素内联 CSS 自定义属性（`--accent:#2f9e8f`），字号写成 `--fs-<name>`；布尔写成固定 `data-<name>="true|false"`；所选位置写成 `data-placement="<name>"`。不接受任意 HTML、URL 或脚本。根元素字号 = 画布短边 / 100 px（1 em = 短边 1%），各平台比例下同一模板文本相对尺寸一致；文本 `nowrap + ellipsis`，最坏情况仍在框内。
+- 位置选择：graphic item 用保留变量 `vars.placement`（字符串，取该模板声明的位置名）选择位置；缺省为模板的 `default_placement`，与旧文档（无 placement）的位置一致。Node 校验 placement 必须是该模板的位置名（不是则拒绝并列出可选名）；Python 侧只校验 vars 为原始值，`placement` 是字符串，无需改动。`graphic-safe-area` 与采样都使用所选位置的框。
 - 字体：图形与字幕共用已绑定的字幕字体（`.caption,.gfx` 同一 `@font-face`），存在 graphic item 时与字幕一样触发字体绑定、字形覆盖检查和运行时字重加载门槛。没有字体绑定却已有系统字体字幕的旧工程不能加图形（否则会改变原字幕字体），须新建工程。
 
-首批模板：
+当前模板（v2；与 v1 相比：位置可选；`lower-third` 副标题从 2.4 em 提到 3 em 以满足最小字号，框宽从 0.62 放宽到 0.78 以容纳最长副标题；默认位置不变）：
 
-| id | 位置（box） | 变量 |
+| id | 位置（placements，默认加粗） | 变量 |
 | --- | --- | --- |
-| `lower-third` v1 | 左下 0.06/0.70，宽 0.62 × 高 0.20 | `title` 字符串 ≤16（3.6 em, 700）、`subtitle` 可选 ≤24（2.4 em, 400）、`accent` 可选颜色（默认 #e3b341） |
-| `title-card` v1 | 居中 0.10/0.30，宽 0.80 × 高 0.40 | `title` ≤12（6 em, 900）、`subtitle` 可选 ≤24（3 em）、`background`/`text_color` 可选颜色、`panel` 可选布尔（false 时面板透明） |
+| `lower-third` v2 | **`bottom`** 左下 0.06/0.70，宽 0.78 × 高 0.20；`upper` 0.06/0.14，宽 0.78 × 高 0.20（高度 14–34%，避开底部烧录字幕与免责声明） | `title` 字符串 ≤16（3.6 em, 700）、`subtitle` 可选 ≤24（3 em, 400）、`accent` 可选颜色（默认 #e3b341） |
+| `title-card` v2 | **`center`** 0.10/0.30，宽 0.80 × 高 0.40；`top` 0.10/0.08，宽 0.80 × 高 0.20（高度 8–28%，避开竖屏居中人脸） | `title` ≤12（6 em, 900）、`subtitle` 可选 ≤24（3 em）、`background`/`text_color` 可选颜色、`panel` 可选布尔（false 时面板透明） |
+
+示例：`{"template": "lower-third", "vars": {"title": "主讲人", "placement": "upper"}}`。
 
 ## v1 工程兼容与迁移
 

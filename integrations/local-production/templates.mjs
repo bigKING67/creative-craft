@@ -5,8 +5,17 @@ import { readFileSync, readdirSync } from 'node:fs';
 // supply primitive values; nothing caller-supplied becomes markup, CSS, a URL or
 // a script. Text is HTML-escaped, colours are #rrggbb, booleans become a fixed
 // data attribute, numbers a CSS custom property.
-export const TEMPLATE_SCHEMA = 'creative-craft.graphic-template.v1';
+// v2 definition format: named placements (each a box) instead of one box, and
+// text sizes only through font_em (CSS reads them as var(--fs-<name>)).
+export const TEMPLATE_SCHEMA = 'creative-craft.graphic-template.v2';
 export const SAFE_MARGIN = 0.05;
+// Reserved graphic var: selects one of the template's named placements.
+export const PLACEMENT_VAR = 'placement';
+// Minimum rendered text size: 3 em = 3% of the shorter canvas edge (portrait
+// 1080 wide: 32.4 px). The rule is stated against the canvas width; on landscape
+// canvases the shorter edge (height) is used so 1 em keeps one meaning for every
+// aspect ratio (see README).
+export const MIN_TEXT_EM = 3;
 const fail = message => { throw new Error(message); };
 // Shared with document validation (edit-document.mjs): template ids, var names and
 // the structural rule for var values (template types are checked separately).
@@ -23,6 +32,14 @@ const exact = (value, allowed, label) => {
   for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`${label}: unknown field ${key}`);
 };
 const fraction = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+const PLACEMENT_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+
+function validateBox(name, label, box) {
+  exact(box, ['left', 'top', 'width', 'height'], `Graphic template ${name} placement ${label}`);
+  const { left, top, width, height } = box;
+  if (![left, top, width, height].every(fraction) || width <= 0 || height <= 0 || left < SAFE_MARGIN || top < SAFE_MARGIN ||
+      left + width > 1 - SAFE_MARGIN + 1e-9 || top + height > 1 - SAFE_MARGIN + 1e-9) fail(`Graphic template ${name} placement ${label} leaves the 5% safe area`);
+}
 
 function validateDefinition(name, def) {
   const label = `Graphic template ${name}`;
@@ -50,23 +67,32 @@ function checkValue(name, def, value, label) {
 // Fails closed at load: a template that could escape its box, the safe area or
 // the fixed-markup rule never becomes available.
 export function validateTemplate(name, template) {
-  exact(template, ['schema_version', 'id', 'version', 'description', 'box', 'vars', 'html', 'css'], `Graphic template ${name}`);
+  exact(template, ['schema_version', 'id', 'version', 'description', 'placements', 'default_placement', 'vars', 'html', 'css'], `Graphic template ${name}`);
   if (template.schema_version !== TEMPLATE_SCHEMA || template.id !== name || !TEMPLATE_ID.test(name) ||
       !Number.isInteger(template.version) || template.version < 1 || typeof template.description !== 'string') fail(`Invalid graphic template identity: ${name}`);
-  exact(template.box, ['left', 'top', 'width', 'height'], `Graphic template ${name} box`);
-  const { left, top, width, height } = template.box;
-  if (![left, top, width, height].every(fraction) || width <= 0 || height <= 0 || left < SAFE_MARGIN || top < SAFE_MARGIN ||
-      left + width > 1 - SAFE_MARGIN + 1e-9 || top + height > 1 - SAFE_MARGIN + 1e-9) fail(`Graphic template ${name} box leaves the 5% safe area`);
+  if (!plain(template.placements) || !Object.keys(template.placements).length) fail(`Graphic template ${name} has no placements`);
+  for (const [key, box] of Object.entries(template.placements)) {
+    if (!PLACEMENT_NAME.test(key)) fail(`Graphic template ${name}: invalid placement name ${key}`);
+    validateBox(name, key, box);
+  }
+  if (!Object.hasOwn(template.placements, template.default_placement)) fail(`Graphic template ${name}: default_placement must name one of its placements`);
   if (!plain(template.vars) || !Object.keys(template.vars).length) fail(`Graphic template ${name} has no vars`);
+  if (PLACEMENT_VAR in template.vars) fail(`Graphic template ${name}: var name ${PLACEMENT_VAR} is reserved`);
+  const narrowest = Math.min(...Object.values(template.placements).map(b => b.width));
   for (const [key, def] of Object.entries(template.vars)) {
     if (!VAR_NAME.test(key)) fail(`Graphic template ${name}: invalid var name ${key}`);
     validateDefinition(key, def);
-    // Worst case: every character is full-width (1 em). The box is at least
-    // 100 × width em wide because 1 em = 1% of the shorter canvas edge.
-    if (def.type === 'string' && def.max_length * def.font_em > 100 * width * 0.95) fail(`Graphic template ${name}: ${key} cannot fit its box at max_length`);
+    if (def.type !== 'string') continue;
+    // Worst case: every character is full-width (1 em). Every placement box is
+    // at least 100 × width em wide because 1 em = 1% of the shorter canvas edge.
+    if (def.max_length * def.font_em > 100 * narrowest * 0.95) fail(`Graphic template ${name}: ${key} cannot fit its box at max_length`);
+    if (!template.css.includes(`font-size:var(--fs-${key})`)) fail(`Graphic template ${name}: ${key} must be sized by font-size:var(--fs-${key})`);
   }
   if (typeof template.html !== 'string' || typeof template.css !== 'string' || FORBIDDEN.test(template.html) || FORBIDDEN.test(template.css) ||
       template.css.includes('<')) fail(`Graphic template ${name} contains forbidden markup`);
+  // Text sizes come only from font_em (emitted as --fs-<var>), so the minimum
+  // size rule cannot be bypassed by a literal font-size in the CSS.
+  if ([...template.css.matchAll(/font-size\s*:\s*([^;}]*)/g)].some(m => !/^var\(--fs-[a-z][a-z0-9_]*\)$/.test(m[1].trim()))) fail(`Graphic template ${name}: CSS font-size must be var(--fs-<var>)`);
   // Only inline <span> markup with class attributes: one timeline row per graphic
   // (HyperFrames lint flags nested block structure inside a timed element).
   const tags = [...template.html.matchAll(/<\/?([a-zA-Z0-9-]+)([^>]*)>/g)];
@@ -83,9 +109,16 @@ export function validateTemplate(name, template) {
 }
 
 const directory = new URL('./templates/', import.meta.url);
+// Minimum text size: a string var below MIN_TEXT_EM is raised to it before
+// validation, so the box-fit check runs on the size that will actually render.
+export function enforceMinimumText(template) {
+  for (const def of Object.values(template.vars ?? {})) if (def?.type === 'string' && typeof def.font_em === 'number' && def.font_em < MIN_TEXT_EM) def.font_em = MIN_TEXT_EM;
+  return template;
+}
+const freeze = value => { for (const v of Object.values(value)) if (v && typeof v === 'object') freeze(v); return Object.freeze(value); };
 export const TEMPLATES = new Map(readdirSync(directory).filter(n => n.endsWith('.json')).sort().map(file => {
   const name = file.slice(0, -5);
-  return [name, Object.freeze(validateTemplate(name, JSON.parse(readFileSync(new URL(file, directory), 'utf8'))))];
+  return [name, freeze(validateTemplate(name, enforceMinimumText(JSON.parse(readFileSync(new URL(file, directory), 'utf8')))))];
 }));
 
 export const getTemplate = name => TEMPLATES.get(name) ?? fail(`Unknown graphic template: ${name}`);
@@ -93,12 +126,21 @@ export const getTemplate = name => TEMPLATES.get(name) ?? fail(`Unknown graphic 
 // Node-side semantic check of a graphic item's vars against its template.
 export function validateGraphicVars(item) {
   const template = getTemplate(item.template), label = `Graphic item ${item.id}`;
-  for (const key of Object.keys(item.vars)) if (!(key in template.vars)) fail(`${label}: template ${template.id} has no var ${key}`);
+  for (const key of Object.keys(item.vars)) if (key !== PLACEMENT_VAR && !(key in template.vars)) fail(`${label}: template ${template.id} has no var ${key}`);
+  if (PLACEMENT_VAR in item.vars && !(typeof item.vars[PLACEMENT_VAR] === 'string' && Object.hasOwn(template.placements, item.vars[PLACEMENT_VAR]))) {
+    fail(`${label}: placement must be one of ${Object.keys(template.placements).join(', ')} (template ${template.id})`);
+  }
   for (const [key, def] of Object.entries(template.vars)) {
     if (!(key in item.vars)) { if (!def.optional) fail(`${label}: missing required var ${key}`); continue; }
     checkValue(key, def, item.vars[key], label);
   }
   return template;
+}
+
+// Placement of a validated graphic item: its named box, or the template default.
+export function graphicPlacement(item) {
+  const template = getTemplate(item.template), name = item.vars?.[PLACEMENT_VAR] ?? template.default_placement;
+  return { name, box: template.placements[name] ?? fail(`Graphic item ${item.id}: unknown placement ${name}`) };
 }
 
 // Resolved values (defaults applied) for a validated graphic item.
@@ -114,17 +156,19 @@ export function graphicTexts(item) {
     .map(([k, d]) => ({ text: values[k], weight: d.weight, font_em: d.font_em, var: k }));
 }
 
-// Fixed markup with escaped text. Returns the inner HTML, root attributes and
-// inline custom properties; the caller adds timing, id and stacking.
+// Fixed markup with escaped text. Returns the inner HTML, placement, root
+// attributes and inline custom properties; the caller adds timing, id and stacking.
 export function renderGraphic(item) {
-  const template = getTemplate(item.template), values = graphicValues(item);
+  const template = getTemplate(item.template), values = graphicValues(item), placement = graphicPlacement(item);
   const inner = template.html.replace(/\{\{([a-z][a-z0-9_]*)\}\}/g, (_, key) => values[key] === undefined ? '' : escapeHtml(values[key]));
   const properties = [], attributes = [];
   for (const [key, def] of Object.entries(template.vars)) {
+    if (def.type === 'string') properties.push(`--fs-${key}:${def.font_em}em`);
     const value = values[key];
     if (value === undefined) continue;
     if (def.type === 'color' || def.type === 'number') properties.push(`--${key}:${def.type === 'color' ? value.toLowerCase() : String(value)}`);
     if (def.type === 'boolean') attributes.push(`data-${key.replace(/_/g, '-')}="${value ? 'true' : 'false'}"`);
   }
-  return { template, inner, properties, attributes };
+  attributes.push(`data-placement="${placement.name}"`);
+  return { template, placement, inner, properties, attributes };
 }
