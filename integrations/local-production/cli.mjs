@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import { createProject, editBatch, editProject, readProject } from './project.mjs';
 import { renderProject } from './render.mjs';
 import { qaRender } from './qa.mjs';
+import { parseTranscribeArgs, transcribe } from './asr.mjs';
 
 // The upstream capture layer still emits console.log diagnostics. In this
 // dedicated CLI process reserve stdout for exactly one machine-readable result.
@@ -15,6 +16,7 @@ const help = `Creative Craft local production (optional, local media only)
   node cli.mjs preview PROJECT NEW_OUTPUT_DIR [REVISION]
   node cli.mjs render PROJECT NEW_OUTPUT_DIR [REVISION]
   node cli.mjs qa PROJECT RENDER_DIR NEW_QA_DIR
+  node cli.mjs transcribe MEDIA NEW_OUT.json [--lang zh] [--model PATH] [--clean auto|on|off]  (local whisper.cpp)
 Output, QA directories and projects must be new. Media paths in SPEC/BATCH are relative to cwd.
 No natural-language planner, model calls or DataHub integration is included.`;
 const [command, root, arg, extra, ...rest] = process.argv.slice(2);
@@ -37,6 +39,9 @@ try {
     process.once('SIGTERM', () => controller.abort());
     result = await renderProject(root, arg, { revision: extra ? rev(extra) : undefined, preview: command === 'preview', signal: controller.signal,
       onProgress: event => process.stderr.write(JSON.stringify(event) + '\n') });
+  } else if (command === 'transcribe') {
+    const { media, output, options } = parseTranscribeArgs(process.argv.slice(3));
+    result = await transcribe(media, output, options);
   } else if (command === 'qa' && root && arg && extra && !rest.length) result = await qaRender(root, arg, extra);
   else throw new Error(help);
   if (result) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
