@@ -31,6 +31,12 @@ Gated video production on top of the existing contracts (see
 - optional `policy.export_requires_human_review`: an accepted inspection waits
   for a named `video-approve --stage inspect` sign-off. The local CLI records who
   signed; verifying that the signer is a person is left to the host.
+- P2.1 from real-footage validation (local-production 0.4.0): burned-caption
+  cut-point check (light subtitles; frame-difference heuristic, not OCR), at least
+  one QA sample per shot, named template placements with a minimum text size of 3%
+  of the short edge, render receipts naming template id/version/digest, and a
+  local whisper.cpp `transcribe` command with a pinned, digest-checked model and
+  automatic clean-audio retry. Templates are still referenced by id only.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in
