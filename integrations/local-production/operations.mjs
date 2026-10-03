@@ -165,7 +165,7 @@ export async function applyOperations(base, operations, { importAsset, imports }
           delete item[k];
         } else item[k] = structuredClone(value);
       }
-    } else if (op.type === 'revert_to') fail('revert_to must be the only operation in its batch');
+    } else if (op.type === 'revert_to' || op.type === 'rebind_template') fail(`${op.type} must be the only operation in its batch`);
     else fail(`Unknown edit operation: ${op.type}`);
   }
   return doc;
@@ -179,7 +179,12 @@ export function diffDocuments(before, after) {
     return { added: [...right.keys()].filter(k => !left.has(k)), removed: [...left.keys()].filter(k => !right.has(k)),
       changed: [...right.keys()].filter(k => left.has(k) && canonicalJson(left.get(k)) !== canonicalJson(right.get(k))) };
   };
+  // Template bindings: what this revision would pin, drop or rebind.
+  const pins = compare(before.graphic_templates ?? [], after.graphic_templates ?? []), pin = list => new Map(list.map(b => [b.id, { version: b.version, sha256: b.sha256 }]));
+  const [was, now] = [pin(before.graphic_templates ?? []), pin(after.graphic_templates ?? [])];
   return { items: compare(before.items, after.items), tracks: compare(before.tracks, after.tracks),
     assets_added: compare(before.assets, after.assets).added,
+    graphic_templates: { added: pins.added.map(id => ({ id, ...now.get(id) })), removed: pins.removed,
+      changed: pins.changed.map(id => ({ id, from: was.get(id), to: now.get(id) })) },
     duration_frames: { before: outputFrames(before), after: outputFrames(after) } };
 }

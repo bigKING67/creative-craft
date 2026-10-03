@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { digest, probe, readProject, safePath, verifyAssets, run } from './project.mjs';
 import { compose, webVtt } from './composition.mjs';
 import { copyCaptionFont } from './caption-font.mjs';
+import { copyBoundTemplates } from './template-binding.mjs';
 import { audibleItems, isV2 } from './timeline.mjs';
 import { templateProvenance } from './templates.mjs';
 import { mediaTool } from './media-analysis.mjs';
@@ -62,6 +63,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     await fs.writeFile(path.join(destination, 'project.json'), JSON.stringify(project, null, 2) + '\n', { flag: 'wx' });
     receipt.project_sha256 = await digest(path.join(destination, 'project.json'));
     await copyCaptionFont(root, destination, project);
+    await copyBoundTemplates(root, destination, project); // Pinned template bytes travel with the render.
     await fs.mkdir(path.join(destination, 'assets'));
     for (const asset of project.assets) {
       const target = path.join(destination, asset.file);

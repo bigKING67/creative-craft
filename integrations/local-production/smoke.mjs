@@ -179,6 +179,11 @@ const brandRender = await renderProject(brand, path.join(base, 'packaging-export
 assert.equal(brandRender.lint.warning_count + brandRender.lint.error_count, 0, JSON.stringify(brandRender.lint.findings));
 assert.ok(!brandRender.lint.findings.some(f => f.code === 'audio_volume_double_automation'));
 assert.equal(brandRender.caption_font.runtime_load, 'passed');
+// Graphic templates are pinned to the revision and travel with the render.
+const brandBindings = (await readProject(brand, 1)).graphic_templates;
+assert.deepEqual(brandBindings.map(b => b.id), ['lower-third', 'title-card']);
+assert.deepEqual(brandRender.templates.map(t => [t.id, t.pinned, t.source, t.sha256]), brandBindings.map(b => [b.id, true, 'project', b.sha256]));
+for (const binding of brandBindings) assert.equal(await digest(path.join(base, 'packaging-export', binding.file)), binding.sha256, 'bound template copied into the render');
 const brandHtml = await fs.readFile(path.join(base, 'packaging-export/index.html'), 'utf8');
 assert.match(brandHtml, /id="v-main3"[^>]*data-playback-rate="1.5"/);
 assert.ok(!/<audio[^>]*data-volume/.test(brandHtml) && (brandHtml.match(/<audio[^>]*data-automation=/g) ?? []).length === 3, 'every sound level is a volume lane');
@@ -201,7 +206,7 @@ assert.equal(unsafe.verdict, 'fail');
 const unsafeCheck = unsafe.checks.find(c => c.id === 'caption-safe-area');
 assert.equal(unsafeCheck.status, 'fail');
 assert.ok(unsafeCheck.measured.boxes.find(b => b.item_id === 'low').bottom > 0.95);
-summary.brand_packaging = { render: brandRender.status, lint: { errors: brandRender.lint.error_count, warnings: brandRender.lint.warning_count },
+summary.brand_packaging = { render: brandRender.status, templates: brandRender.templates, lint: { errors: brandRender.lint.error_count, warnings: brandRender.lint.warning_count },
   audio_limiter: brandRender.audio_limiter, signals: brandSignals, qa: { verdict: brandQa.verdict, checks: Object.fromEntries(brandQa.checks.map(c => [c.id, c.status])),
     true_peak: brandCheck('true-peak').measured }, fault_injection: { verdict: unsafe.verdict, caption_safe_area: unsafeCheck.status,
     low_caption_box: unsafeCheck.measured.boxes.find(b => b.item_id === 'low') } };
@@ -228,6 +233,7 @@ await createProject(portrait, { project_id: 'portrait-smoke', title: '竖屏检�
     { id: 'strap', track_id: 'v_gfx', kind: 'graphic', template: 'lower-third', vars: { title: '主讲人', subtitle: '副标题字号不小于三成', placement: 'upper' },
       start_frame: 150, frames: 30 }] });
 const portraitRender = await renderProject(portrait, path.join(base, 'portrait-preview'), { revision: 1, preview: true });
+assert.ok(portraitRender.templates.length === 2 && portraitRender.templates.every(t => t.pinned === true && t.source === 'project'), JSON.stringify(portraitRender.templates));
 assert.equal(portraitRender.lint.warning_count + portraitRender.lint.error_count, 0, JSON.stringify(portraitRender.lint.findings));
 const portraitHtml = await fs.readFile(path.join(base, 'portrait-preview/index.html'), 'utf8');
 assert.match(portraitHtml, /id="g-card"[^>]*data-placement="top"[^>]*top:8%;width:80%;height:20%/);

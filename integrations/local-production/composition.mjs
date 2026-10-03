@@ -1,7 +1,7 @@
 import { validate } from './project.mjs';
 import { validateV2 } from './edit-document.mjs';
 import { envelopeIndex, isV2, itemEnvelope, resolveCaptions, volumeEnvelope } from './timeline.mjs';
-import { getTemplate, renderGraphic, escapeHtml as escape } from './templates.mjs';
+import { getTemplate, renderGraphic, requireTemplates, escapeHtml as escape } from './templates.mjs';
 import { captionFontCss, captionFontReady } from './caption-font.mjs';
 
 const seconds = value => String(Math.round(value * 1e9) / 1e9);
@@ -66,8 +66,11 @@ export function compose(project, canvas = project.canvas) {
 // between two data-track-index rolls (+40) so overlapping clips never share one.
 // Graphic items render fixed template markup inside the box of their placement
 // (vars.placement or the template default); 1 em = 1% of the shorter canvas edge.
+// Templates come from the revision's set: its bound bytes when pinned, else the
+// execution-layer templates.
 function composeV2(doc, canvas) {
-  const { duration, frames } = validateV2(doc);
+  const templates = requireTemplates(doc);
+  const { duration, frames } = validateV2(doc, { templates });
   const { width, height } = canvas;
   const { fps } = doc.canvas;
   const assets = new Map(doc.assets.map(a => [a.id, a]));
@@ -104,7 +107,7 @@ function composeV2(doc, canvas) {
   for (const item of doc.items.filter(i => i.kind === 'media' || i.kind === 'graphic').sort(byLane)) {
     const lane = lanes.get(item.track_id), roll = 40 * rolls.get(item.id);
     if (item.kind === 'graphic') {
-      const { template, placement: { box }, inner, properties, attributes } = renderGraphic(item);
+      const { template, placement: { box }, inner, properties, attributes } = renderGraphic(item, templates);
       const style = [`z-index:${lane + 1}`, `left:${percent(box.left)}`, `top:${percent(box.top)}`, `width:${percent(box.width)}`, `height:${percent(box.height)}`,
         `font-size:${seconds(Math.min(width, height) / 100)}px`, ...properties];
       visual(`g-${item.id}`, item, style);
@@ -139,7 +142,7 @@ function composeV2(doc, canvas) {
   }
   cues.sort((a, b) => a.start - b.start);
   const graphics = doc.items.filter(i => i.kind === 'graphic').length;
-  const css = [...new Set(doc.items.filter(i => i.kind === 'graphic').map(i => i.template))].map(name => getTemplate(name).css).join('');
+  const css = [...new Set(doc.items.filter(i => i.kind === 'graphic').map(i => i.template))].map(name => getTemplate(name, templates).css).join('');
   return { html: page(doc, width, height, duration, elements, { css, tweens }), cues, graphics, duration, frames };
 }
 

@@ -1,6 +1,6 @@
 import { validateCaptionFont } from './caption-font.mjs';
 import { outputFrames, sourceSeconds } from './timeline.mjs';
-import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, validateGraphicVars } from './templates.mjs';
+import { TEMPLATE_ID, VAR_NAME, isGraphicVarValue, templatesFor, validateGraphicVars } from './templates.mjs';
 
 export const SCHEMA_V1 = 'creative-craft.local-edit.v1';
 export const SCHEMA_V2 = 'creative-craft.edit-document.v2';
@@ -63,13 +63,34 @@ function validateFades(item) {
   if ((item.fade_in_frames ?? 0) + (item.fade_out_frames ?? 0) > item.frames) fail(`Fades exceed item length: ${item.id}`);
 }
 
+// graphic_templates: content-addressed template bindings of this revision.
+// Shape and coverage only (shared with Python); bytes are checked when loaded.
+function validateTemplateBindings(list) {
+  if (!Array.isArray(list) || list.length > 32) fail('Invalid graphic_templates');
+  const bound = new Map();
+  for (const binding of list) {
+    keys(binding, ['id', 'version', 'sha256', 'file']);
+    if (typeof binding.id !== 'string' || !TEMPLATE_ID.test(binding.id) || !Number.isInteger(binding.version) || binding.version < 1 ||
+        !hex64(binding.sha256)) fail(`Invalid graphic template binding: ${binding.id}`);
+    if (binding.file !== `templates/${binding.sha256}.json`) fail(`Graphic template binding ${binding.id}: file must be templates/<sha256>.json for its sha256`);
+    if (bound.has(binding.id)) fail(`Duplicate graphic template binding: ${binding.id}`);
+    bound.set(binding.id, binding);
+  }
+  return bound;
+}
+
 // Semantic validation of creative-craft.edit-document.v2. JSON Schema covers
 // shape; these rules cover kinds, references, ranges, overlap and output length.
-export function validateV2(doc) {
-  keys(doc, ['schema_version', 'project_id', 'revision', 'parent_sha256', 'title', 'canvas', 'caption_font', 'assets', 'tracks', 'items', 'change']);
+// Graphic vars are typed against the revision's template set: the bound bytes
+// when graphic_templates is present (loaded by readProject/the edit path, or
+// passed as options.templates), else the execution-layer templates. A bound
+// revision whose bytes are not loaded gets structural validation only.
+export function validateV2(doc, { templates = templatesFor(doc) } = {}) {
+  keys(doc, ['schema_version', 'project_id', 'revision', 'parent_sha256', 'title', 'canvas', 'caption_font', 'assets', 'tracks', 'items', 'change', 'graphic_templates']);
   if (doc.schema_version !== SCHEMA_V2 || !id(doc.project_id) || !text(doc.title) || !integer(doc.revision, 1, 999999)) fail('Invalid project identity');
   if (doc.revision === 1 ? doc.parent_sha256 !== null : !hex64(doc.parent_sha256)) fail('Invalid parent digest');
   if ('caption_font' in doc) validateCaptionFont(doc.caption_font);
+  const bound = 'graphic_templates' in doc ? validateTemplateBindings(doc.graphic_templates) : null;
   validateCanvas(doc.canvas);
   const { fps } = doc.canvas, limit = 600 * fps;
   keys(doc.change, ['author', 'summary', 'operations_sha256']);
@@ -149,8 +170,13 @@ export function validateV2(doc) {
       for (const [key, value] of Object.entries(item.vars)) if (!VAR_NAME.test(key) || !isGraphicVarValue(value)) fail(`Graphic var ${key} must be a string (1–200), finite number or boolean: ${item.id}`);
       if ('opacity' in item && !number(item.opacity, 0, 1)) fail(`Invalid visual properties: ${item.id}`);
       validateFades(item);
-      validateGraphicVars(item); // Node only: template existence and typed vars.
+      if (bound && !bound.has(item.template)) fail(`Graphic item ${item.id} uses template ${item.template} without a graphic_templates binding`);
+      if (templates) validateGraphicVars(item, templates); // Node only: template existence and typed vars.
     } else fail(`Invalid item kind: ${item.id}`);
+  }
+  if (bound) {
+    const used = new Set(doc.items.filter(i => i.kind === 'graphic').map(i => i.template));
+    for (const key of bound.keys()) if (!used.has(key)) fail(`Unused graphic template binding: ${key}`);
   }
   for (const item of doc.items) {
     if (item.kind !== 'caption' || !item.link) continue;

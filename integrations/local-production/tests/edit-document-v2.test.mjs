@@ -38,7 +38,10 @@ const reasons = { 'audio-only-asset-on-video-track': /has no video/, 'caption-li
   // P2 review: crossfade predecessor rules and graphic var naming/length.
   'crossfade-nested-in-predecessor': /Crossfade talk2 must overlap its predecessor on track v_main by exactly 20 frames/,
   'crossfade-after-graphic': /Crossfade gfxnext must overlap its predecessor on track v_gfx/,
-  'graphic-var-bad-name': /Graphic var Title must be a string/, 'graphic-var-too-long-utf16': /Graphic var title must be a string \(1–200\)/ };
+  'graphic-var-bad-name': /Graphic var Title must be a string/, 'graphic-var-too-long-utf16': /Graphic var title must be a string \(1–200\)/,
+  // Graphic templates pinned to the revision.
+  'graphic-template-unbound': /Graphic item lower uses template lower-third without a graphic_templates binding/, 'graphic-template-duplicate-binding': /Duplicate graphic template binding: lower-third/,
+  'graphic-template-unused-binding': /Unused graphic template binding: title-card/, 'graphic-template-file-mismatch': /file must be templates\/<sha256>\.json/ };
 test('shared fixtures: every invalid document is rejected', async () => {
   const names = (await fs.readdir(path.join(fixtures, 'invalid'))).filter(n => n.endsWith('.json'));
   assert.ok(names.length >= 12);
@@ -542,6 +545,7 @@ test('render receipts can name the template bytes behind each graphic', async ()
   const provenance = templateProvenance(doc);
   assert.deepEqual(provenance.map(p => p.id), ['lower-third', 'title-card']);
   for (const p of provenance) {
+    assert.deepEqual([p.pinned, p.source], [false, 'runtime'], 'unpinned revisions name the execution-layer bytes');
     assert.equal(p.version, getTemplate(p.id).version);
     assert.match(p.sha256, /^[a-f0-9]{64}$/);
     const bytes = await fs.readFile(new URL(`../templates/${p.id}.json`, import.meta.url));

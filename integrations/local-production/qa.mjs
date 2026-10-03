@@ -4,6 +4,7 @@ import { digest, ffprobeJson, readProject, run, safePath, validateDocument, migr
 import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
+import { requireTemplates } from './templates.mjs';
 import { burnedCaptionCheck, captionBand } from './burned-captions.mjs';
 import { logSegments, mediaTool, overlap, silenceFilter, silences, union } from './media-analysis.mjs';
 
@@ -206,7 +207,7 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   safeArea('caption-safe-area', 'captions', captions.map(c => ({ id: c.item.id, box: captionBox(doc.canvas, c.item) })), e => captionSample.get(e.id), 'caption',
     'compiled-layout-estimate', n => `All ${n} caption box(es) are inside the 5% safe margin (layout estimate, not a pixel detection).`);
   const graphicItems = doc.items.filter(i => i.kind === 'graphic');
-  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(i), frame: i.start_frame + Math.floor(i.frames / 2) })),
+  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(i, requireTemplates(doc)), frame: i.start_frame + Math.floor(i.frames / 2) })),
     e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic', 'template-load-guarantee',
     n => `${n} graphic(s) render in their template box; template load validation guarantees every template box lies inside the 5% safe margin. Not a pixel detection, and text fit inside the box is not measured.`);
 

@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isV2, resolveCaptions } from './timeline.mjs';
-import { graphicTexts } from './templates.mjs';
+import { attachTemplates, graphicTexts, requireTemplates } from './templates.mjs';
 
 // Versioned renderer resource, not an assertion about the original video's font.
 const bundle = new URL('./fonts/', import.meta.url);
@@ -30,7 +30,7 @@ export function activeCaptions(project) {
 export function fontRuns(project) {
   const captions = activeCaptions(project).map(caption => ({ text: caption.text, weight: caption.style?.weight ?? 600 }));
   if (!isV2(project)) return captions;
-  return [...captions, ...project.items.filter(i => i.kind === 'graphic').flatMap(graphicTexts).map(({ text, weight }) => ({ text, weight }))];
+  return [...captions, ...project.items.filter(i => i.kind === 'graphic').flatMap(item => graphicTexts(item, requireTemplates(project))).map(({ text, weight }) => ({ text, weight }))];
 }
 
 async function fontBytes(file) {
@@ -100,7 +100,7 @@ export async function installCaptionFont(root) {
 
 export async function bindCaptionFont(root, project) {
   if (!fontRuns(project).length) return;
-  const binding = { ...project };
+  const binding = attachTemplates({ ...project }, requireTemplates(project));
   await planCaptionFont(binding);
   await fs.mkdir(path.join(root, 'fonts'));
   await installCaptionFont(root);
