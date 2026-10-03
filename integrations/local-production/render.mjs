@@ -105,22 +105,29 @@ export async function lintComposition(html) {
     findings: result.findings.map(({ code, severity, message, elementId }) => ({ code, severity, message, ...(elementId ? { element_id: elementId } : {}) })) };
 }
 
-// Concurrent renders in one process corrupt each other's captures (measured:
-// frames filled only at the top, black below), so renders in a process run one
-// at a time. Cancellation stays with the render itself: a render aborted while
-// queued still runs its cancellation path and writes a cancelled receipt.
-let renderQueue = Promise.resolve();
-export function withRenderLock(task) {
-  const run = renderQueue.then(task);
-  renderQueue = run.catch(() => {});
-  return run;
+// Concurrent captures in one process corrupt each other (measured: frames
+// filled only at the top, black below), so the browser capture
+// (executeRenderJob) runs one at a time per process; preparation, lint, the
+// scale-back and the decode check run outside the lock. A task whose signal is
+// aborted while it waits for its turn rejects at once with the abort reason
+// (the caller's cancellation path runs immediately) and never starts; once
+// started, a task is never abandoned: it settles on its own (the producer
+// observes the signal), so the lock is held until the capture has stopped.
+let captureQueue = Promise.resolve();
+export function withRenderLock(task, signal) {
+  let started = false;
+  const turn = captureQueue.then(() => { signal?.throwIfAborted(); started = true; return task(); });
+  captureQueue = turn.then(() => {}, () => {});
+  if (!signal) return turn;
+  return new Promise((resolve, reject) => {
+    const abandon = () => { if (!started) reject(signal.reason); };
+    signal.addEventListener('abort', abandon, { once: true });
+    if (signal.aborted) abandon();
+    turn.then(resolve, reject).finally(() => signal.removeEventListener('abort', abandon));
+  });
 }
 
-export function renderProject(root, destination, options = {}) {
-  return withRenderLock(() => renderProjectNow(root, destination, options));
-}
-
-async function renderProjectNow(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
+export async function renderProject(root, destination, { revision, preview = false, onProgress = () => {}, signal } = {}) {
   const { doc: project, templates, alignment, verified } = await loadProject(root, revision);
   // Source frame alignment: loadProject decided which assets' frame_rate
   // applies (stale ones are compiled without correction) and bound the document
@@ -183,7 +190,9 @@ async function renderProjectNow(root, destination, { revision, preview = false, 
     // removes the capture, and a partial video.mp4 on failure).
     const output = path.join(destination, 'video.mp4'), captured = scaled ? path.join(destination, 'capture.mp4') : output;
     try {
-      await executeRenderJob(job, destination, captured, (state, message) => onProgress({ status: state.status, progress: state.progress, message }), signal);
+      // Only the browser capture is serialized (withRenderLock).
+      await withRenderLock(() => executeRenderJob(job, destination, captured,
+        (state, message) => onProgress({ status: state.status, progress: state.progress, message }), signal), signal);
       if (job.status !== 'complete' || job.warnings.length) throw new Error(`Unqualified render outcome: ${job.status}`);
     } catch (error) {
       if (scaled) await fs.rm(captured, { force: true });
