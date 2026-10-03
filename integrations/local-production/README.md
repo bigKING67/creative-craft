@@ -263,7 +263,7 @@ npm run fetch-asr-model             # 下载固定模型到 ~/.cache/whisper-cpp
 node cli.mjs transcribe MEDIA NEW_OUT.json [--lang zh] [--model PATH] [--clean auto|on|off]
 ```
 
-模型固定为 `ggml-large-v3-turbo.bin`（1624555275 字节，SHA-256 `1fc70f77…e2bc69`，来源 `huggingface.co/ggerganov/whisper.cpp`，清单见 `asr.mjs` 的 `ASR_MODEL`），不入库。下载先写 `.partial`，大小与摘要均吻合后原子 rename；已存在且吻合则跳过，不吻合直接拒绝。每次转写前都核对模型：文件名必须是固定模型、大小与摘要必须吻合，否则报错（缺失时提示 `npm run fetch-asr-model`）；为免每次散列 1.6 GB，校验通过后在模型旁写 `*.sha256-verified.json`，仅当大小、inode、mtime 都未变时复用。
+模型固定为 `ggml-large-v3-turbo.bin`（1624555275 字节，SHA-256 `1fc70f77…e2bc69`，来源 `huggingface.co/ggerganov/whisper.cpp`，清单见 `asr.mjs` 的 `ASR_MODEL`），不入库。下载先写 `.partial`，大小与摘要均吻合后原子 rename；已存在且吻合则跳过，不吻合直接拒绝。每次转写前都核对模型：文件名必须是固定模型、大小与摘要必须吻合，否则报错（缺失时提示 `npm run fetch-asr-model`）；为免每次散列 1.6 GB，校验通过后在模型旁写 `*.sha256-verified.json`，仅当大小、inode、mtime、ctime 都未变时复用（ctime 无法由用户态改回，原地覆盖后即使恢复大小与 mtime 也会重新散列）。转写期间收到 SIGINT/SIGTERM 时先停止正在运行的 ffmpeg/whisper 子进程、同步删除私有临时音频目录，再以 130/143 退出；正常结束后注销该处理器。
 
 whisper 参数：`-l zh` 时附加 `--prompt "以下是普通话的句子。"`（引导简体与标点）。`--clean`：
 

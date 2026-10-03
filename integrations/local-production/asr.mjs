@@ -4,6 +4,7 @@
 // ASR text may contain wrong characters and timestamps are sentence-level; cut points
 // derived from it must be confirmed by listening.
 import * as fs from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { digest, ffprobeJson, run } from './project.mjs';
@@ -33,7 +34,9 @@ const ffmpegBin = () => mediaTool('ffmpeg');
 const round = value => Math.round(value * 1000) / 1000;
 
 // Hashing 1.6 GB takes seconds, so a verified digest is cached next to the model and
-// reused only while size, inode and mtime are unchanged. Mismatch always throws.
+// reused only while size, inode, mtime and ctime are unchanged. ctime cannot be set
+// from user space, so an in-place rewrite that restores size and mtime still
+// invalidates the cache. Mismatch always throws.
 export async function verifyModel(file, manifest = ASR_MODEL) {
   if (path.basename(file) !== manifest.file) throw new Error(`Unpinned ASR model ${path.basename(file)}; expected ${manifest.file}`);
   const stat = await fs.stat(file).catch(error => {
@@ -42,7 +45,8 @@ export async function verifyModel(file, manifest = ASR_MODEL) {
   });
   if (!stat.isFile()) throw new Error(`ASR model is not a regular file: ${file}`);
   if (stat.size !== manifest.bytes) throw new Error(`ASR model SHA-256 mismatch: ${file} has ${stat.size} bytes, expected ${manifest.bytes}`);
-  const marker = `${file}.sha256-verified.json`, identity = { size: stat.size, ino: stat.ino, mtimeMs: stat.mtimeMs, sha256: manifest.sha256 };
+  const marker = `${file}.sha256-verified.json`;
+  const identity = { size: stat.size, ino: stat.ino, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, sha256: manifest.sha256 };
   const cached = await fs.readFile(marker, 'utf8').then(JSON.parse).catch(() => null);
   if (cached && Object.keys(identity).every(key => cached[key] === identity[key])) return manifest.sha256;
   const actual = await digest(file);
@@ -82,15 +86,33 @@ export function needsCleanRetry(coverage, active) {
   return active >= ACTIVITY.min_active_seconds && coverage < active * ACTIVITY.retry_ratio;
 }
 
-async function activeSeconds(wav, duration) {
+// Which attempt is kept and why. Attempt 0 is plain (or the forced clean pass
+// under --clean on); attempt 1, when present, is the clean retry that
+// needsCleanRetry asked for. The retry is kept only if it covers more.
+export function chooseAttempt(clean, active, coverages) {
+  const chosen = coverages.length > 1 && coverages[1] > coverages[0] ? 1 : 0;
+  const threshold = round(active * ACTIVITY.retry_ratio), [plain, cleaned] = coverages;
+  const reason = clean === 'on' ? 'clean forced (--clean on)'
+    : clean === 'off' ? 'plain only (--clean off)'
+      : coverages.length > 1
+        ? (chosen === 1
+          ? `clean retry chosen: plain coverage ${plain}s < ${threshold}s (50% of ${active}s active audio); clean covered ${cleaned}s`
+          : `plain kept after retry: clean coverage ${cleaned}s did not exceed plain ${plain}s`)
+        : active < ACTIVITY.min_active_seconds
+          ? `plain kept: only ${active}s of active audio (< ${ACTIVITY.min_active_seconds}s)`
+          : `plain kept: coverage ${plain}s >= ${threshold}s (50% of ${active}s active audio)`;
+  return { chosen, reason };
+}
+
+async function activeSeconds(wav, duration, signal) {
   const { stderr } = await run(ffmpegBin(), ['-hide_banner', '-nostats', '-i', wav, '-af',
-    silenceFilter(ACTIVITY.noise_db, ACTIVITY.min_silence_seconds), '-f', 'null', '-'], { timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
+    silenceFilter(ACTIVITY.noise_db, ACTIVITY.min_silence_seconds), '-f', 'null', '-'], { timeout: 600000, maxBuffer: 64 * 1024 * 1024, signal });
   return round(Math.max(0, duration - coverageSeconds(silences(stderr, duration), duration)));
 }
 
-async function attempt(wav, out, model, language, extraArgs, duration) {
+async function attempt(wav, out, model, language, extraArgs, duration, signal) {
   const args = ['-m', model, '-l', language, '-f', wav, '-oj', '-of', out, '-np', ...(language === 'zh' ? ['--prompt', ZH_PROMPT] : []), ...extraArgs];
-  await run(whisperBin(), args, { timeout: Math.max(120000, duration * 20000), maxBuffer: 64 * 1024 * 1024 });
+  await run(whisperBin(), args, { timeout: Math.max(120000, duration * 20000), maxBuffer: 64 * 1024 * 1024, signal });
   const result = JSON.parse(await fs.readFile(`${out}.json`, 'utf8'));
   const segments = (result.transcription ?? []).map(item => ({
     start: round(item.offsets.from / 1000), end: round(Math.min(duration, item.offsets.to / 1000)), text: item.text.trim(),
@@ -124,39 +146,36 @@ export async function transcribe(media, output, { lang = 'zh', model = defaultMo
   const mediaSha = await digest(media);
 
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'creative-asr-'));
+  // The temp dir holds extracted customer audio. On SIGINT/SIGTERM the async
+  // finally below would never run (the default handler exits immediately), so
+  // stop the running ffmpeg/whisper child, delete the dir synchronously and
+  // exit 130/143. The handlers are removed again when transcription ends.
+  const controller = new AbortController(), signal = controller.signal;
+  const onSignal = name => {
+    controller.abort();
+    try { rmSync(tmp, { recursive: true, force: true }); } finally { process.exit(name === 'SIGINT' ? 130 : 143); }
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
   try {
     const wav = path.join(tmp, 'audio.wav');
-    await run(ffmpegBin(), ['-nostdin', '-v', 'error', '-i', media, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], { timeout: 600000 });
-    const active = await activeSeconds(wav, duration);
+    await run(ffmpegBin(), ['-nostdin', '-v', 'error', '-i', media, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], { timeout: 600000, signal });
+    const active = await activeSeconds(wav, duration, signal);
     const attempts = [], results = [];
     const runAttempt = async cleaned => {
       let input = wav;
       if (cleaned) {
         input = path.join(tmp, 'clean.wav');
-        await run(ffmpegBin(), ['-nostdin', '-v', 'error', '-i', wav, '-af', CLEAN_FILTER, '-c:a', 'pcm_s16le', input], { timeout: 600000 });
+        await run(ffmpegBin(), ['-nostdin', '-v', 'error', '-i', wav, '-af', CLEAN_FILTER, '-c:a', 'pcm_s16le', input], { timeout: 600000, signal });
       }
       const extra = cleaned ? [...CLEAN_ARGS] : [];
-      const result = await attempt(input, path.join(tmp, `attempt-${attempts.length}`), modelPath, lang, extra, duration);
+      const result = await attempt(input, path.join(tmp, `attempt-${attempts.length}`), modelPath, lang, extra, duration, signal);
       attempts.push({ params: { preprocess: cleaned ? CLEAN_FILTER : null, whisper_args: extra }, coverage_seconds: result.coverage });
       results.push(result);
     };
-    let reason;
-    if (clean === 'on') { await runAttempt(true); reason = 'clean forced (--clean on)'; }
-    else {
-      await runAttempt(false);
-      const threshold = round(active * ACTIVITY.retry_ratio);
-      if (clean === 'off') reason = 'plain only (--clean off)';
-      else if (active < ACTIVITY.min_active_seconds) reason = `plain kept: only ${active}s of active audio (< ${ACTIVITY.min_active_seconds}s)`;
-      else if (!needsCleanRetry(results[0].coverage, active)) {
-        reason = `plain kept: coverage ${results[0].coverage}s >= ${threshold}s (50% of ${active}s active audio)`;
-      } else {
-        await runAttempt(true);
-        reason = results[1].coverage > results[0].coverage
-          ? `clean retry chosen: plain coverage ${results[0].coverage}s < ${threshold}s (50% of ${active}s active audio); clean covered ${results[1].coverage}s`
-          : `plain kept after retry: clean coverage ${results[1].coverage}s did not exceed plain ${results[0].coverage}s`;
-      }
-    }
-    const chosen = results.length > 1 && results[1].coverage > results[0].coverage ? 1 : 0;
+    await runAttempt(clean === 'on');
+    if (clean === 'auto' && needsCleanRetry(results[0].coverage, active)) await runAttempt(true);
+    const { chosen, reason } = chooseAttempt(clean, active, results.map(r => r.coverage));
     const transcript = {
       schema: TRANSCRIPT_SCHEMA,
       media: { path_basename: path.basename(media), sha256: mediaSha, duration },
@@ -173,6 +192,8 @@ export async function transcribe(media, output, { lang = 'zh', model = defaultMo
     return { status: 'transcribed', output, chosen_attempt: chosen, choice_reason: reason,
       coverage_seconds: attempts[chosen].coverage_seconds, duration, segments: transcript.segments.length };
   } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
     await fs.rm(tmp, { recursive: true, force: true });
   }
 }

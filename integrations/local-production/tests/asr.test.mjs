@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { run } from '../project.mjs';
 import { mediaTool } from '../media-analysis.mjs';
-import { ASR_MODEL, TRANSCRIPT_SCHEMA, coverageSeconds, defaultModelPath, needsCleanRetry, parseTranscribeArgs, toPlanEvidence,
+import { spawn } from 'node:child_process';
+import { ASR_MODEL, TRANSCRIPT_SCHEMA, chooseAttempt, coverageSeconds, defaultModelPath, needsCleanRetry, parseTranscribeArgs, toPlanEvidence,
   transcribe, verifyModel, whisperVersion } from '../asr.mjs';
 
 // Only synthesized audio is used here; customer media must never be copied into tests.
@@ -38,6 +39,68 @@ test('model digest mismatch is rejected, a verified digest is cached and invalid
   assert.ok(JSON.parse(await fs.readFile(`${file}.sha256-verified.json`, 'utf8')).sha256 === good.sha256);
   await fs.writeFile(file, 'jello'); // same size, new content: cache must not vouch for it
   await assert.rejects(verifyModel(file, good), /SHA-256 mismatch/);
+});
+
+test('an in-place rewrite that restores size and mtime is still re-hashed (ctime is part of the cache identity)', async t => {
+  const dir = await directory(t), file = path.join(dir, 'tiny.bin');
+  const good = { file: 'tiny.bin', bytes: 5, sha256: createHash('sha256').update('hello').digest('hex') };
+  await fs.writeFile(file, 'hello');
+  await fs.utimes(file, 1700000000, 1700000000);
+  assert.equal(await verifyModel(file, good), good.sha256);
+  const before = await fs.stat(file), marker = JSON.parse(await fs.readFile(`${file}.sha256-verified.json`, 'utf8'));
+  assert.equal(marker.ctimeMs, before.ctimeMs);
+  const handle = await fs.open(file, 'r+'); // same inode, same size
+  await handle.write('jello', 0); await handle.close();
+  await fs.utimes(file, 1700000000, 1700000000); // mtime restored exactly
+  const after = await fs.stat(file);
+  assert.deepEqual([after.size, after.ino, after.mtimeMs], [before.size, before.ino, before.mtimeMs]);
+  assert.notEqual(after.ctimeMs, before.ctimeMs);
+  await assert.rejects(verifyModel(file, good), /SHA-256 mismatch/);
+});
+
+test('attempt choice: one decision, reason derived from it', () => {
+  assert.deepEqual(chooseAttempt('on', 10, [3]), { chosen: 0, reason: 'clean forced (--clean on)' });
+  assert.deepEqual(chooseAttempt('off', 10, [1]), { chosen: 0, reason: 'plain only (--clean off)' });
+  assert.deepEqual(chooseAttempt('auto', 1.5, [0]), { chosen: 0, reason: 'plain kept: only 1.5s of active audio (< 2s)' });
+  assert.deepEqual(chooseAttempt('auto', 10, [6]), { chosen: 0, reason: 'plain kept: coverage 6s >= 5s (50% of 10s active audio)' });
+  assert.deepEqual(chooseAttempt('auto', 10, [2, 7]),
+    { chosen: 1, reason: 'clean retry chosen: plain coverage 2s < 5s (50% of 10s active audio); clean covered 7s' });
+  assert.deepEqual(chooseAttempt('auto', 10, [2, 2]), { chosen: 0, reason: 'plain kept after retry: clean coverage 2s did not exceed plain 2s' });
+});
+
+test('SIGTERM during transcription removes the private audio dir, stops whisper and exits 143', { timeout: 180000 }, async t => {
+  try { await verifyModel(defaultModelPath()); } catch (error) {
+    if (error.code === 'ENOENT') return t.skip(`ASR model missing at ${defaultModelPath()} (npm run fetch-asr-model)`);
+    throw error;
+  }
+  const dir = await directory(t), scratch = path.join(dir, 'tmp'), media = path.join(dir, 'tone.wav');
+  const fake = path.join(dir, 'fake-whisper.sh'), started = path.join(dir, 'whisper.pid');
+  await fs.mkdir(scratch);
+  await ffmpeg('-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '3', media);
+  // Stand-in whisper-cli: answers --version, then records its pid and sleeps (exec keeps the pid).
+  await fs.writeFile(fake, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "whisper.cpp version: 0.0.0-test"; exit 0; fi\necho $$ > "${started}"\nexec sleep 60\n`, { mode: 0o755 });
+  const script = `import { transcribe } from ${JSON.stringify(new URL('../asr.mjs', import.meta.url).href)};
+await transcribe(${JSON.stringify(media)}, ${JSON.stringify(path.join(dir, 'out.json'))}, { clean: 'off' });`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, TMPDIR: scratch, CREATIVE_WHISPER: fake }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = new Promise(resolve => child.on('exit', (code, signal) => resolve({ code, signal })));
+  let pid = null;
+  for (let i = 0; i < 600 && !pid; i++) {
+    pid = Number(await fs.readFile(started, 'utf8').catch(() => '')) || null;
+    if (!pid) await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.ok(pid, `fake whisper never started: ${stderr}`);
+  assert.equal((await fs.readdir(scratch)).length, 1, 'the private temp dir exists while whisper runs');
+  child.kill('SIGTERM');
+  assert.deepEqual(await exited, { code: 143, signal: null }, stderr);
+  assert.deepEqual(await fs.readdir(scratch), []);
+  await assert.rejects(fs.access(path.join(dir, 'out.json')));
+  let alive = true;
+  for (let i = 0; i < 50 && alive; i++) {
+    try { process.kill(pid, 0); await new Promise(resolve => setTimeout(resolve, 100)); } catch { alive = false; }
+  }
+  assert.equal(alive, false, 'the whisper child is stopped as well');
 });
 
 test('transcribe refuses a mismatched model before touching media or whisper', async t => {
