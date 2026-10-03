@@ -1,10 +1,10 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
-import { digest, ffprobeJson, readProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
+import { digest, ffprobeJson, loadProject, run, safePath, validateDocument, migrateV1, SCHEMA_V2 } from './project.mjs';
 import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
-import { requireTemplates } from './templates.mjs';
+import { templateSet } from './templates.mjs';
 import { burnedCaptionCheck, captionBand } from './burned-captions.mjs';
 import { logSegments, mediaTool, overlap, silenceFilter, silences, union } from './media-analysis.mjs';
 
@@ -58,7 +58,7 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   const receipt = JSON.parse(await fs.readFile(path.join(renderDir, 'receipt.json'), 'utf8'));
   if (receipt.status !== 'completed' || !receipt.output) fail(`Render is not completed: ${receipt.status}`);
   // Bind QA to one revision: snapshot digest, revision file digest and output digest.
-  const project = await readProject(root, receipt.revision);
+  const { doc: project, templates } = await loadProject(root, receipt.revision);
   const revisionSha = await digest(revisionFile(root, receipt.revision));
   if (!receipt.revision_sha256 || receipt.revision_sha256 !== revisionSha) fail('Render receipt is not bound to this revision digest');
   const snapshotFile = path.join(renderDir, 'project.json');
@@ -72,7 +72,7 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   await fs.mkdir(path.join(qaDir, 'frames'));
   await fs.mkdir(path.join(qaDir, 'clips'));
 
-  const { frames: expectedFrames } = validateDocument(project);
+  const { frames: expectedFrames } = validateDocument(project, { templates });
   const doc = project.schema_version === SCHEMA_V2 ? project : migrateV1(project);
   const fps = doc.canvas.fps, expectedSeconds = expectedFrames / fps;
   const media = await probeRender(video);
@@ -206,8 +206,8 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
   };
   safeArea('caption-safe-area', 'captions', captions.map(c => ({ id: c.item.id, box: captionBox(doc.canvas, c.item) })), e => captionSample.get(e.id), 'caption',
     'compiled-layout-estimate', n => `All ${n} caption box(es) are inside the 5% safe margin (layout estimate, not a pixel detection).`);
-  const graphicItems = doc.items.filter(i => i.kind === 'graphic');
-  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(i, requireTemplates(doc)), frame: i.start_frame + Math.floor(i.frames / 2) })),
+  const graphicItems = doc.items.filter(i => i.kind === 'graphic'), graphicTemplates = graphicItems.length ? templateSet(doc, templates) : null;
+  safeArea('graphic-safe-area', 'video', graphicItems.map(i => ({ id: i.id, box: graphicBox(i, graphicTemplates), frame: i.start_frame + Math.floor(i.frames / 2) })),
     e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic', 'template-load-guarantee',
     n => `${n} graphic(s) render in their template box; template load validation guarantees every template box lies inside the 5% safe margin. Not a pixel detection, and text fit inside the box is not measured.`);
 

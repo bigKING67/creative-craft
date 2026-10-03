@@ -12,13 +12,16 @@ import { resolveCaptions } from '../timeline.mjs';
 
 const fixtures = fileURLToPath(new URL('../../../tests/fixtures/edit-document-v2/', import.meta.url));
 const load = async (dir, name) => JSON.parse(await fs.readFile(path.join(fixtures, dir, name), 'utf8'));
+// Shared fixtures carry placeholder template digests (no bound bytes exist), so
+// pinned ones are validated structurally only; that mode must be explicit.
+const sharedOptions = doc => ('graphic_templates' in doc ? { structuralOnly: true } : {});
 
 test('shared fixtures: every valid document passes semantic validation', async () => {
   const names = (await fs.readdir(path.join(fixtures, 'valid'))).filter(n => n.endsWith('.json'));
   assert.ok(names.length > 0);
   for (const name of names) {
     const doc = await load('valid', name);
-    assert.doesNotThrow(() => validateV2(doc), name);
+    assert.doesNotThrow(() => validateV2(doc, sharedOptions(doc)), name);
   }
 });
 // File name = violated rule. Known names also assert the rejection reason.
@@ -42,12 +45,18 @@ const reasons = { 'audio-only-asset-on-video-track': /has no video/, 'caption-li
   // Graphic templates pinned to the revision.
   'graphic-template-unbound': /Graphic item lower uses template lower-third without a graphic_templates binding/, 'graphic-template-duplicate-binding': /Duplicate graphic template binding: lower-third/,
   'graphic-template-unused-binding': /Unused graphic template binding: title-card/, 'graphic-template-file-mismatch': /file must be templates\/<sha256>\.json/ };
+test('a pinned document is never validated without its template set unless structural-only is explicit', async () => {
+  const doc = await load('valid', 'pinned-templates.json');
+  assert.throws(() => validateV2(doc), /pinned to this revision are not loaded/);
+  assert.throws(() => validateV2(structuredClone(doc)), /pinned to this revision are not loaded/);
+  validateV2(doc, { structuralOnly: true });
+});
 test('shared fixtures: every invalid document is rejected', async () => {
   const names = (await fs.readdir(path.join(fixtures, 'invalid'))).filter(n => n.endsWith('.json'));
   assert.ok(names.length >= 12);
   for (const name of names) {
     const doc = await load('invalid', name);
-    assert.throws(() => validateV2(doc), reasons[name.slice(0, -5)] ?? Error, `${name} must be rejected`);
+    assert.throws(() => validateV2(doc, sharedOptions(doc)), reasons[name.slice(0, -5)] ?? Error, `${name} must be rejected`);
   }
 });
 

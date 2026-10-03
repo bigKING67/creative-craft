@@ -17,7 +17,7 @@ export const PLACEMENT_VAR = 'placement';
 // 1080 wide: 32.4 px). The rule is stated against the canvas width; on landscape
 // canvases the shorter edge (height) is used so 1 em keeps one meaning for every
 // aspect ratio (see README).
-export const MIN_TEXT_EM = 3;
+export let MIN_TEXT_EM = 3;
 const fail = message => { throw new Error(message); };
 // Shared with document validation (edit-document.mjs): template ids, var names and
 // the structural rule for var values (template types are checked separately).
@@ -132,38 +132,72 @@ export function enforceMinimumText(template) {
 }
 const freeze = value => { for (const v of Object.values(value)) if (v && typeof v === 'object') freeze(v); return Object.freeze(value); };
 export const templateSha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-// One parse path for execution-layer and project-bound template bytes: the
-// minimum text size and every load rule apply to both.
-export const parseTemplate = (name, bytes) => freeze(validateTemplate(name, enforceMinimumText(JSON.parse(Buffer.from(bytes).toString('utf8')))));
+// Deterministic serialization of a normalized template: these are the bytes a
+// revision binds, and their sha256 is the binding digest.
+export const serializeTemplate = template => `${JSON.stringify(template, null, 2)}\n`;
+const decode = bytes => Buffer.from(bytes).toString('utf8');
 
-// Execution-layer templates: parsed, validated bytes plus their digest (taken
-// over the same bytes). Edit revisions pin these bytes (graphic_templates);
-// revisions without bindings render with whatever this registry holds.
+// Execution-layer source bytes -> the normalized template (minimum text size
+// applied, every load rule checked) and its serialized bytes and digest.
+export function normalizeTemplate(name, source) {
+  const template = validateTemplate(name, enforceMinimumText(JSON.parse(decode(source))));
+  const bytes = Buffer.from(serializeTemplate(template));
+  return Object.freeze({ template: freeze(template), bytes, sha256: templateSha256(bytes) });
+}
+
+// Project-bound bytes are used exactly as bound: the safety and structure rules
+// (validateTemplate) run again, but nothing is rewritten, so a later change to
+// a normalization rule (such as MIN_TEXT_EM) never changes a pinned revision.
+// Bindings written before normalization pinned raw source bytes (detected as
+// bytes that are not the serialization of their own content); those were
+// normalized on every load, so if the current normalization would change them
+// they are refused as a rule difference instead of being silently rewritten.
+export function parseBoundTemplate(name, bytes) {
+  const text = decode(bytes), template = validateTemplate(name, JSON.parse(text));
+  if (text !== serializeTemplate(template) && serializeTemplate(enforceMinimumText(structuredClone(template))) !== serializeTemplate(template)) {
+    fail(`Graphic template ${name}: bound raw (pre-normalization) bytes differ from the current template rules (text below the ${MIN_TEXT_EM} em minimum); they are not rewritten`);
+  }
+  return freeze(template);
+}
+
+// Execution-layer templates: normalized templates plus the serialized bytes
+// and digest a revision binds (graphic_templates); revisions without bindings
+// render with whatever this registry holds.
 function loadRuntime(dir) {
   return new Map(readdirSync(dir).filter(n => n.endsWith('.json')).sort().map(file => {
-    const name = file.slice(0, -5), bytes = readFileSync(new URL(file, dir));
-    return [name, Object.freeze({ template: parseTemplate(name, bytes), bytes, sha256: templateSha256(bytes) })];
+    const name = file.slice(0, -5);
+    return [name, normalizeTemplate(name, readFileSync(new URL(file, dir)))];
   }));
 }
+let runtimeDir = directory;
 let RUNTIME = loadRuntime(directory);
 export let TEMPLATES = new Map([...RUNTIME].map(([name, entry]) => [name, entry.template]));
 export const runtimeTemplate = name => RUNTIME.get(name) ?? fail(`Unknown graphic template: ${name}`);
 // Test hook: simulates an execution-layer template upgrade. Returns a restore function.
+const swap = (registry, dir) => { [RUNTIME, runtimeDir] = [registry, dir]; TEMPLATES = new Map([...RUNTIME].map(([name, entry]) => [name, entry.template])); };
 export function useRuntimeTemplates(dir) {
-  const saved = RUNTIME;
-  const swap = registry => { RUNTIME = registry; TEMPLATES = new Map([...RUNTIME].map(([name, entry]) => [name, entry.template])); };
-  swap(loadRuntime(dir instanceof URL ? dir : pathToFileURL(dir.endsWith('/') ? dir : `${dir}/`)));
-  return () => swap(saved);
+  const saved = [RUNTIME, runtimeDir];
+  dir = dir instanceof URL ? dir : pathToFileURL(dir.endsWith('/') ? dir : `${dir}/`);
+  swap(loadRuntime(dir), dir);
+  return () => swap(...saved);
+}
+// Test hook: simulates a stricter minimum text rule (execution layer reloaded).
+export function useMinimumText(em) {
+  const saved = [MIN_TEXT_EM, RUNTIME, runtimeDir];
+  MIN_TEXT_EM = em;
+  swap(loadRuntime(runtimeDir), runtimeDir);
+  return () => { MIN_TEXT_EM = saved[0]; swap(saved[1], saved[2]); };
 }
 
-// Template set of a document: revisions with graphic_templates use only the
-// bound bytes loaded from their project (attached by readProject or the edit
-// path); revisions without the field use the execution-layer registry. null
-// means the revision pins templates whose bytes are not loaded here.
-const BOUND = new WeakMap();
-export const attachTemplates = (doc, templates) => { BOUND.set(doc, templates); return doc; };
-export const templatesFor = doc => (doc?.graphic_templates ? BOUND.get(doc) ?? null : TEMPLATES);
-export const requireTemplates = doc => templatesFor(doc) ?? fail('Graphic templates pinned to this revision are not loaded; read the revision from its project');
+// Template set of a document, always passed explicitly: revisions with
+// graphic_templates use only the bound bytes loaded from their project
+// (loadProject returns them with the document); revisions without the field
+// use the execution-layer registry. A pinned document without its set fails.
+export function templateSet(doc, templates) {
+  if (templates) return templates;
+  if (doc?.graphic_templates !== undefined) fail('Graphic templates pinned to this revision are not loaded; read the revision with its template set (loadProject)');
+  return TEMPLATES;
+}
 
 export const getTemplate = (name, templates = TEMPLATES) => templates.get(name) ?? fail(`Unknown graphic template: ${name}`);
 // Receipt provenance: pinned bindings name the project file; unpinned
