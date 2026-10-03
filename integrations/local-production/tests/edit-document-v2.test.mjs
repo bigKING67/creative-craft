@@ -284,6 +284,16 @@ test('graphic text: every string var renders at ≥ 3% of the shorter canvas edg
   small.vars.subtitle.font_em = 1.7;
   assert.equal(enforceMinimumText(small).vars.subtitle.font_em, MIN_TEXT_EM);
   validateTemplate('lower-third', small);
+  // No other CSS route to a smaller (or larger) rendered text size.
+  for (const extra of ['.gfx-lower-third-title{font:700 1em sans-serif}', '.gfx-lower-third-title{ FONT : 1em serif}', '.gfx-lower-third-title{zoom:.5}',
+    '.gfx-lower-third-text{transform:scale(.5)}', '.gfx-lower-third-text{-webkit-transform:translateX(1em)}', '.gfx-lower-third-text{scale:.5}',
+    '.gfx-lower-third-text{font-size-adjust:.2}', '.gfx-lower-third-text{-webkit-text-size-adjust:50%}', '.gfx-lower-third-text{--fs-title:1px}',
+    '.gfx-lower-third-title{background:var(--accent);width:calc(scale(2))}', '.gfx-lower-third-text{fo/**/nt:1em a}', '.gfx-lower-third-text{\\66ont:1em a}']) {
+    const bad = structuredClone(TEMPLATES.get('lower-third'));
+    bad.css += extra;
+    assert.throws(() => validateTemplate('lower-third', bad), /could change text size|comments and escapes/, extra);
+  }
+  for (const template of TEMPLATES.values()) validateTemplate(template.id, structuredClone(template)); // shipped templates stay valid
   // Raising a size still has to fit: the worst-case width check runs on the raised size.
   const tight = structuredClone(TEMPLATES.get('lower-third'));
   tight.vars.subtitle.font_em = 1; tight.vars.subtitle.max_length = 30;
@@ -534,6 +544,8 @@ test('render receipts can name the template bytes behind each graphic', async ()
   for (const p of provenance) {
     assert.equal(p.version, getTemplate(p.id).version);
     assert.match(p.sha256, /^[a-f0-9]{64}$/);
+    const bytes = await fs.readFile(new URL(`../templates/${p.id}.json`, import.meta.url));
+    assert.equal(p.sha256, (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'));
   }
   assert.deepEqual(templateProvenance({ items: [] }), []);
 });

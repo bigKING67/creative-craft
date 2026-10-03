@@ -34,6 +34,9 @@ const exact = (value, allowed, label) => {
 };
 const fraction = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 const PLACEMENT_NAME = /^[a-z][a-z0-9_]{0,31}$/;
+// CSS properties (vendor prefix stripped) that can change rendered text size
+// other than font-size:var(--fs-<var>).
+const TEXT_SIZE_PROPERTIES = ['font', 'zoom', 'transform', 'scale', 'font-size-adjust', 'text-size-adjust'];
 
 function validateBox(name, label, box) {
   exact(box, ['left', 'top', 'width', 'height'], `Graphic template ${name} placement ${label}`);
@@ -94,6 +97,16 @@ export function validateTemplate(name, template) {
   // Text sizes come only from font_em (emitted as --fs-<var>), so the minimum
   // size rule cannot be bypassed by a literal font-size in the CSS.
   if ([...template.css.matchAll(/font-size\s*:\s*([^;}]*)/g)].some(m => !/^var\(--fs-[a-z][a-z0-9_]*\)$/.test(m[1].trim()))) fail(`Graphic template ${name}: CSS font-size must be var(--fs-<var>)`);
+  // Nor by anything else that changes rendered text size: the font shorthand,
+  // zoom, transforms/scale (translate-only positioning is not offered either),
+  // size-adjust properties, or redefining a --fs-* property below the root.
+  // Comments and escapes are refused so none of these can be spelled around.
+  if (/\/\*|\\/.test(template.css)) fail(`Graphic template ${name}: CSS comments and escapes are not allowed`);
+  for (const [, property] of template.css.matchAll(/(?:^|[{;])\s*([-a-zA-Z0-9_]+)\s*:/g)) {
+    const bare = property.toLowerCase().replace(/^-(webkit|moz|ms|o)-/, '');
+    if (TEXT_SIZE_PROPERTIES.includes(bare) || bare.startsWith('--fs-')) fail(`Graphic template ${name}: CSS property ${property} could change text size`);
+  }
+  if (/\b(scale|scale3d|scalex|scaley|scalez|matrix|matrix3d)\s*\(/i.test(template.css)) fail(`Graphic template ${name}: CSS scale()/matrix() could change text size`);
   // Only inline <span> markup with class attributes: one timeline row per graphic
   // (HyperFrames lint flags nested block structure inside a timed element).
   const tags = [...template.html.matchAll(/<\/?([a-zA-Z0-9-]+)([^>]*)>/g)];
@@ -117,17 +130,17 @@ export function enforceMinimumText(template) {
   return template;
 }
 const freeze = value => { for (const v of Object.values(value)) if (v && typeof v === 'object') freeze(v); return Object.freeze(value); };
+// Templates are not pinned inside edit revisions; receipts record which template
+// bytes rendered a revision so a later template change is visible in provenance.
+// The digest is taken over the same bytes that were parsed and validated.
+const TEMPLATE_SHA256 = new Map();
 export const TEMPLATES = new Map(readdirSync(directory).filter(n => n.endsWith('.json')).sort().map(file => {
-  const name = file.slice(0, -5);
-  return [name, freeze(validateTemplate(name, enforceMinimumText(JSON.parse(readFileSync(new URL(file, directory), 'utf8')))))];
+  const name = file.slice(0, -5), bytes = readFileSync(new URL(file, directory));
+  TEMPLATE_SHA256.set(name, createHash('sha256').update(bytes).digest('hex'));
+  return [name, freeze(validateTemplate(name, enforceMinimumText(JSON.parse(bytes.toString('utf8')))))];
 }));
 
 export const getTemplate = name => TEMPLATES.get(name) ?? fail(`Unknown graphic template: ${name}`);
-
-// Templates are not pinned inside edit revisions; receipts record which template
-// bytes rendered a revision so a later template change is visible in provenance.
-const TEMPLATE_SHA256 = new Map([...TEMPLATES.keys()].map(name =>
-  [name, createHash('sha256').update(readFileSync(new URL(`${name}.json`, directory))).digest('hex')]));
 export const templateProvenance = doc => [...new Set((doc.items ?? []).filter(i => i.kind === 'graphic').map(i => i.template))]
   .sort().map(id => ({ id, version: getTemplate(id).version, sha256: TEMPLATE_SHA256.get(id) }));
 
