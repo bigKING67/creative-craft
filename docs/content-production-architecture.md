@@ -155,6 +155,15 @@ EditDocument v2 是剪辑真源；HyperFrames HTML 只是编译产物，不反�
 - **导出人工评审** `policy.export_requires_human_review`（可选，缺省 false）：为 true 时，inspect 阶段在评审接受后必须再经显式签字 `video-approve --stage inspect --by <name>` 才能完成，导出所依据的那次通过检查必须带有该签字。render-qa 中的 `review.reviewer_kind` 只是 Agent 写入的说明，不作为人工证据。边界：本地 CLI 无法核实签字人是否真人，签字只提供具名、可追溯的责任记录；真实身份认证由宿主（如 AIOS 的登录用户）绑定到签字动作。
 - **QA 补充**：引用渲染回执中的 `audioLoweredDb` 作为真峰值限幅证据；字幕与图形采样帧检查安全区（距画面边缘 5%）。
 
+### 图形模板固定到修订（2026-10-03）
+
+修订是可复现的渲染依据，图形模板也必须随修订固定，而不是只按 id 引用当前执行层模板。
+
+- 顶层可选字段 `graphic_templates: [{id, version, sha256, file}]`：`file` 必须等于 `templates/<sha256>.json`，是模板 JSON 原始字节按内容寻址复制进工程目录的文件。字段存在时，每个 graphic item 的 `template` 必须恰有一个同 id 的绑定；绑定 id 不得重复，也不得存在未被任何 graphic 使用的绑定。
+- 字段缺失的历史修订仍然有效，渲染使用当前执行层模板，回执标记 `pinned: false`；不自动改写旧修订。
+- Node 执行层：创建或编辑产生的新修订只要含 graphic，就绑定所用模板（首次使用时复制当前模板字节）；渲染只从工程内绑定文件加载模板，核对 sha256 并重新执行模板校验，缺失或不符即失败。显式操作 `rebind_template {template}` 把某个模板升级到当前执行层版本，必须单独成批，作为可追溯的决定；其余操作不会改变已有绑定。
+- Python 只校验结构与覆盖规则；模板内容与变量类型仍由 Node 校验。
+
 ### 编辑操作（P0）
 
 一次调用提交一个批次：`{ base_revision, author, summary, operations[] }`。整批校验通过才发布新修订；`--dry-run` 只返回 diff（新增/删除/变更的 item、时长变化）不发布；基于过期修订提交直接拒绝，需重读。操作：`add_asset`、`add_track`、`edit_track`（lock/unlock/rename）、`add_item`、`remove_item`（可选同轨 ripple）、`move_item`（改轨或起点）、`trim_item`（入/出点，或 slip 只移源入点）、`split_item`（链接字幕随之拆分归属）、`replace_media`（保持时序，未给新字幕则移除旧链接字幕）、`set_item_props`（volume/fit/opacity/transform/text/style）、`revert_to`（以旧修订内容发布新修订，必须单独成批；不解除当前锁定，也不能改动当前锁定轨道的内容）。修改轨道锁定状态的 `edit_track` 必须单独成批，避免“先解锁再修改”藏在同一批次中。转场、变速、淡入淡出、音乐自动闪避、图形模板属于 P2。
