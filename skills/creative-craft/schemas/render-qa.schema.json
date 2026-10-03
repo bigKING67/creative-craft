@@ -93,7 +93,7 @@
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "time_seconds": {"type": "number", "minimum": 0},
-        "reason": {"enum": ["item_mid", "cut_before", "cut_after", "caption", "manual"]},
+        "reason": {"enum": ["item_mid", "cut_before", "cut_after", "caption", "shot", "manual"]},
         "item_id": {"type": "string", "minLength": 1},
         "file": {"type": "string", "minLength": 1},
         "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
