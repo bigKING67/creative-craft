@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createProject, editProject, editBatch, readProject, digest, run } from './project.mjs';
 import { renderProject } from './render.mjs';
 import { verifySmoke, verifyMultitrack, verifyBrand, captionSource, frameAt, pcmAt, mae } from './verify-smoke.mjs';
+import { mediaTool } from './media-analysis.mjs';
 
 // Self-authored synthetic signals; no customer assets, ASR, TTS or paid APIs.
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,7 @@ print(len(sys.argv)-2)`, path.join(repo, 'skills/creative-craft/schemas', schema
 await validateSchema('render-qa.schema.json', [path.join(repo, 'tests/fixtures/render-qa/sample.json')]);
 
 await fs.mkdir(base, { recursive: true });
-const ffmpeg = process.env.CREATIVE_FFMPEG || 'ffmpeg';
+const ffmpeg = mediaTool('ffmpeg');
 const source = path.join(base, 'source.mp4'), broll = path.join(base, 'broll.mp4'), music = path.join(base, 'music.m4a');
 await run(ffmpeg, ['-v', 'error', '-n', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=6',
   '-f', 'lavfi', '-i', 'aevalsrc=0.1*sin(2*PI*if(lt(t\\,3)\\,440\\,880)*t):s=48000:d=6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', source]);

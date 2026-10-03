@@ -9,6 +9,7 @@ import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCa
   validateV2, migrateV1 } from './edit-document.mjs';
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
 import { checkVolumeAutomation } from './timeline.mjs';
+import { mediaTool } from './media-analysis.mjs';
 
 export const run = promisify(execFile);
 export const SCHEMA = SCHEMA_V1;
@@ -36,7 +37,7 @@ export async function safePath(value) {
 
 // Single ffprobe invocation shared by import probing and render QA.
 export async function ffprobeJson(file) {
-  const { stdout } = await run(process.env.CREATIVE_FFPROBE || 'ffprobe',
+  const { stdout } = await run(mediaTool('ffprobe'),
     ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file],
     { timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
   return JSON.parse(stdout);

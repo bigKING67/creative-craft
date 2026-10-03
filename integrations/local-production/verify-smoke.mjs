@@ -1,9 +1,10 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { run } from './project.mjs';
+import { mediaTool } from './media-analysis.mjs';
 
 // Signal-level checks complement (and do not replace) human playback/listening.
-const ffmpeg = () => process.env.CREATIVE_FFMPEG || 'ffmpeg';
+const ffmpeg = () => mediaTool('ffmpeg');
 export const frameAt = async (file, time, filter) => (await run(ffmpeg(), ['-v', 'error', '-ss', String(time), '-i', file,
   '-vf', filter, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer', maxBuffer: 1024 * 1024 })).stdout;
 export const pcmAt = async (file, time) => (await run(ffmpeg(), ['-v', 'error', '-ss', String(time), '-i', file,

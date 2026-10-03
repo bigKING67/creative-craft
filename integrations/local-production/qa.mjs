@@ -5,35 +5,19 @@ import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
 import { burnedCaptionCheck, captionBand } from './burned-captions.mjs';
+import { logSegments, mediaTool, overlap, silenceFilter, silences, union } from './media-analysis.mjs';
 
 // Technical checks on one actual rendered file of one revision. Automated
 // results never stand in for the composited-frame review, which starts pending.
-const ffmpeg = () => process.env.CREATIVE_FFMPEG || 'ffmpeg';
-const ffprobe = () => process.env.CREATIVE_FFPROBE || 'ffprobe';
+const ffmpeg = () => mediaTool('ffmpeg');
 const fail = message => { throw new Error(message); };
 const round = (value, digits = 3) => Math.round(value * 10 ** digits) / 10 ** digits;
 const TOOL_VERSION = JSON.parse(await fs.readFile(new URL('./package.json', import.meta.url), 'utf8')).version;
-
-// Union of [start, end) intervals and overlap length of one segment with it.
-function union(intervals) {
-  const sorted = intervals.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]), merged = [];
-  for (const [a, b] of sorted) {
-    if (merged.length && a <= merged.at(-1)[1]) merged.at(-1)[1] = Math.max(merged.at(-1)[1], b);
-    else merged.push([a, b]);
-  }
-  return merged;
-}
-const overlap = (segment, spans) => spans.reduce((sum, [a, b]) => sum + Math.max(0, Math.min(b, segment.end) - Math.max(a, segment.start)), 0);
 
 async function filterLog(args) {
   // Filter reports are info-level stderr lines; the process must still succeed.
   const { stderr } = await run(ffmpeg(), ['-hide_banner', '-nostats', ...args, '-f', 'null', '-'], { timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
   return stderr;
-}
-function segments(log, prefix, duration) {
-  const starts = [...log.matchAll(new RegExp(`${prefix}_start:\\s*(-?[\\d.]+)`, 'g'))].map(m => Number(m[1]));
-  const ends = [...log.matchAll(new RegExp(`${prefix}_end:\\s*(-?[\\d.]+)`, 'g'))].map(m => Number(m[1]));
-  return starts.map((start, i) => ({ start: Math.max(0, start), end: ends[i] ?? duration }));
 }
 
 async function probeRender(file) {
@@ -116,11 +100,11 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
     .map(i => [i.start_frame / fps, (i.start_frame + i.frames) / fps]));
   const videoLog = await filterLog(['-i', video, '-an', '-vf', 'blackdetect=d=0.5:pix_th=0.10,freezedetect=n=-60dB:d=2']);
   const unexpected = (list, minimum) => list.map(s => ({ ...s, inside: overlap(s, pictured) })).filter(s => s.inside > minimum);
-  const black = unexpected(segments(videoLog, 'black', media.duration), 0.5);
+  const black = unexpected(logSegments(videoLog, 'black', media.duration), 0.5);
   check('black-segments', 'video', black.length ? 'warn' : 'pass',
     black.length ? `${black.length} black segment(s) longer than 0.5 s where the timeline has picture.` : 'No unexpected black segment longer than 0.5 s.',
     { measured: { segments: black.map(s => ({ start: round(s.start), end: round(s.end) })) }, ...(black.length ? { refs: black.map(s => ({ time_seconds: round(s.start) })) } : {}) });
-  const frozen = unexpected(segments(videoLog, 'lavfi.freezedetect.freeze', media.duration), 2);
+  const frozen = unexpected(logSegments(videoLog, 'lavfi.freezedetect.freeze', media.duration), 2);
   check('freeze-segments', 'video', frozen.length ? 'warn' : 'pass',
     frozen.length ? `${frozen.length} frozen segment(s) longer than 2 s where the timeline has picture.` : 'No frozen segment longer than 2 s.',
     { measured: { segments: frozen.map(s => ({ start: round(s.start), end: round(s.end) })) }, ...(frozen.length ? { refs: frozen.map(s => ({ time_seconds: round(s.start) })) } : {}) });
@@ -131,9 +115,9 @@ export async function qaRender(root, renderDir, qaDir, options = {}) {
       check(id, 'audio', wantsAudio ? 'unknown' : 'not_applicable', wantsAudio ? 'No audio stream to measure.' : 'Project has no audible items.');
     }
   } else {
-    const audioLog = await filterLog(['-i', video, '-vn', '-af', 'silencedetect=n=-50dB:d=2,ebur128=peak=true']);
+    const audioLog = await filterLog(['-i', video, '-vn', '-af', `${silenceFilter(-50, 2)},ebur128=peak=true`]);
     const sounding = union(audible.map(i => [i.start_frame / fps, (i.start_frame + i.frames) / fps]));
-    const silent = segments(audioLog, 'silence', media.duration).map(s => ({ ...s, inside: overlap(s, sounding) })).filter(s => s.inside > 2);
+    const silent = silences(audioLog, media.duration).map(s => ({ ...s, inside: overlap(s, sounding) })).filter(s => s.inside > 2);
     check('silence-in-audible-ranges', 'audio', silent.length ? 'warn' : 'pass',
       silent.length ? `${silent.length} silence(s) longer than 2 s inside ranges where the project has sound.` : 'No silence longer than 2 s inside audible ranges.',
       { measured: { segments: silent.map(s => ({ start: round(s.start), end: round(s.end) })) }, ...(silent.length ? { refs: silent.map(s => ({ time_seconds: round(s.start) })) } : {}) });

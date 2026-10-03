@@ -7,6 +7,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { digest, ffprobeJson, run } from './project.mjs';
+import { mediaTool, silenceFilter, silences, unionLength } from './media-analysis.mjs';
 
 export const TRANSCRIPT_SCHEMA = 'creative-craft.local-transcript.v1';
 export const ASR_MODEL = Object.freeze({
@@ -28,7 +29,7 @@ export const ACTIVITY = Object.freeze({ noise_db: -35, min_silence_seconds: 0.5,
 export const modelDir = () => process.env.CREATIVE_WHISPER_MODEL_DIR || path.join(os.homedir(), '.cache', 'whisper-cpp');
 export const defaultModelPath = () => path.join(modelDir(), ASR_MODEL.file);
 const whisperBin = () => process.env.CREATIVE_WHISPER || 'whisper-cli';
-const ffmpegBin = () => process.env.CREATIVE_FFMPEG || 'ffmpeg';
+const ffmpegBin = () => mediaTool('ffmpeg');
 const round = value => Math.round(value * 1000) / 1000;
 
 // Hashing 1.6 GB takes seconds, so a verified digest is cached next to the model and
@@ -65,16 +66,7 @@ export async function whisperVersion() {
 }
 
 // Length of the union of [start, end] intervals clipped to [0, duration].
-export function coverageSeconds(segments, duration = Infinity) {
-  const spans = segments.map(s => [Math.max(0, s.start), Math.min(duration, s.end)]).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
-  let total = 0, cursor = -Infinity;
-  for (const [a, b] of spans) {
-    if (b <= cursor) continue;
-    total += b - Math.max(a, cursor);
-    cursor = b;
-  }
-  return round(total);
-}
+export const coverageSeconds = (segments, duration = Infinity) => round(unionLength(segments.map(s => [s.start, s.end]), duration));
 
 // Sentences overlapping [from, to] as production-plan evidence. Times are the
 // sentence boundaries reported by ASR, not frame-accurate cut points.
@@ -92,16 +84,8 @@ export function needsCleanRetry(coverage, active) {
 
 async function activeSeconds(wav, duration) {
   const { stderr } = await run(ffmpegBin(), ['-hide_banner', '-nostats', '-i', wav, '-af',
-    `silencedetect=n=${ACTIVITY.noise_db}dB:d=${ACTIVITY.min_silence_seconds}`, '-f', 'null', '-'], { timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
-  const silences = [];
-  let start = null;
-  for (const line of stderr.split('\n')) {
-    const s = /silence_start:\s*(-?[\d.]+)/.exec(line), e = /silence_end:\s*([\d.]+)/.exec(line);
-    if (s) start = Math.max(0, Number(s[1]));
-    if (e && start !== null) { silences.push({ start, end: Number(e[1]) }); start = null; }
-  }
-  if (start !== null) silences.push({ start, end: duration });
-  return round(Math.max(0, duration - coverageSeconds(silences, duration)));
+    silenceFilter(ACTIVITY.noise_db, ACTIVITY.min_silence_seconds), '-f', 'null', '-'], { timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
+  return round(Math.max(0, duration - coverageSeconds(silences(stderr, duration), duration)));
 }
 
 async function attempt(wav, out, model, language, extraArgs, duration) {

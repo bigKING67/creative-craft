@@ -6,6 +6,7 @@ import { compose, webVtt } from './composition.mjs';
 import { copyCaptionFont } from './caption-font.mjs';
 import { audibleItems, isV2 } from './timeline.mjs';
 import { templateProvenance } from './templates.mjs';
+import { mediaTool } from './media-analysis.mjs';
 
 const require = createRequire(import.meta.url);
 const packageVersion = async name => JSON.parse(await fs.readFile(new URL(`./node_modules/${name}/package.json`, import.meta.url), 'utf8')).version;
@@ -93,7 +94,7 @@ export async function renderProject(root, destination, { revision, preview = fal
     if (!media.video || media.width !== width || media.height !== height || media.audio !== expectsAudio(project, compiled.frames) ||
         Math.abs(media.duration - compiled.duration) > Math.max(0.1, 2 / project.canvas.fps)) throw new Error('Output media does not match the project');
     receipt.inspection.structure = 'passed';
-    await run(process.env.CREATIVE_FFMPEG || 'ffmpeg', ['-v', 'error', '-xerror', '-i', output, '-f', 'null', '-'], { timeout: 180000, maxBuffer: 1024 * 1024 });
+    await run(mediaTool('ffmpeg'), ['-v', 'error', '-xerror', '-i', output, '-f', 'null', '-'], { timeout: 180000, maxBuffer: 1024 * 1024 });
     receipt.inspection.decode = 'passed';
     receipt.output = { file: 'video.mp4', sha256: await digest(output), ...media };
     receipt.status = 'completed';

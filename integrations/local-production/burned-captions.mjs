@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { ffprobeJson, run } from './project.mjs';
-import { speedOf } from './timeline.mjs';
+import { sourceSeconds } from './timeline.mjs';
+import { mediaTool } from './media-analysis.mjs';
 
 // Burned-in caption cut points. Source footage often carries captions that are
 // part of the picture and switch slightly after the speech they belong to; an
@@ -86,7 +87,7 @@ export function stepEvents({ frames, times, width, height }, band = CAPTION_BAND
 // timestamps (showinfo pts_time), minus the container start time so they are
 // media-time seconds like data-media-start.
 export async function decodeWindow(file, from, to, p = CAPTION_CUT, startTime = 0) {
-  const ffmpeg = process.env.CREATIVE_FFMPEG || 'ffmpeg', e = p.analysis_short_edge;
+  const ffmpeg = mediaTool('ffmpeg'), e = p.analysis_short_edge;
   const start = Math.max(0, from);
   const { stdout, stderr } = await run(ffmpeg, ['-hide_banner', '-nostats', '-v', 'info', '-copyts', '-ss', String(start), '-t', String(Math.max(0.05, to - start)), '-i', file,
     '-an', '-sn', '-vf', `scale='if(lt(iw,ih),${e},-2)':'if(lt(iw,ih),-2,${e})',format=gray,showinfo`, '-f', 'rawvideo', 'pipe:1'],
@@ -128,7 +129,7 @@ export function cutPoints(doc) {
   const fps = doc.canvas.fps, assets = new Map(doc.assets.map(a => [a.id, a]));
   const video = new Set(doc.tracks.filter(t => t.kind === 'video').map(t => t.id));
   return doc.items.filter(i => i.kind === 'media' && video.has(i.track_id) && assets.get(i.asset_id)?.video !== false).flatMap(item => {
-    const sourceOut = item.source_in_seconds + item.frames / fps * speedOf(item);
+    const sourceOut = item.source_in_seconds + sourceSeconds(item, fps);
     return [{ item, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame },
       { item, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames }];
   });

@@ -5,6 +5,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { run } from '../project.mjs';
+import { mediaTool } from '../media-analysis.mjs';
 import { ASR_MODEL, TRANSCRIPT_SCHEMA, coverageSeconds, defaultModelPath, needsCleanRetry, parseTranscribeArgs, toPlanEvidence,
   transcribe, verifyModel, whisperVersion } from '../asr.mjs';
 
@@ -23,7 +24,7 @@ async function engineUnavailable() {
   }
   return null;
 }
-const ffmpeg = (...args) => run(process.env.CREATIVE_FFMPEG || 'ffmpeg', ['-nostdin', '-v', 'error', ...args], { timeout: 60000 });
+const ffmpeg = (...args) => run(mediaTool('ffmpeg'), ['-nostdin', '-v', 'error', ...args], { timeout: 60000 });
 
 test('model digest mismatch is rejected, a verified digest is cached and invalidated on change', async t => {
   const dir = await directory(t), file = path.join(dir, 'tiny.bin');
