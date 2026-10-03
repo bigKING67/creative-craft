@@ -36,7 +36,13 @@ Gated video production on top of the existing contracts (see
   one QA sample per shot, named template placements with a minimum text size of 3%
   of the short edge, render receipts naming template id/version/digest, and a
   local whisper.cpp `transcribe` command with a pinned, digest-checked model and
-  automatic clean-audio retry. Templates are still referenced by id only.
+  automatic clean-audio retry.
+- graphic templates pinned to edit revisions (local-production 0.5.0): optional
+  `graphic_templates` bindings to content-addressed, normalized template bytes in
+  the project; renders load only pinned bytes, `rebind_template` is an explicit
+  upgrade, `revert_to` restores the target's bindings, and locked tracks keep
+  their template bytes. Unpinned historical revisions render with runtime
+  templates and are marked `pinned: false`.
 
 The package size guard is re-measured (650,000 unpacked / 165,000 packed); the
 growth is scripts and schemas that agents do not load into context. All media in
