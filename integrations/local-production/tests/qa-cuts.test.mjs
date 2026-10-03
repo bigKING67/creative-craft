@@ -93,10 +93,41 @@ test('variable frame rate source: every decoded frame keeps its own source time'
 });
 
 test('frame/time count mismatch is refused instead of truncated', () => {
-  const log = 'Parsed_showinfo_2 @ 0x1] n:0 pts:0 pts_time:1.0 s:4x2\nn:1 pts:1 pts_time:1.5\n', frame = 8;
-  assert.deepEqual(splitFrames(Buffer.alloc(2 * frame), log, 0.5).times, [0.5, 1]);
-  assert.throws(() => splitFrames(Buffer.alloc(3 * frame), log), /decoded 3 frame\(s\) but showinfo reported 2/);
-  assert.throws(() => splitFrames(Buffer.alloc(frame + 3), log), /not trustworthy/);
+  const log = '[Parsed_showinfo_2 @ 0x1] n:0 pts:2 pts_time:1.0 s:4x2\n[Parsed_showinfo_2 @ 0x1] n:1 pts:3 pts_time:1.5\n', frame = 8, timing = { start: 0.5, time_base: { num: 1, den: 2 } };
+  assert.deepEqual(splitFrames(Buffer.alloc(2 * frame), log, timing).times, [0.5, 1]);
+  assert.throws(() => splitFrames(Buffer.alloc(3 * frame), log, timing), /decoded 3 frame\(s\) but showinfo reported 2/);
+  assert.throws(() => splitFrames(Buffer.alloc(frame + 3), log, timing), /not trustworthy/);
+});
+
+test('frame times are integer pts × the ffprobe time base, never the printed pts_time', async t => {
+  // pts_time text is deliberately wrong: only pts and the time base count.
+  const tagged = lines => lines.map(line => `[Parsed_showinfo_1 @ 0x1] ${line}`).join('\n');
+  const log = tagged(['config in time_base: 1/30000, frame_rate: 30000/1001', 'n:   0 pts:  733733 pts_time:24.4578 s:4x2', 'n:   1 pts:  734734 pts_time:24.49']);
+  const timing = { start: 0, time_base: { num: 1, den: 30000 } };
+  assert.deepEqual(splitFrames(Buffer.alloc(16), log, timing).times, [733733 / 30000, 734734 / 30000]);
+  assert.throws(() => splitFrames(Buffer.alloc(16), log, { start: 0, time_base: { num: 1, den: 15360 } }), /showinfo time base 1\/30000 differs from the stream time base 1\/15360/);
+  assert.throws(() => splitFrames(Buffer.alloc(16), log.replace('pts:  734734', 'pts:NOPTS'), timing), /frame line has no integer pts/);
+  assert.throws(() => splitFrames(Buffer.alloc(16), log.replace(' s:4x2', ''), timing), /no frame size/);
+  assert.throws(() => splitFrames(Buffer.alloc(16), log), /needs the stream time_base/);
+  // Real decode of a 30000/1001 fps file: every time is exactly k × 1001/30000.
+  const dir = await scratch(t), file = path.join(dir, 'ntsc.mp4');
+  await run(mediaTool('ffmpeg'), ['-v', 'error', '-n', '-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=30000/1001:duration=2', '-c:v', 'libx264', '-video_track_timescale', '30000', file]);
+  const window = await decodeWindow(file, 0.5, 1);
+  assert.ok(window.times.length >= 10, `frames ${window.times.length}`);
+  assert.ok(window.times.every(time => Number.isInteger(Math.round(time * 30000)) && Math.abs(time * 30000 / 1001 - Math.round(time * 30000 / 1001)) < 1e-9), JSON.stringify(window.times));
+});
+
+test('an in-point even 1e-7 s before a frame start shows the previous frame (no tolerance toward later frames)', () => {
+  const frame = 1 / 30, change = [{ source_seconds: 1.5, kind: 'caption' }];
+  assert.equal(judgeCutPoint('in', 1.5 - 1e-7, change, { frame }).result, 'warn', 'frame 44 is shown first; the caption changes one frame later');
+  assert.equal(judgeCutPoint('in', 1.5, change, { frame }).result, 'aligned');
+  assert.equal(judgeCutPoint('out', 1.5 + frame + 1e-7, change, { frame }).result, 'warn', 'out-point 1e-7 s after frame 45 + 1 frame still shows frame 45');
+  assert.equal(judgeCutPoint('out', 1.5 + frame, change, { frame }).result, 'warn', 'last shown frame is 45, the changed one');
+  assert.equal(judgeCutPoint('out', 1.5, change, { frame }).result, 'aligned');
+  const times = Array.from({ length: 120 }, (_, k) => k / 30);
+  const fragment = judgeFragment('in', { times, changes: [30], at: 1 - 1e-7, step: frame, frame, first: 1 - 1e-7, last: 2.9, itemFrames: 58 });
+  assert.equal(fragment.result, 'warn', JSON.stringify(fragment));
+  assert.equal(judgeFragment('in', { times, changes: [30], at: 1, step: frame, frame, first: 1, last: 2.9, itemFrames: 58 }).result, 'aligned');
 });
 
 test('summary: any warn wins, otherwise any unchecked point makes the check unknown', { timeout: 60000 }, async t => {

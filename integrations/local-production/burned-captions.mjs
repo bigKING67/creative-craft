@@ -78,45 +78,89 @@ export function stepEvents({ frames, times, width, height }, band = CAPTION_BAND
     const lineShare = best(rows), glyphShare = best(bright), restMad = restCount ? rest / restCount : 0;
     if (lineShare < p.line_share || glyphShare < p.glyph_share) continue;
     // frame_mid_seconds: midpoint of the first changed source frame (between its
-    // time and the next frame's), the stable in/out time for that frame.
-    events.push({ source_seconds: round(times[k], 6), frame_mid_seconds: (times[k] + times[k + 1]) / 2, line_share: round(lineShare), glyph_share: round(glyphShare),
+    // time and the next frame's), the stable in/out time for that frame. Both
+    // times stay exact here (judging compares them with the cut point); the
+    // check rounds them for the report.
+    events.push({ source_seconds: times[k], frame_mid_seconds: (times[k] + times[k + 1]) / 2, line_share: round(lineShare), glyph_share: round(glyphShare),
       rest_mad: round(restMad, 1), kind: restMad >= p.shot_mad ? 'shot' : 'caption' });
   }
   return events;
 }
 
-// Decode about [from, to) of a source file as grey frames (shorter edge
-// analysis_short_edge) with their source times: -copyts keeps the decoded
-// timestamps (showinfo pts_time), minus the container start time so they are
-// media-time seconds like data-media-start. -fps_mode passthrough writes every
-// decoded frame exactly once (the rawvideo muxer would otherwise default to
-// constant frame rate and duplicate/drop frames of variable-frame-rate sources),
-// so frame k is the frame showinfo reported k-th.
-export async function decodeWindow(file, from, to, p = CAPTION_CUT, startTime = 0) {
-  const e = p.analysis_short_edge, start = Math.max(0, from);
-  const { stdout, stderr } = await run(mediaTool('ffmpeg'), ['-hide_banner', '-nostats', '-v', 'info', '-copyts', '-ss', String(start), '-t', String(Math.max(0.05, to - start)), '-i', file,
-    '-an', '-sn', '-vf', `scale='if(lt(iw,ih),${e},-2)':'if(lt(iw,ih),-2,${e})',format=gray,showinfo`, '-fps_mode', 'passthrough', '-f', 'rawvideo', 'pipe:1'],
-  { encoding: 'buffer', timeout: 120000, maxBuffer: 512 * 1024 * 1024 });
-  return splitFrames(stdout, stderr.toString(), startTime);
+// Exact timing of a source file from ffprobe integers rather than printed
+// seconds: the analysed video stream (first one that is not cover art) with its
+// time_base, and the media-time origin start = earliest stream start_pts ×
+// time_base (format.start_time only if no stream reports start_pts). A decoded
+// frame's media time is pts × time_base − start, like data-media-start.
+const rational = value => {
+  const m = /^(\d+)\/(\d+)$/.exec(String(value ?? ''));
+  return m && Number(m[1]) > 0 && Number(m[2]) > 0 ? { num: Number(m[1]), den: Number(m[2]) } : null;
+};
+export async function sourceTiming(file) {
+  const info = await ffprobeJson(file), videos = (info.streams ?? []).filter(s => s.codec_type === 'video');
+  const index = videos.findIndex(s => !s.disposition?.attached_pic);
+  if (index < 0) throw new Error('source has no video stream');
+  const timeBase = rational(videos[index].time_base);
+  if (!timeBase) throw new Error(`ffprobe reported no usable video time_base (${videos[index].time_base})`);
+  const starts = info.streams.flatMap(s => {
+    const tb = rational(s.time_base), pts = Number(s.start_pts);
+    return tb && s.start_pts !== undefined && Number.isInteger(pts) ? [pts * tb.num / tb.den] : [];
+  });
+  return { start: starts.length ? Math.min(...starts) : Number(info.format?.start_time) || 0, time_base: timeBase, video_index: index };
 }
 
-// Memoised container start time per file (decodeWindow's startTime).
-export function containerStarts() {
-  const starts = new Map();
+// Memoised sourceTiming per file, so each source is probed once per check run.
+export function sourceTimings() {
+  const timings = new Map();
   return file => {
-    if (!starts.has(file)) starts.set(file, ffprobeJson(file).then(info => Number(info.format.start_time) || 0));
-    return starts.get(file);
+    if (!timings.has(file)) timings.set(file, sourceTiming(file));
+    return timings.get(file);
   };
 }
 
-// Pair raw grey frames with showinfo times. A frame/time count mismatch means
-// the times cannot be trusted, so it throws (the cut point becomes unknown)
-// instead of silently truncating to the shorter list.
-export function splitFrames(raw, log, startTime = 0) {
-  const size = log.match(/\bs:(\d+)x(\d+)/);
-  if (!size) return { frames: [], times: [], width: 0, height: 0 };
+// Decode about [from, to) of a source file as grey frames (shorter edge
+// analysis_short_edge) with their source times: -copyts keeps the decoded
+// timestamps (showinfo's integer pts in the stream time base), converted with
+// the ffprobe time_base and start (sourceTiming) to media-time seconds.
+// -fps_mode passthrough writes every decoded frame exactly once (the rawvideo
+// muxer would otherwise default to constant frame rate and duplicate/drop
+// frames of variable-frame-rate sources), so frame k is the frame showinfo
+// reported k-th.
+export async function decodeWindow(file, from, to, p = CAPTION_CUT, timing) {
+  timing ??= await sourceTiming(file);
+  const e = p.analysis_short_edge, start = Math.max(0, from);
+  const { stdout, stderr } = await run(mediaTool('ffmpeg'), ['-hide_banner', '-nostats', '-v', 'info', '-copyts', '-ss', String(start), '-t', String(Math.max(0.05, to - start)), '-i', file,
+    '-map', `0:v:${timing.video_index ?? 0}`, '-an', '-sn', '-vf', `scale='if(lt(iw,ih),${e},-2)':'if(lt(iw,ih),-2,${e})',format=gray,showinfo`, '-fps_mode', 'passthrough', '-f', 'rawvideo', 'pipe:1'],
+  { encoding: 'buffer', timeout: 120000, maxBuffer: 512 * 1024 * 1024 });
+  return splitFrames(stdout, stderr.toString(), timing);
+}
+
+// Pair raw grey frames with showinfo frame lines. Times come from each line's
+// integer pts × the ffprobe time_base − start, not from the printed pts_time
+// (its decimals depend on the ffmpeg version). A frame line without an integer
+// pts, a showinfo input time base that differs from the stream's, or a
+// frame/time count mismatch means the times cannot be trusted, so it throws (the
+// cut point becomes unknown) instead of guessing or truncating.
+export function splitFrames(raw, log, { start = 0, time_base: timeBase } = {}) {
+  if (!timeBase?.num || !timeBase?.den) throw new Error('splitFrames needs the stream time_base');
+  const config = log.match(/config in time_base:\s*(\d+)\/(\d+)/);
+  if (config && Number(config[1]) * timeBase.den !== Number(config[2]) * timeBase.num) {
+    throw new Error(`showinfo time base ${config[1]}/${config[2]} differs from the stream time base ${timeBase.num}/${timeBase.den}; frame times are not trustworthy`);
+  }
+  const all = log.split('\n'), tagged = all.filter(line => line.includes('Parsed_showinfo'));
+  const lines = (tagged.length ? tagged : all).filter(line => /\bn:\s*\d+\b/.test(line));
+  if (!lines.length) {
+    if (raw.length) throw new Error(`decoded ${raw.length} byte(s) but showinfo reported no frames; frame times are not trustworthy`);
+    return { frames: [], times: [], width: 0, height: 0 };
+  }
+  const size = lines[0].match(/\bs:(\d+)x(\d+)/) ?? log.match(/\bs:(\d+)x(\d+)/);
+  if (!size) throw new Error('showinfo reported no frame size (s:WxH); ffmpeg output format not understood');
   const width = Number(size[1]), height = Number(size[2]), N = width * height;
-  const times = [...log.matchAll(/pts_time:\s*(-?[\d.]+)/g)].map(m => Number(m[1]) - startTime);
+  const times = lines.map(line => {
+    const pts = line.match(/\bpts:\s*(-?\d+)\b/);
+    if (!pts) throw new Error(`showinfo frame line has no integer pts (${line.trim().slice(0, 80)}); ffmpeg output format not understood`);
+    return Number(pts[1]) * timeBase.num / timeBase.den - start;
+  });
   if (raw.length % N !== 0 || raw.length / N !== times.length) {
     throw new Error(`decoded ${raw.length / N} frame(s) but showinfo reported ${times.length} timestamp(s); frame times are not trustworthy`);
   }
@@ -134,8 +178,11 @@ export const frameStep = times => {
 // and shows the frame whose time is ≤ that time. In-point: the first shown
 // frame is the one with time ≤ at < time + frame. Out-point (exclusive): the
 // last shown frame is the one at or before at − step. So a time a hair before a
-// frame's start (e.g. 24.4333 for frame 733/30) still shows the previous frame.
-export const TIME_EPS = 1e-6;
+// frame's start (e.g. 24.4333 for frame 733/30, or even 1e-7 s before it) still
+// shows the previous frame. TIME_EPS only absorbs floating-point noise between
+// equal times (exact frame times are pts × time_base; errors are ~1e-13 s), far
+// below any time a document can express that the renderer would tell apart.
+export const TIME_EPS = 1e-9;
 export const shownAtIn = (t, at, frame) => t <= at + TIME_EPS && t > at - frame + TIME_EPS;
 export const shownBeforeOut = (t, at, step) => t <= at - step + TIME_EPS;
 
@@ -188,19 +235,20 @@ export async function burnedCaptionCheck(doc, root, { band: bandOption, sampleAt
   // Pad each window so transitions at its ends still have steady_frames on both
   // sides (sized for sources down to 15 fps). Windows decode with bounded
   // concurrency; each file's container start time is probed once.
-  const pad = (p.steady_frames + 1) / 15, startOf = containerStarts();
+  const pad = (p.steady_frames + 1) / 15, timingOf = sourceTimings();
   measured.points = await mapLimit(points, p.concurrency, async point => {
     const asset = assets.get(point.item.asset_id), file = path.join(root, asset.file);
     const [from, to] = point.edge === 'in' ? [point.source_seconds - pad, point.source_seconds + p.window_seconds + pad]
       : [point.source_seconds - p.window_seconds - pad, point.source_seconds + pad];
     const entry = { item_id: point.item.id, edge: point.edge, source_seconds: round(point.source_seconds, 4), output_seconds: round(point.output_frame / fps, 6) };
     try {
-      const window = await decodeWindow(file, from, to, p, await startOf(file));
+      const window = await decodeWindow(file, from, to, p, await timingOf(file));
       if (window.frames.length < 2 * p.steady_frames + 1) throw new Error('too few decoded frames');
       const events = stepEvents(window, band, p), frame = frameStep(window.times);
       const near = events.filter(e => Math.abs(e.source_seconds - point.source_seconds) <= p.window_seconds + frame);
       return { ...entry, ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, step: speedOf(point.item) / fps, window: p.window_seconds }),
-        caption_changes: near.filter(e => e.kind === 'caption'), shot_changes: near.filter(e => e.kind === 'shot').map(e => e.source_seconds) };
+        caption_changes: near.filter(e => e.kind === 'caption').map(e => ({ ...e, source_seconds: round(e.source_seconds, 6), frame_mid_seconds: round(e.frame_mid_seconds, 6) })),
+        shot_changes: near.filter(e => e.kind === 'shot').map(e => round(e.source_seconds, 6)) };
     } catch (error) {
       return { ...entry, result: 'unknown', error: error.message.slice(0, 200) };
     }

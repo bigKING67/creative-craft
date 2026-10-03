@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { speedOf } from './timeline.mjs';
 import { mapLimit } from './media-analysis.mjs';
-import { CAPTION_CUT, TIME_EPS, containerStarts, cutPoints, decodeWindow, frameStep } from './burned-captions.mjs';
+import { CAPTION_CUT, TIME_EPS, cutPoints, decodeWindow, frameStep, sourceTimings } from './burned-captions.mjs';
 
 // Fragments of adjacent source shots at cut points. An in-point chosen a little
 // before the source's own shot change opens the item with the tail of the
@@ -107,7 +107,7 @@ export async function cutFragmentCheck(doc, root, { sceneThreshold = 0.3, sample
   const measured = { method: FRAGMENT_METHOD, window_seconds: p.window_seconds, flash_seconds: p.flash_seconds,
     thresholds: { analysis_short_edge: p.analysis_short_edge, shot_mad: p.shot_mad, scene_jump: sceneJump, scene_threshold: sceneThreshold }, points: [] };
   if (!points.length) return { status: 'not_applicable', observation: 'No video media items, so no source cut points to check for shot fragments.', measured };
-  const pad = 0.2, startOf = containerStarts(), W = p.window_seconds, F = p.flash_seconds;
+  const pad = 0.2, timingOf = sourceTimings(), W = p.window_seconds, F = p.flash_seconds;
   measured.points = await mapLimit(points, p.concurrency, async point => {
     const { item } = point, file = path.join(root, assets.get(item.asset_id).file), step = speedOf(item) / fps;
     const first = item.source_in_seconds, last = first + (item.frames - 1) * step;
@@ -115,7 +115,7 @@ export async function cutFragmentCheck(doc, root, { sceneThreshold = 0.3, sample
       : [point.source_seconds - W - F - pad, point.source_seconds + W + pad];
     const entry = { item_id: item.id, edge: point.edge, source_seconds: round6(point.source_seconds), output_seconds: round6(point.output_frame / fps) };
     try {
-      const window = await decodeWindow(file, from, to, p, await startOf(file));
+      const window = await decodeWindow(file, from, to, p, await timingOf(file));
       if (window.frames.length < 4) throw new Error('too few decoded frames');
       const frame = frameStep(window.times), changes = shotChanges(window.frames, { sceneJump, shotMad: p.shot_mad });
       const judged = judgeFragment(point.edge, { times: window.times, changes, at: point.source_seconds, step, frame, first, last, itemFrames: item.frames,
