@@ -20,7 +20,16 @@ const docWith = (asset, items) => ({ canvas: { width: 360, height: 640, fps: 30 
 
 test('cut-point judgement: in-point before a caption change warns, at it is aligned; out-point after one warns', () => {
   const change = [{ source_seconds: 1.5, kind: 'caption' }], frame = 1 / 30;
-  assert.deepEqual(judgeCutPoint('in', 1.3, change, { frame }), { result: 'warn', suggested_source_seconds: 1.5, suggested_shift_seconds: 0.2 });
+  // Suggestions are the changed frame's midpoint (not its start; µs precision, not 4 decimals).
+  assert.deepEqual(judgeCutPoint('in', 1.3, change, { frame }), { result: 'warn', suggested_source_seconds: 1.516667, suggested_shift_seconds: 0.216667 });
+  assert.equal(judgeCutPoint('in', 1.3, [{ source_seconds: 1.5, frame_mid_seconds: 1.51, kind: 'caption' }], { frame }).suggested_source_seconds, 1.51);
+  assert.equal(judgeCutPoint('out', 1.7, change, { frame }).suggested_source_seconds, 1.516667);
+  // An in-point a hair before the changed frame (24.4333 < 733/30) still shows frame 732: warn, suggest frame 733's midpoint.
+  const real = [{ source_seconds: 24.433333, frame_mid_seconds: 24.45, kind: 'caption' }];
+  assert.deepEqual(judgeCutPoint('in', 24.4333, real, { frame }), { result: 'warn', suggested_source_seconds: 24.45, suggested_shift_seconds: 0.0167 });
+  assert.equal(judgeCutPoint('in', 24.45, real, { frame }).result, 'aligned', 'the midpoint shows the changed frame first');
+  assert.equal(judgeCutPoint('out', 24.45, real, { frame }).result, 'aligned', 'out at the midpoint: last shown frame is 732');
+  assert.equal(judgeCutPoint('out', 24.4667, real, { frame }).result, 'warn', 'out a hair after frame 733 ends shows it');
   assert.deepEqual(judgeCutPoint('in', 1.5, change, { frame }), { result: 'aligned' });
   assert.deepEqual(judgeCutPoint('in', 0.9, change, { frame }), { result: 'clear' }, 'more than 0.5 s inside the item');
   assert.equal(judgeCutPoint('out', 1.7, change, { frame }).result, 'warn');
@@ -39,7 +48,7 @@ test('burned-in caption check: caption switching after the in-point warns with t
   assert.equal(late.status, 'warn', late.observation);
   const point = late.measured.points.find(p => p.edge === 'in');
   assert.equal(point.result, 'warn');
-  assert.ok(Math.abs(point.suggested_source_seconds - 1.5) < 0.02, JSON.stringify(point));
+  assert.ok(Math.abs(point.suggested_source_seconds - 45.5 / 30) < 1e-3, `midpoint of the first changed frame (45): ${JSON.stringify(point)}`);
   assert.deepEqual(late.refs, [{ time_seconds: 0, item_id: 'm0' }]);
   assert.match(late.measured.method, /not OCR/);
   // Out-point 1.3 + 1 s = 2.3 s: the change at 1.5 s is 0.8 s before it (outside the window).
@@ -77,7 +86,7 @@ test('variable frame rate source: every decoded frame keeps its own source time'
   const late = await burnedCaptionCheck(docWith('vfr.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 2.8 }]), dir);
   const point = late.measured.points.find(p => p.edge === 'in');
   assert.equal(point.result, 'warn', JSON.stringify(point));
-  assert.ok(Math.abs(point.suggested_source_seconds - 3) < 0.02, JSON.stringify(point));
+  assert.ok(Math.abs(point.suggested_source_seconds - (3 + 1 / 30)) < 1e-3, `midpoint of the 1/15 s frame at 3.0 s: ${JSON.stringify(point)}`);
   const aligned = await burnedCaptionCheck(docWith('vfr.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 3 }]), dir);
   assert.equal(aligned.measured.points.find(p => p.edge === 'in').result, 'aligned', aligned.observation);
 });
