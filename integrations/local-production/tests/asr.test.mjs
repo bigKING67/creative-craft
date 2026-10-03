@@ -200,3 +200,16 @@ test('synthesized Mandarin speech is transcribed with the expected words', async
   const evidence = toPlanEvidence(doc.segments, 0, doc.media.duration, 'whisper.cpp large-v3-turbo');
   assert.ok(evidence.length >= 1 && evidence.every(e => e.modality === 'asr' && e.raw_score === null));
 });
+
+test('phrasesFromTokens splits long whisper segments at clause punctuation', async () => {
+  const { phrasesFromTokens } = await import('../asr.mjs');
+  const tok = (text, from, to) => ({ text, offsets: { from, to } });
+  const transcription = [{ text: '...', tokens: [tok('[_BEG_]', 0, 0), tok('女人', 30, 600), tok('显老的,', 600, 1870),
+    tok('不会化妆的', 1870, 2500), tok('用这个,', 2500, 3010), tok('小树莓', 3050, 4000), tok('素颜霜', 4000, 4680), tok('[_TT_150]', 4680, 4680)] }];
+  assert.deepEqual(phrasesFromTokens(transcription), [
+    { start: 0.03, end: 1.87, text: '女人显老的,' },
+    { start: 1.87, end: 3.01, text: '不会化妆的用这个,' },
+    { start: 3.05, end: 4.68, text: '小树莓素颜霜' },
+  ]);
+  assert.deepEqual(phrasesFromTokens([{ tokens: [tok('结束。', 0, 900)] }], 0.5), [{ start: 0, end: 0.5, text: '结束。' }]);
+});

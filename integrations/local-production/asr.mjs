@@ -111,13 +111,40 @@ async function activeSeconds(wav, duration, signal) {
 }
 
 async function attempt(wav, out, model, language, extraArgs, duration, signal) {
-  const args = ['-m', model, '-l', language, '-f', wav, '-oj', '-of', out, '-np', ...(language === 'zh' ? ['--prompt', ZH_PROMPT] : []), ...extraArgs];
+  const args = ['-m', model, '-l', language, '-f', wav, '-ojf', '-of', out, '-np', ...(language === 'zh' ? ['--prompt', ZH_PROMPT] : []), ...extraArgs];
   await run(whisperBin(), args, { timeout: Math.max(120000, duration * 20000), maxBuffer: 64 * 1024 * 1024, signal });
   const result = JSON.parse(await fs.readFile(`${out}.json`, 'utf8'));
   const segments = (result.transcription ?? []).map(item => ({
     start: round(item.offsets.from / 1000), end: round(Math.min(duration, item.offsets.to / 1000)), text: item.text.trim(),
   })).filter(s => s.text && s.end > s.start);
-  return { segments, coverage: coverageSeconds(segments, duration) };
+  return { segments, phrases: phrasesFromTokens(result.transcription ?? [], duration), coverage: coverageSeconds(segments, duration) };
+}
+
+// whisper.cpp merges dense speech (music under voice) into 15–30 s segments.
+// Token timestamps from `-ojf` split those at clause punctuation into phrases
+// that can nominate cut points; they still need energy/subtitle checks and
+// listening before a cut is approved.
+const PHRASE_END = /[，,。．.！!？?；;：:、]$/;
+export function phrasesFromTokens(transcription, duration = Infinity) {
+  const phrases = [];
+  for (const segment of transcription) {
+    let current = [];
+    const flush = () => {
+      const text = current.map(t => t.text).join('').trim();
+      if (text) {
+        const start = round(current[0].offsets.from / 1000), end = round(Math.min(duration, current.at(-1).offsets.to / 1000));
+        if (end > start) phrases.push({ start, end, text });
+      }
+      current = [];
+    };
+    for (const token of segment.tokens ?? []) {
+      if (/^\[_[A-Z_]+/.test(token.text) || !token.offsets) continue; // special tokens such as [_BEG_]
+      current.push(token);
+      if (PHRASE_END.test(token.text.trim())) flush();
+    }
+    flush();
+  }
+  return phrases;
 }
 
 export function parseTranscribeArgs(argv) {
@@ -185,8 +212,9 @@ export async function transcribe(media, output, { lang = 'zh', model = defaultMo
       attempts,
       chosen_attempt: chosen,
       choice_reason: reason,
-      note: 'ASR text may contain wrong characters; timestamps are sentence-level and cut points must be confirmed by listening.',
+      note: 'ASR text may contain wrong characters. segments are whisper sentences (can span 15–30 s in dense speech); phrases split them at punctuation using token timestamps. Cut points must be confirmed by listening.',
       segments: results[chosen].segments,
+      phrases: results[chosen].phrases,
     };
     await fs.writeFile(output, JSON.stringify(transcript, null, 2) + '\n', { flag: 'wx' });
     return { status: 'transcribed', output, chosen_attempt: chosen, choice_reason: reason,
