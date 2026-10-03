@@ -195,8 +195,11 @@ export const shownBeforeOut = (t, at, step) => t <= at - step + TIME_EPS;
 // to a few decimals, can fall just before that frame, so the renderer would
 // still show the previous one. As an in-point it shows the changed frame first;
 // as an out-point the last shown frame is the one before the change.
+// `at` is the time the render plays (judged); `written` (default `at`) is the
+// document's value, the base of suggested_shift_seconds, so written + shift is
+// the suggested time.
 export const frameMidOf = (event, frame) => event.frame_mid_seconds ?? event.source_seconds + frame / 2;
-export function judgeCutPoint(edge, at, events, { frame, step = frame, window = CAPTION_CUT.window_seconds }) {
+export function judgeCutPoint(edge, at, events, { frame, step = frame, window = CAPTION_CUT.window_seconds, written = at }) {
   const captions = events.filter(e => e.kind === 'caption'), t = e => e.source_seconds;
   const inside = edge === 'in' ? captions.filter(e => t(e) > at + TIME_EPS && t(e) <= at + window + TIME_EPS)
     : captions.filter(e => t(e) >= at - window - TIME_EPS && shownBeforeOut(t(e), at, step));
@@ -206,29 +209,36 @@ export function judgeCutPoint(edge, at, events, { frame, step = frame, window = 
   if (edge === 'in' && atEdge) return { result: 'aligned' };
   const pick = inside[0]; // in: earliest change; out: earliest change before the cut
   const suggested = round6(frameMidOf(pick, frame));
-  return { result: 'warn', suggested_source_seconds: suggested, suggested_shift_seconds: round6(suggested - at) };
+  return { result: 'warn', suggested_source_seconds: suggested, suggested_shift_seconds: round6(suggested - written) };
 }
 
 // Cut points of every video-track media item whose asset has picture, as the
 // render plays them: the items of the compiled view (compiledView, the same view
 // compilation uses; a view passed in is used as is), so point.item carries the
-// compiled in-point and point.document the document's own item. When an in-point was corrected (truncated decimal), the
-// point also records the document's values: document_source_seconds is the
-// written in-point (in) or the written in-point + duration (out), and the in
-// point names the source_frame it was corrected to. Uncorrected in-points are
-// judged with the renderer's rule (shownAtIn / shownBeforeOut).
+// compiled in-point and source_seconds the time the render plays (judged with
+// the renderer's rule, shownAtIn / shownBeforeOut). When an in-point was
+// corrected (truncated decimal; correctionOf(point.item) gives the written
+// item), the point also records the document's values: document_source_seconds
+// is the written in-point (in) or the written in-point + duration (out), and
+// the in point names the source_frame it was corrected to.
 export function cutPoints(doc) {
   const view = compiledView(doc), fps = view.canvas.fps, assets = new Map(view.assets.map(a => [a.id, a]));
   const video = new Set(view.tracks.filter(t => t.kind === 'video').map(t => t.id));
   return view.items.filter(i => i.kind === 'media' && video.has(i.track_id) && assets.get(i.asset_id)?.video !== false).flatMap(item => {
     const correction = correctionOf(item), written = correction?.written;
-    const sourceOut = item.source_in_seconds + sourceSeconds(item, fps), document = written ?? item;
-    return [{ item, document, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame,
+    const sourceOut = item.source_in_seconds + sourceSeconds(item, fps);
+    return [{ item, edge: 'in', source_seconds: item.source_in_seconds, output_frame: item.start_frame,
       ...(written ? { document_source_seconds: written.source_in_seconds, source_frame: correction.frame } : {}) },
-    { item, document, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames,
+    { item, edge: 'out', source_seconds: sourceOut, output_frame: item.start_frame + item.frames,
       ...(written ? { document_source_seconds: written.source_in_seconds + sourceSeconds(written, fps) } : {}) }];
   });
 }
+// The document's value of a cut point (the written time an edit changes):
+// document_source_seconds when the in-point was corrected, else source_seconds.
+export const documentSeconds = point => point.document_source_seconds ?? point.source_seconds;
+// Observation text after a reported entry's (document) source time: the time
+// the render plays, when compilation corrected the in-point.
+export const compiledNote = e => 'compiled_source_seconds' in e ? ` (compiled ${e.compiled_source_seconds.toFixed(6)} s)` : '';
 
 // The burned-caption analysis for the shared cut-point pass (cut-checks.mjs):
 // the source range it needs around a cut point, the per-point judgement on the
@@ -250,13 +260,13 @@ export function captionCutCheck(bandOption, p = CAPTION_CUT) {
       if (window.frames.length < 2 * p.steady_frames + 1) throw new Error('too few decoded frames');
       const events = stepEvents(window, band, p), frame = frameStep(window.times);
       const near = events.filter(e => Math.abs(e.source_seconds - point.source_seconds) <= p.window_seconds + frame);
-      return { ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, step: speedOf(point.item) / fps, window: p.window_seconds }),
+      return { ...judgeCutPoint(point.edge, point.source_seconds, near, { frame, step: speedOf(point.item) / fps, window: p.window_seconds, written: documentSeconds(point) }),
         caption_changes: near.filter(e => e.kind === 'caption').map(e => ({ ...e, source_seconds: round6(e.source_seconds), frame_mid_seconds: round6(e.frame_mid_seconds) })),
         shot_changes: near.filter(e => e.kind === 'shot').map(e => round6(e.source_seconds)) };
     },
     summary: n => ({
       scope: scope(n), finding: 'burned-in caption change',
-      describe: e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(6)} s → ${e.suggested_source_seconds.toFixed(6)} s`,
+      describe: e => `${e.item_id} ${e.edge}-point at source ${e.source_seconds.toFixed(6)} s${compiledNote(e)} → ${e.suggested_source_seconds.toFixed(6)} s`,
       warned: (count, details, unchecked) => `${count} of ${scope(n)} show a burned-in caption change within ${p.window_seconds} s inside the cut (in-point: previous line still shown; out-point: next line flashes). Suggested source times (midpoint of the first changed source frame, so the cut cannot fall back onto the previous frame): ${details}.${unchecked} Frame-difference heuristic, not OCR.`,
       pass: `No burned-in caption change within ${p.window_seconds} s inside any of ${scope(n)}. Frame-difference heuristic, not OCR; it cannot read caption text.`,
     }),

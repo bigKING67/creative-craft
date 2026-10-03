@@ -267,6 +267,46 @@ test('both cut-point checks share one decode per cut point and match the checks 
   assert.equal(shared.burned.status, 'warn', shared.burned.observation);
 });
 
+test('judgements base the suggested shift on the written value, so written + shift is the suggestion', () => {
+  const frame = 1 / 30, change = [{ source_seconds: 1.5, kind: 'caption' }];
+  // Plays 1.3001 (compiled), written 1.2999.
+  assert.deepEqual(judgeCutPoint('in', 1.3001, change, { frame, written: 1.2999 }), { result: 'warn', suggested_source_seconds: 1.516667, suggested_shift_seconds: 0.216767 });
+  const times = Array.from({ length: 120 }, (_, k) => k / 30);
+  const judged = judgeFragment('in', { times, changes: [30], at: 0.8001, written: 0.7999, step: frame, frame, first: 0.8001, last: 1.8, itemFrames: 30 });
+  assert.deepEqual([judged.suggested_source_in_seconds, judged.suggested_shift_seconds], [1.016667, 0.216767]);
+});
+
+test('a corrected in-point is reported and suggested in the document\'s terms', { timeout: 60000 }, async t => {
+  const dir = await scratch(t);
+  await shotsSource(path.join(dir, 'shots.mp4'));
+  await captionSource(path.join(dir, 'caption.mp4'), { changeAt: 1.5, duration: 4 });
+  // 1.2999 is 0.1 ms below frame 39 (1.3 s): compiled to 1.3001, which still opens
+  // with 6 frames before the change at frame 45.
+  const withRate = file => {
+    const doc = docWith(file, [{ start_frame: 0, frames: 30, source_in_seconds: 1.2999 }]);
+    Object.assign(doc.assets[0], { frame_rate: '30/1', duration: 4 });
+    return doc;
+  };
+  const fragments = await cutFragmentCheck(withRate('shots.mp4'), dir);
+  const inPoint = fragments.measured.points.find(p => p.edge === 'in');
+  assert.deepEqual([inPoint.source_seconds, inPoint.compiled_source_seconds, inPoint.source_frame, inPoint.result, inPoint.fragment_frames],
+    [1.2999, 1.3001, 39, 'warn', 6], JSON.stringify(inPoint));
+  assert.ok(Math.abs(inPoint.suggested_source_in_seconds - 45.5 / 30) < 1e-3);
+  assert.equal(Math.round((inPoint.source_seconds + inPoint.suggested_shift_seconds) * 1e6) / 1e6, inPoint.suggested_source_in_seconds, 'written + shift = suggestion');
+  assert.match(fragments.observation, /source in 1\.299900 s \(compiled 1\.300100 s\) → 1\.516667 s/);
+  const outPoint = fragments.measured.points.find(p => p.edge === 'out');
+  assert.deepEqual([outPoint.source_seconds, outPoint.compiled_source_seconds], [2.2999, 2.3001]);
+  assert.ok(!('document_source_seconds' in inPoint), 'the document value is source_seconds');
+  const burned = await burnedCaptionCheck(withRate('caption.mp4'), dir);
+  const captionIn = burned.measured.points.find(p => p.edge === 'in');
+  assert.deepEqual([captionIn.source_seconds, captionIn.compiled_source_seconds, captionIn.result], [1.2999, 1.3001, 'warn'], JSON.stringify(captionIn));
+  assert.equal(Math.round((captionIn.source_seconds + captionIn.suggested_shift_seconds) * 1e6) / 1e6, captionIn.suggested_source_seconds, 'written + shift = suggestion');
+  assert.match(burned.observation, /m0 in-point at source 1\.299900 s \(compiled 1\.300100 s\) → 1\.516667 s/);
+  // Uncorrected: no compiled field, the observation as before.
+  const plain = await burnedCaptionCheck(docWith('caption.mp4', [{ start_frame: 0, frames: 30, source_in_seconds: 1.3 }]), dir);
+  assert.ok(plain.measured.points.every(p => !('compiled_source_seconds' in p)));
+});
+
 test('cut-check summary: warn wins, then unknown with the unchecked points, else pass', () => {
   const texts = { scope: '3 source cut point(s)', finding: 'thing', describe: e => `${e.item_id} ${e.edge}`, pass: 'all clear',
     warned: (count, details, unchecked) => `${count} warned: ${details}.${unchecked}` };

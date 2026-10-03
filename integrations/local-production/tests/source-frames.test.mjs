@@ -176,7 +176,9 @@ test('the compiled view is computed once and shared: views, captions and cut poi
   // Cut points of a view are its own items, matched to the document's items.
   const points = cutPoints(view);
   assert.ok(points.every(p => view.items.includes(p.item)));
-  assert.ok(points.every(p => doc.items.includes(p.document) && p.document.id === p.item.id));
+  assert.ok(points.every(p => !('document' in p)));
+  const written = p => correctionOf(p.item)?.written ?? p.item;
+  assert.ok(points.every(p => doc.items.includes(written(p)) && written(p).id === p.item.id));
   // A caption visible only in the written window [4.5044, 4.50455] is not shown,
   // since the compiled in-point is 4.5046.
   Object.assign(itemOf(doc, 'cap1').link, { source_from: 4.5044, source_to: 4.50455 });

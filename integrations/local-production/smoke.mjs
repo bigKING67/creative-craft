@@ -292,12 +292,12 @@ const snapQa = await cli('qa', snapped, path.join(base, 'frame-snap-preview'), p
 const snapFragments = snapQa.checks.find(c => c.id === 'cut-boundary-fragments');
 assert.equal(snapFragments.status, 'pass', snapFragments.observation);
 const snapIn = snapFragments.measured.points.find(p => p.edge === 'in');
-assert.deepEqual([snapIn.source_frame, snapIn.document_source_seconds, snapIn.result], [22, 0.7333, 'aligned']);
+assert.deepEqual([snapIn.source_frame, snapIn.source_seconds, snapIn.compiled_source_seconds, snapIn.result], [22, 0.7333, 0.733433, 'aligned']);
 const v1Qa = await cli('qa', unsnapped, path.join(base, 'frame-snap-v1-preview'), path.join(base, 'frame-snap-v1-qa'));
 const v1Fragments = v1Qa.checks.find(c => c.id === 'cut-boundary-fragments');
 assert.equal(v1Fragments.status, 'warn', v1Fragments.observation);
 summary.frame_snap = { first_frame: firstColours, qa_fragments: { snapped: snapFragments.status, without_frame_rate: v1Fragments.status },
-  snapped_in: { source_frame: snapIn.source_frame, compiled_source_seconds: snapIn.source_seconds } };
+  snapped_in: { source_frame: snapIn.source_frame, compiled_source_seconds: snapIn.compiled_source_seconds } };
 
 const revisionFiles = [v2, brand, portrait, snapped].flatMap(dir => readdirSync(path.join(dir, 'revisions')).filter(n => n.endsWith('.json')).map(n => path.join(dir, 'revisions', n)));
 revisionFiles.push(...[6, 7].map(n => path.join(root, 'revisions', `00000${n}.json`)));
