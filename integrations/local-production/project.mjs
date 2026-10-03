@@ -9,6 +9,8 @@ import { SCHEMA_V1, SCHEMA_V2, fail, id, integer, keys, number, text, validateCa
   validateV2, migrateV1 } from './edit-document.mjs';
 import { applyOperations, diffDocuments, operationsSha256 } from './operations.mjs';
 import { checkVolumeAutomation } from './timeline.mjs';
+import { TEMPLATE_ID, runtimeTemplate } from './templates.mjs';
+import { installTemplates, loadPinnedTemplates, planTemplateBindings, usedTemplates } from './template-binding.mjs';
 import { mediaTool } from './media-analysis.mjs';
 
 export const run = promisify(execFile);
@@ -113,7 +115,10 @@ export async function readProject(root, revision) {
   if (!names.includes(name)) fail('Revision not found');
   const file = await safePath(path.join(revisions, name));
   const project = JSON.parse(await fs.readFile(file, 'utf8'));
-  validateDocument(project);
+  validateDocument(project); // Structure, including graphic_templates coverage.
+  // Pinned templates: load the bound bytes (hash + template rules) and type the
+  // graphic vars against them. A missing or altered binding file fails here.
+  if (project.schema_version === SCHEMA_V2 && await loadPinnedTemplates(root, project)) validateV2(project);
   if (revisionName(project.revision) !== name) fail('Revision filename mismatch');
   if (project.revision > 1) {
     const previous = await safePath(path.join(revisions, revisionName(project.revision - 1)));
@@ -182,6 +187,8 @@ export async function createProject(root, spec) {
       change: { author: 'system', summary: 'Created project', operations_sha256: null } };
   }
   validateDocument(project);
+  // Graphics pin the execution-layer template bytes they were validated against.
+  const templateWrites = v1 ? [] : (await planTemplateBindings(null, null, project)).writes;
   if (!v1) checkVolumeAutomation(project); // Compile limits fail here, not at render.
   root = await safePath(root);
   await fs.mkdir(root); // Existing projects are never replaced.
@@ -189,6 +196,7 @@ export async function createProject(root, spec) {
   await fs.mkdir(path.join(root, 'revisions'));
   await copyImports(root, imports);
   await bindCaptionFont(root, project);
+  await installTemplates(root, templateWrites);
   await publish(root, project);
   return project;
 }
@@ -234,6 +242,9 @@ async function revertContent(root, base, op) {
   keys(op, ['type', 'revision']);
   if (!integer(op.revision, 1, base.revision - 1)) fail('revert_to requires an earlier revision');
   const target = asV2(await readProject(root, op.revision));
+  // Template bindings follow the general rule (planTemplateBindings): current
+  // bindings stay; templates the current revision does not bind reuse the
+  // target's binding when it had one.
   for (const track of base.tracks.filter(t => t.locked)) {
     const on = doc => JSON.stringify(doc.items.filter(i => i.track_id === track.id));
     if (!target.tracks.some(t => t.id === track.id) || on(base) !== on(target)) fail(`Track is locked: ${track.id}`);
@@ -244,7 +255,18 @@ async function revertContent(root, base, op) {
   const tracks = target.tracks.map(t => locked.has(t.id) ? structuredClone(locked.get(t.id)) : t);
   const next = { ...structuredClone(base), title: target.title, canvas: target.canvas, assets: target.assets, tracks, items: target.items };
   if (target.caption_font && !next.caption_font) next.caption_font = target.caption_font;
-  return next;
+  return { next, target };
+}
+
+// rebind_template {template}: the explicit, single-operation decision that moves
+// one used template's binding to the current execution-layer bytes.
+function checkRebind(base, op) {
+  keys(op, ['type', 'template']);
+  if (typeof op.template !== 'string' || !TEMPLATE_ID.test(op.template)) fail('rebind_template requires a template id');
+  if (!usedTemplates(base).includes(op.template)) fail(`rebind_template: template ${op.template} is not used by any graphic in revision ${base.revision}`);
+  const bound = base.graphic_templates?.find(b => b.id === op.template);
+  if (bound && bound.sha256 === runtimeTemplate(op.template).sha256) fail(`rebind_template: ${op.template} is already bound to the current template bytes (no change)`);
+  return op.template;
 }
 
 // Edit batch v2: {base_revision, author, summary, operations[]}. All-or-nothing:
@@ -271,13 +293,18 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
   if (batch.operations.length > 1 && batch.operations.some(op => op?.type === 'edit_track' && 'locked' in op)) {
     fail('Changing a track lock must be the only operation in its batch');
   }
-  const imports = [];
-  const next = batch.operations.some(op => op?.type === 'revert_to')
-    ? (batch.operations.length === 1 ? await revertContent(root, base, batch.operations[0]) : fail('revert_to must be the only operation in its batch'))
-    : await applyOperations(base, batch.operations, { importAsset, imports });
+  const imports = [], alone = type => batch.operations.some(op => op?.type === type) &&
+    (batch.operations.length === 1 || fail(`${type} must be the only operation in its batch`));
+  let next, earlier = null, rebind = null;
+  if (alone('revert_to')) ({ next, target: earlier } = await revertContent(root, base, batch.operations[0]));
+  else if (alone('rebind_template')) { rebind = checkRebind(base, batch.operations[0]); next = structuredClone(base); }
+  else next = await applyOperations(base, batch.operations, { importAsset, imports });
   const operations_sha256 = operationsSha256(batch.operations);
   Object.assign(next, { revision: base.revision + 1, parent_sha256: baseSha,
     change: { author: batch.author, summary: batch.summary, operations_sha256 } });
+  // Template bindings: kept as they are unless rebound; new templates pinned to
+  // the execution-layer bytes; unused ones dropped. Vars are typed against them.
+  const { writes: templateWrites, notes } = await planTemplateBindings(root, base, next, { rebind, earlier });
   validateV2(next);
   checkVolumeAutomation(next); // Same envelope code as compilation; refused before dry-run or publish.
   // Fixed caption font: bound when captions or graphics are introduced. Legacy projects that
@@ -291,10 +318,11 @@ export async function editBatch(root, batch, { dryRun = false } = {}) {
     fail('Graphic items need the bound caption font; this legacy project renders captions with system fonts. Create a new project to add graphics');
   }
   const result = { status: dryRun ? 'dry_run' : 'published', base_revision: latest.revision, migration_revision: migration?.revision ?? null,
-    revision: next.revision, operations_sha256, diff: diffDocuments(base, next) };
+    revision: next.revision, operations_sha256, diff: diffDocuments(base, next), notes };
   if (dryRun) return result;
   await copyImports(root, imports);
   if (installFont) await installCaptionFont(root);
+  await installTemplates(root, templateWrites);
   if (migration) await publish(root, migration);
   await publish(root, next);
   return result;

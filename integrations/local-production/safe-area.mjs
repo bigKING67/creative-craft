@@ -28,8 +28,8 @@ export function captionBox(canvas, caption) {
 // independent of the canvas. Every placement's position in the safe area is
 // guaranteed when the template loads (templates.mjs validateTemplate); no
 // text-fit estimate is made here.
-export function graphicBox(item) {
-  const { box } = graphicPlacement(item);
+export function graphicBox(item, templates) {
+  const { box } = graphicPlacement(item, templates);
   return { left: box.left, top: box.top, right: round(box.left + box.width), bottom: round(box.top + box.height) };
 }
 
