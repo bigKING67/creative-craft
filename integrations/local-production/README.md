@@ -235,3 +235,40 @@ P2 的已知限制：闪避依据参照轨上**有声 item 的区间**，不是�
 时间边界按半开区间 `[start, end)` 执行：画面、字幕与音轨的 HTML 时间边界统一提前 1 纳秒以吸收浮点误差，避免小数序列化向上舍入造成整帧延迟。保存的工程帧数、源媒体裁切点、VTT 语义时间均不变；媒体 seek 使用完整数值精度。该容差远小于支持的24/30/60 fps一帧，属于输出序列化约定，不是整体提前字幕或修改原片。
 
 实际浏览器故障回归：配置已安装的 `PRODUCER_HEADLESS_SHELL_PATH` 后运行 `node --test tests/font-render.integration.mjs`。使用1秒合成黑色视频验证400/900字重，再故意让字体URL不存在；必须失败，不能输出可交付结果。producer 0.8.53会覆盖内部tween-building标志，且把已拒绝的buildReady当作结束，因此字体门槛使用独立buildReady项，加载失败后保持未就绪，交给其有界超时中止；该门槛在 0.8.108 上经同一回归测试复核通过。不要以`document.fonts.ready`已完成替代加载成功检查。
+
+## 本地语音转写
+
+`transcribe` 用本机 whisper.cpp 把素材口播转成带句级时间戳的 JSON，作为 production-plan 选片证据（evidence modality `asr`）。客户音频不离开本机：ffmpeg 抽取 16 kHz 单声道 PCM 到私有临时目录，转写结束（含失败）即删除；不调用任何云端服务。
+
+```sh
+brew install whisper-cpp            # 提供 whisper-cli；或用 CREATIVE_WHISPER 指向其他构建
+npm run fetch-asr-model             # 下载固定模型到 ~/.cache/whisper-cpp/（CREATIVE_WHISPER_MODEL_DIR 可覆盖）
+node cli.mjs transcribe MEDIA NEW_OUT.json [--lang zh] [--model PATH] [--clean auto|on|off]
+```
+
+模型固定为 `ggml-large-v3-turbo.bin`（1624555275 字节，SHA-256 `1fc70f77…e2bc69`，来源 `huggingface.co/ggerganov/whisper.cpp`，清单见 `asr.mjs` 的 `ASR_MODEL`），不入库。下载先写 `.partial`，大小与摘要均吻合后原子 rename；已存在且吻合则跳过，不吻合直接拒绝。每次转写前都核对模型：文件名必须是固定模型、大小与摘要必须吻合，否则报错（缺失时提示 `npm run fetch-asr-model`）；为免每次散列 1.6 GB，校验通过后在模型旁写 `*.sha256-verified.json`，仅当大小、inode、mtime 都未变时复用。
+
+whisper 参数：`-l zh` 时附加 `--prompt "以下是普通话的句子。"`（引导简体与标点）。`--clean`：
+
+- `off`：只做常规转写。
+- `on`：只做预处理转写：`ffmpeg -af "highpass=f=120,lowpass=f=6000,afftdn=nf=-25,dynaudnorm"` 后加 `-mc 0 -et 2.8 -nth 0.3`。
+- `auto`（默认）：先常规转写；用 `silencedetect=n=-35dB:d=0.5` 估算有声时长（总时长减去 ≥0.5 s 的静音段）。若有声 ≥ 2 s 且识别覆盖（句子区间并集）< 有声时长的 50%，再做预处理转写，取覆盖更大的一次（相等时保留常规结果），理由写入 `choice_reason`。
+
+判据实测（whisper.cpp 1.9.2）：背景音乐很重的 27 s 直播口播片段全程有声（-35 dB 下无静音段，有声 26.842 s），常规转写只识别前 2.28 s（8.5%），触发重试；预处理转写 13 句覆盖 26.84 s，被选中。`say -v Tingting` 合成的 2.1 s 中文语音常规覆盖 1.86 s，不触发重试；纯静音有声 0 s，不触发重试。
+
+输出（时间单位秒）：
+
+```text
+{schema: "creative-craft.local-transcript.v1",
+ media: {path_basename, sha256, duration},
+ engine: {name: "whisper.cpp", binary_version, model, model_sha256},
+ language, audio_activity: {active_seconds, detector},
+ attempts: [{params: {preprocess, whisper_args}, coverage_seconds}],
+ chosen_attempt, choice_reason, note, segments: [{start, end, text}]}
+```
+
+`asr.mjs` 导出 `toPlanEvidence(segments, from, to, method)`：返回与 `[from, to]` 有重叠的句子，形如 `{modality: "asr", start_seconds, end_seconds, excerpt, raw_score: null, method}`，时间保留句子原始边界（不裁到区间）。
+
+限制：ASR 文本可能有错字和同音字（如品牌名、人名），引用前需核对；时间戳是句级，不是逐字或逐帧对齐，剪辑点必须人工听审确认。覆盖率只说明“有文字的时间段”，不说明文字正确：whisper 会在纯音乐/持续音调上幻觉出整句（测试中 440 Hz 正弦音被“转写”为一句视频结尾套话并覆盖全程），此时覆盖足够、不会重试，幻觉内容也会进入结果。`auto` 判据只在上述片段上实测，阈值尚未在更多素材上标定。输出文件必须不存在。
+
+`npm test` 中的 ASR 测试只用合成音频（ffmpeg 静音与正弦音、macOS `say -v Tingting`），不含客户素材；whisper-cli 或模型缺失时两项端到端测试跳过并给出原因，模型存在但摘要不符则失败。
