@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createProject, editProject, editBatch, readProject, digest, run } from './project.mjs';
 import { renderProject } from './render.mjs';
-import { verifySmoke, verifyMultitrack, verifyBrand, frameAt, pcmAt, mae } from './verify-smoke.mjs';
+import { verifySmoke, verifyMultitrack, verifyBrand, captionSource, frameAt, pcmAt, mae } from './verify-smoke.mjs';
 
 // Self-authored synthetic signals; no customer assets, ASR, TTS or paid APIs.
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -205,11 +205,57 @@ summary.brand_packaging = { render: brandRender.status, lint: { errors: brandRen
     true_peak: brandCheck('true-peak').measured }, fault_injection: { verdict: unsafe.verdict, caption_safe_area: unsafeCheck.status,
     low_caption_box: unsafeCheck.measured.boxes.find(b => b.item_id === 'low') } };
 
-const revisionFiles = [v2, brand].flatMap(dir => readdirSync(path.join(dir, 'revisions')).filter(n => n.endsWith('.json')).map(n => path.join(dir, 'revisions', n)));
+// 6. P2.1 portrait QA: burned-in caption cut points, per-shot sampling and
+// template placements. Synthetic sources: a test pattern whose burned-in
+// "caption" (white glyph boxes at ~70% height) switches at 1.5 s, and a file
+// with a 0.6 s colour-bar shot inside it.
+const captioned = path.join(base, 'captioned.mp4'), shortShot = path.join(base, 'short-shot.mp4');
+await captionSource(captioned, { changeAt: 1.5 });
+await captionSource(shortShot, { duration: 4, shortShot: [0.6, 1.2] });
+const portrait = path.join(base, 'portrait');
+await createProject(portrait, { project_id: 'portrait-smoke', title: '竖屏检查样例', canvas: { width: 360, height: 640, fps: 30 },
+  assets: [{ id: 'cap', path: captioned }, { id: 'shots', path: shortShot }],
+  tracks: [{ id: 'v_main', kind: 'video', locked: false }, { id: 'v_gfx', kind: 'video', locked: false }],
+  items: [
+    // In-point 1.3 s: the burned-in caption switches 0.2 s later (late, warn).
+    { id: 'late', track_id: 'v_main', kind: 'media', asset_id: 'cap', start_frame: 0, frames: 30, source_in_seconds: 1.3, volume: 0 },
+    // Source 0.6–1.2 s is a short shot: output 1.6–2.2 s, away from this item's midpoint (3.0 s) and cuts.
+    { id: 'shots', track_id: 'v_main', kind: 'media', asset_id: 'shots', start_frame: 30, frames: 120, source_in_seconds: 0, volume: 0 },
+    // In-point exactly at the caption change (aligned, no warning).
+    { id: 'aligned', track_id: 'v_main', kind: 'media', asset_id: 'cap', start_frame: 150, frames: 30, source_in_seconds: 1.5, volume: 0 },
+    { id: 'card', track_id: 'v_gfx', kind: 'graphic', template: 'title-card', vars: { title: '竖屏标题', placement: 'top' }, start_frame: 0, frames: 30 },
+    { id: 'strap', track_id: 'v_gfx', kind: 'graphic', template: 'lower-third', vars: { title: '主讲人', subtitle: '副标题字号不小于三成', placement: 'upper' },
+      start_frame: 150, frames: 30 }] });
+const portraitRender = await renderProject(portrait, path.join(base, 'portrait-preview'), { revision: 1, preview: true });
+assert.equal(portraitRender.lint.warning_count + portraitRender.lint.error_count, 0, JSON.stringify(portraitRender.lint.findings));
+const portraitHtml = await fs.readFile(path.join(base, 'portrait-preview/index.html'), 'utf8');
+assert.match(portraitHtml, /id="g-card"[^>]*data-placement="top"[^>]*top:8%;width:80%;height:20%/);
+assert.match(portraitHtml, /id="g-strap"[^>]*data-placement="upper"[^>]*top:14%;width:78%;height:20%;font-size:3\.6px;--fs-title:3\.6em;--fs-subtitle:3em/);
+const portraitQa = await cli('qa', portrait, path.join(base, 'portrait-preview'), path.join(base, 'portrait-qa'), '--scene-threshold', '0.3');
+const portraitCheck = id => portraitQa.checks.find(c => c.id === id);
+const burned = portraitCheck('burned-caption-cut-points');
+assert.equal(burned.status, 'warn', burned.observation);
+const lateIn = burned.measured.points.find(p => p.item_id === 'late' && p.edge === 'in');
+assert.ok(lateIn.result === 'warn' && Math.abs(lateIn.suggested_source_seconds - 1.5) < 0.02, JSON.stringify(lateIn));
+assert.equal(burned.measured.points.find(p => p.item_id === 'aligned' && p.edge === 'in').result, 'aligned');
+assert.deepEqual(burned.measured.points.filter(p => p.result === 'warn').map(p => `${p.item_id}:${p.edge}`), ['late:in'], 'caption-free source and aligned cut stay quiet');
+assert.equal(portraitCheck('shot-sampled').status, 'pass');
+const shotSample = portraitQa.samples.find(s => s.reason === 'shot' && s.time_seconds >= 1.6 && s.time_seconds < 2.2);
+assert.ok(shotSample, `the 0.6 s shot is sampled: ${JSON.stringify(portraitCheck('shot-sampled').measured.shots)}`);
+assert.equal(portraitCheck('graphic-safe-area').status, 'pass');
+// The short shot's sample is bars, not the test pattern around it.
+const barsShare = rgb => { let n = 0; for (let i = 0; i < rgb.length; i += 3) if (Math.max(rgb[i], rgb[i + 1], rgb[i + 2]) - Math.min(rgb[i], rgb[i + 1], rgb[i + 2]) > 100) n++; return n / (rgb.length / 3); };
+summary.portrait_qa = { verdict: portraitQa.verdict, checks: Object.fromEntries(portraitQa.checks.map(c => [c.id, c.status])),
+  burned_caption_points: burned.measured.points.map(p => ({ item: p.item_id, edge: p.edge, source: p.source_seconds, result: p.result, suggested: p.suggested_source_seconds ?? null })),
+  shots: portraitCheck('shot-sampled').measured.shots, short_shot_sample: { id: shotSample.id, time: shotSample.time_seconds,
+    saturated_share: barsShare(await frameAt(path.join(base, 'portrait-preview/video.mp4'), shotSample.time_seconds, 'scale=36:64')) } };
+assert.ok(summary.portrait_qa.short_shot_sample.saturated_share > 0.3, JSON.stringify(summary.portrait_qa.short_shot_sample));
+
+const revisionFiles = [v2, brand, portrait].flatMap(dir => readdirSync(path.join(dir, 'revisions')).filter(n => n.endsWith('.json')).map(n => path.join(dir, 'revisions', n)));
 revisionFiles.push(...[6, 7].map(n => path.join(root, 'revisions', `00000${n}.json`)));
 await validateSchema('edit-document-v2.schema.json', revisionFiles);
-await validateSchema('render-qa.schema.json', ['multitrack-qa', 'tampered-qa', 'packaging-qa', 'packaging-unsafe-qa'].map(d => path.join(base, d, 'qa.json')));
-summary.schema = { revisions: revisionFiles.length, qa_files: 4, status: 'passed' };
+await validateSchema('render-qa.schema.json', ['multitrack-qa', 'tampered-qa', 'packaging-qa', 'packaging-unsafe-qa', 'portrait-qa'].map(d => path.join(base, d, 'qa.json')));
+summary.schema = { revisions: revisionFiles.length, qa_files: 5, status: 'passed' };
 summary.input_preserved = before === await digest(source);
 summary.status = 'passed';
 await fs.writeFile(path.join(base, 'summary.json'), JSON.stringify(summary, null, 2));

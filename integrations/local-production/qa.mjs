@@ -4,6 +4,7 @@ import { digest, ffprobeJson, readProject, run, safePath, validateDocument, migr
 import { audibleItems, resolveCaptions } from './timeline.mjs';
 import { outputSize, revisionFile } from './render.mjs';
 import { captionBox, graphicBox, insideSafeArea } from './safe-area.mjs';
+import { burnedCaptionCheck, captionBand } from './burned-captions.mjs';
 
 // Technical checks on one actual rendered file of one revision. Automated
 // results never stand in for the composited-frame review, which starts pending.
@@ -44,12 +45,27 @@ async function probeRender(file) {
     has_audio: result.streams.some(s => s.codec_type === 'audio') };
 }
 
+// Shot boundaries of the rendered file: frames whose ffmpeg scene score (0–1,
+// change against the previous frame) exceeds the threshold start a new shot.
+export const SCENE_THRESHOLD = 0.3;
+export async function detectShots(file, duration, threshold = SCENE_THRESHOLD) {
+  const log = await filterLog(['-i', file, '-an', '-vf', `select='gt(scene,${threshold})',showinfo`]);
+  const starts = [...log.matchAll(/pts_time:\s*([\d.]+)/g)].map(m => Number(m[1])).filter(t => t > 0 && t < duration);
+  const edges = [0, ...new Set(starts.sort((a, b) => a - b)), duration];
+  return edges.slice(0, -1).map((start, i) => ({ start, end: edges[i + 1] }));
+}
+export function qaOptions({ captionBand: band, sceneThreshold = SCENE_THRESHOLD } = {}) {
+  if (typeof sceneThreshold !== 'number' || !(sceneThreshold > 0 && sceneThreshold < 1)) fail('Scene threshold must be a number between 0 and 1 (exclusive)');
+  return { band: captionBand(band), sceneThreshold };
+}
+
 async function ffmpegVersion() {
   const { stdout } = await run(ffmpeg(), ['-version'], { timeout: 10000 });
   return stdout.split('\n')[0].split(' ')[2] || 'unknown';
 }
 
-export async function qaRender(root, renderDir, qaDir) {
+export async function qaRender(root, renderDir, qaDir, options = {}) {
+  const { band, sceneThreshold } = qaOptions(options);
   root = await safePath(root);
   renderDir = await safePath(renderDir);
   qaDir = await safePath(qaDir);
@@ -159,6 +175,18 @@ export async function qaRender(root, renderDir, qaDir) {
     want(`s-${item.id}-caption`, frame, 'caption', item.id);
     captionSample.set(item.id, { id: `s-${item.id}-caption`, time: frame / fps });
   }
+  // Shots of the rendered file (scene detection): every shot, however short,
+  // gets at least one sample; a shot already holding a planned sample adds none.
+  const shots = (await detectShots(video, media.duration, sceneThreshold)).map((shot, index) => {
+    const first = Math.max(0, Math.ceil(shot.start * fps - 1e-6)), last = Math.min(total - 1, Math.ceil(shot.end * fps - 1e-6) - 1);
+    return { ...shot, index, first, last };
+  }).filter(shot => shot.last >= shot.first);
+  for (const shot of shots) {
+    const inside = wanted.find(w => w.frame >= shot.first && w.frame <= shot.last);
+    if (inside) { shot.sample = inside.id; continue; }
+    shot.sample = `s-shot${shot.index}`;
+    want(shot.sample, Math.floor((shot.first + shot.last) / 2), 'shot');
+  }
   const samples = [];
   for (const sample of wanted) {
     // Input seeking keeps the first frame with pts >= ss, so seek a quarter
@@ -198,6 +226,23 @@ export async function qaRender(root, renderDir, qaDir) {
     e => ({ id: `s-${e.id}-mid`, time: e.frame / fps }), 'graphic', 'template-load-guarantee',
     n => `${n} graphic(s) render in their template box; template load validation guarantees every template box lies inside the 5% safe margin. Not a pixel detection, and text fit inside the box is not measured.`);
 
+  const unsampled = shots.filter(s => !sampled.has(s.sample));
+  const short = shots.filter(s => s.end - s.start < 1);
+  check('shot-sampled', 'video', unsampled.length ? 'fail' : 'pass',
+    unsampled.length ? `No frame could be sampled for ${unsampled.length} of ${shots.length} detected shot(s).`
+      : `Each of ${shots.length} detected shot(s) in the render has a sampled frame (${short.length} shorter than 1 s).`,
+    { measured: { method: `ffmpeg scene score on the rendered file (select gt(scene,${sceneThreshold}))`, scene_threshold: sceneThreshold,
+      shots: shots.map(s => ({ start: round(s.start), end: round(s.end), sample_id: s.sample })) },
+    refs: shots.map(s => ({ time_seconds: round(s.start, 6), ...(sampled.has(s.sample) ? { sample_id: s.sample } : {}) })) });
+
+  // Burned-in captions of the SOURCE at every video item's in/out point.
+  const atCut = point => {
+    const frame = Math.round(point.output_seconds * fps), id = point.edge === 'in' ? `s-cut${frame}-after` : `s-cut${frame}-before`;
+    return sampled.has(id) ? id : sampled.has(`s-${point.item_id}-mid`) ? `s-${point.item_id}-mid` : null;
+  };
+  const burned = await burnedCaptionCheck(doc, root, { band, sampleAt: atCut });
+  check('burned-caption-cut-points', 'captions', burned.status, burned.observation, { measured: burned.measured, ...(burned.refs ? { refs: burned.refs } : {}) });
+
   // Lint result recorded by the render receipt (render is blocked on errors).
   const lint = receipt.lint;
   check('hyperframes-lint', 'lint', !lint ? 'unknown' : lint.error_count ? 'fail' : lint.warning_count ? 'warn' : 'pass',
@@ -207,7 +252,17 @@ export async function qaRender(root, renderDir, qaDir) {
   // Contact sheet (ffmpeg tile over the samples) and ±1 s clips around each cut.
   let contactSheet = null;
   if (samples.length) {
-    const pick = samples.length <= 40 ? samples : Array.from({ length: 40 }, (_, i) => samples[Math.floor(i * samples.length / 40)]);
+    // Up to 40 tiles (more only when there are more shots): one sample of every
+    // shot first, then evenly spread others; tiles in time order.
+    const capacity = Math.max(40, shots.length);
+    let pick = samples;
+    if (samples.length > capacity) {
+      const chosen = new Set(shots.map(s => samples.find(x => x.id === s.sample)).filter(Boolean));
+      for (let i = 0; i < capacity && chosen.size < capacity; i++) chosen.add(samples[Math.floor(i * samples.length / capacity)]);
+      for (const sample of samples) { if (chosen.size >= capacity) break; chosen.add(sample); }
+      pick = [...chosen];
+    }
+    pick = [...pick].sort((a, b) => a.time_seconds - b.time_seconds);
     const list = path.join(qaDir, '.contact-sheet.txt');
     await fs.writeFile(list, pick.map(s => `file '${path.join(qaDir, s.file).replace(/'/g, "'\\''")}'`).join('\n') + '\n');
     const columns = Math.min(5, pick.length), rows = Math.ceil(pick.length / columns);
@@ -237,7 +292,8 @@ export async function qaRender(root, renderDir, qaDir) {
     review: { status: 'pending', reviewer: null, decision: 'pending', findings: [] },
     unverified: ['human listening (dialogue, music balance, sync)', 'creative quality and edit choices',
       'visual review of composited samples (pending agent/human review)', 'caption legibility and text accuracy',
-      'safe-area boxes are layout estimates, not pixel measurements'] };
+      'safe-area boxes are layout estimates, not pixel measurements',
+      'burned-in caption cut points are a frame-difference heuristic (not OCR): caption text, colour captions and captions outside the band are not checked'] };
   const temp = path.join(qaDir, '.qa.json');
   await fs.writeFile(temp, JSON.stringify(qa, null, 2) + '\n', { flag: 'wx' });
   await fs.rename(temp, path.join(qaDir, 'qa.json'));

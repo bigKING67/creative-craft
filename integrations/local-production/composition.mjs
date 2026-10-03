@@ -64,8 +64,8 @@ export function compose(project, canvas = project.canvas) {
 // tween; picture fades and crossfades → contiguous GSAP opacity fromTo tweens on
 // an element authored at opacity 0. Items joined by a crossfade alternate
 // between two data-track-index rolls (+40) so overlapping clips never share one.
-// Graphic items render fixed template markup inside their template box; 1 em =
-// 1% of the shorter canvas edge.
+// Graphic items render fixed template markup inside the box of their placement
+// (vars.placement or the template default); 1 em = 1% of the shorter canvas edge.
 function composeV2(doc, canvas) {
   const { duration, frames } = validateV2(doc);
   const { width, height } = canvas;
@@ -104,7 +104,7 @@ function composeV2(doc, canvas) {
   for (const item of doc.items.filter(i => i.kind === 'media' || i.kind === 'graphic').sort(byLane)) {
     const lane = lanes.get(item.track_id), roll = 40 * rolls.get(item.id);
     if (item.kind === 'graphic') {
-      const { template, inner, properties, attributes } = renderGraphic(item), { box } = template;
+      const { template, placement: { box }, inner, properties, attributes } = renderGraphic(item);
       const style = [`z-index:${lane + 1}`, `left:${percent(box.left)}`, `top:${percent(box.top)}`, `width:${percent(box.width)}`, `height:${percent(box.height)}`,
         `font-size:${seconds(Math.min(width, height) / 100)}px`, ...properties];
       visual(`g-${item.id}`, item, style);

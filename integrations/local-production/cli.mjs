@@ -15,7 +15,7 @@ const help = `Creative Craft local production (optional, local media only)
   node cli.mjs edit PROJECT EXPECTED_REVISION OPERATIONS.json (legacy local-edit.v1 projects only)
   node cli.mjs preview PROJECT NEW_OUTPUT_DIR [REVISION]
   node cli.mjs render PROJECT NEW_OUTPUT_DIR [REVISION]
-  node cli.mjs qa PROJECT RENDER_DIR NEW_QA_DIR
+  node cli.mjs qa PROJECT RENDER_DIR NEW_QA_DIR [--caption-band TOP:BOTTOM] [--scene-threshold N]
   node cli.mjs transcribe MEDIA NEW_OUT.json [--lang zh] [--model PATH] [--clean auto|on|off]  (local whisper.cpp)
 Output, QA directories and projects must be new. Media paths in SPEC/BATCH are relative to cwd.
 No natural-language planner, model calls or DataHub integration is included.`;
@@ -42,7 +42,16 @@ try {
   } else if (command === 'transcribe') {
     const { media, output, options } = parseTranscribeArgs(process.argv.slice(3));
     result = await transcribe(media, output, options);
-  } else if (command === 'qa' && root && arg && extra && !rest.length) result = await qaRender(root, arg, extra);
+  } else if (command === 'qa' && root && arg && extra && rest.length % 2 === 0) {
+    const options = {};
+    for (let i = 0; i < rest.length; i += 2) {
+      const [flag, value] = [rest[i], rest[i + 1]];
+      if (flag === '--caption-band' && /^[\d.]+:[\d.]+$/.test(value)) { const [top, bottom] = value.split(':').map(Number); options.captionBand = { top, bottom }; }
+      else if (flag === '--scene-threshold' && /^[\d.]+$/.test(value)) options.sceneThreshold = Number(value);
+      else throw new Error(help);
+    }
+    result = await qaRender(root, arg, extra, options);
+  }
   else throw new Error(help);
   if (result) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 } catch (error) { console.error(JSON.stringify({ status: 'failed', error: error.message })); process.exitCode = 1; }

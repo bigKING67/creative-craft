@@ -1,4 +1,4 @@
-import { getTemplate, SAFE_MARGIN } from './templates.mjs';
+import { graphicPlacement, SAFE_MARGIN } from './templates.mjs';
 
 // Safe-area boxes for captions and graphics, as fractions of the canvas. Caption
 // boxes mirror the compiled CSS (composition.mjs) instead of measuring pixels:
@@ -24,11 +24,12 @@ export function captionBox(canvas, caption) {
   return { left: round(left / W), top: round(top / H), right: round((styled ? left + textWidth : 0.93 * W) / W), bottom: round((top + height) / H), lines };
 }
 
-// Graphic box: the template box (fractions), independent of the canvas. Its
-// position in the safe area is guaranteed when the template loads
-// (templates.mjs validateTemplate); no text-fit estimate is made here.
+// Graphic box: the box of the item's template placement (fractions),
+// independent of the canvas. Every placement's position in the safe area is
+// guaranteed when the template loads (templates.mjs validateTemplate); no
+// text-fit estimate is made here.
 export function graphicBox(item) {
-  const { box } = getTemplate(item.template);
+  const { box } = graphicPlacement(item);
   return { left: box.left, top: box.top, right: round(box.left + box.width), bottom: round(box.top + box.height) };
 }
 
